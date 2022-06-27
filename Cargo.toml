@@ -1,0 +1,21 @@
+[package]
+name = "raven"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bio-types = "0.12.1"
+clap = { version = "3.2.6", features = ["derive"] }
+coitrees = "0.2.1"
+noodles-gtf = "0.3.1"
+
+[[bin]]
+name = "raven"
+path = "src/main.rs"
+
+
+[lib]
+name = "libraven"
+path = "src/lib.rs"
