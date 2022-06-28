@@ -7,6 +7,7 @@ use std::{
 };
 
 use bio_types::strand::Strand;
+use bio_types::annot::loc::Loc;
 use bio_types::annot::spliced::Spliced;
 use noodles_gtf as gtf;
 use noodles_gtf::record::Strand as NoodlesStrand;
@@ -85,7 +86,22 @@ fn main() -> io::Result<()> {
         }
     }
 
+    let mut txp_to_exon = HashMap::new();
+    
+    let mut l = 0;
+    let mut max_len = 0;
+    for (i, e) in evec.iter().enumerate() {
+        let mut v = txp_to_exon.entry(e.refid()).or_insert(vec![]);
+        v.push(i);
+        l = v.len();
+        if l > max_len { max_len = l; }
+    }
+
+    //for (k,v) in txp_to_exon.iter() {
+    //}
+
     println!("parsed {} exons", evec.len());
     println!("parsed {} transcripts", tvec.len());
+    println!("max exon transcript had {} exons", max_len);
     Ok(())
 }
