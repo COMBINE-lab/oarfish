@@ -1,5 +1,5 @@
 [package]
-name = "raven"
+name = "oarfish"
 version = "0.1.0"
 edition = "2021"
 
@@ -12,10 +12,10 @@ coitrees = "0.2.1"
 noodles-gtf = "0.3.1"
 
 [[bin]]
-name = "raven"
+name = "oarfish"
 path = "src/main.rs"
 
 
 [lib]
-name = "libraven"
+name = "liboarfish"
 path = "src/lib.rs"
