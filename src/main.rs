@@ -158,7 +158,7 @@ struct EMInfo<'eqm, 'tinfo> {
 fn m_step(
     eq_map: &InMemoryAlignmentStore,
     tinfo: &[TranscriptInfo],
-    prev_count: &[f64],
+    prev_count: &mut [f64],
     curr_counts: &mut [f64],
 ) {
     for (alns, probs) in eq_map.iter() {
@@ -166,7 +166,7 @@ fn m_step(
         for (a, p) in alns.iter().zip(probs.iter()) {
             let target_id = a.reference_sequence_id().unwrap();
             let prob = *p as f64;
-            let cov_prob = tinfo[target_id].coverage.powf(2.0) as f64;
+            let cov_prob = if tinfo[target_id].coverage < 0.05 { 1e-5 } else { 1.0 };//powf(2.0) as f64;
             denom += prev_count[target_id] * prob * cov_prob;
         }
 
@@ -174,7 +174,7 @@ fn m_step(
             for (a, p) in alns.iter().zip(probs.iter()) {
                 let target_id = a.reference_sequence_id().unwrap();
                 let prob = *p as f64;
-                let cov_prob = tinfo[target_id].coverage.powf(1.0) as f64;
+                let cov_prob = if tinfo[target_id].coverage < 0.05 { 1e-5 } else { 1.0 };//powf(2.0) as f64;
                 curr_counts[target_id] += (prev_count[target_id] * prob * cov_prob) / denom;
             }
         }
@@ -196,7 +196,7 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
     let mut niter = 0_u32;
 
     while niter < max_iter {
-        m_step(eq_map, tinfo, &prev_counts, &mut curr_counts);
+        m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
 
         //std::mem::swap(&)
         for i in 0..curr_counts.len() {
@@ -224,7 +224,7 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
             *x = 0.0
         }
     });
-    m_step(eq_map, tinfo, &prev_counts, &mut curr_counts);
+    m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
 
     curr_counts
 }
