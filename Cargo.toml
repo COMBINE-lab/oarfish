@@ -22,3 +22,8 @@ path = "src/main.rs"
 [lib]
 name = "liboarfish"
 path = "src/lib.rs"
+
+[profile.release]
+debug-assertions = false
+lto = "thin"
+panic = "abort"

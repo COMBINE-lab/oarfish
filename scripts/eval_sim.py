@@ -5,7 +5,8 @@ import argparse
 
 def eval_sim(args):
     x = pd.read_csv(args.true_abundances, names=['txp_name', 'num_reads'], sep='\t')
-    y = pd.read_csv(args.predicted_abundances, sep='\t')
+    y = pd.read_csv(args.predicted_abundances, sep='\s+')
+    print(y)
     y['txp_name'] = y.tname.str.split('.').str.get(0)
 
     m = pd.merge(x, y, on='txp_name', how='outer')

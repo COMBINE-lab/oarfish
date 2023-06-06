@@ -100,7 +100,48 @@ impl InMemoryAlignmentStore {
         }
     }
 
-    fn add_group(&mut self, ag: &Vec<sam::alignment::record::Record>) {
+    fn normalize_group_score(&mut self, ag: &mut Vec<sam::alignment::record::Record>) {
+        const THRESH: f32 = 0.95;
+        if ag.len() == 1 {
+            self.probabilities.push(1.0)
+        } else {
+            let mut max_score = 0_i32;
+            let mut scores = Vec::<i32>::with_capacity(ag.len());
+
+            // get the maximum score and fill in the score array
+            for a in ag.iter() {
+                let score_value = a
+                    .data()
+                    .get(&tag::ALIGNMENT_SCORE)
+                    .expect("could not get value");
+                let score = score_value.as_int().unwrap() as i32;
+                scores.push(score);
+                if score > max_score {
+                    max_score = score;
+                }
+            }
+
+            for (i, score) in scores.iter_mut().enumerate() {
+                let fscore = *score as f32;
+                let mscore = max_score as f32;
+                if fscore > THRESH * mscore {
+                    let f = (fscore - mscore) / 10.0_f32;
+                    self.probabilities.push(f.exp());
+                } else {
+                    *score = -1;
+                }
+            }
+
+            let mut index = 0;
+            ag.retain(|_| {
+                index += 1;
+                scores[index - 1] > -1
+            })
+        }
+    }
+
+    fn add_group(&mut self, ag: &mut Vec<sam::alignment::record::Record>) {
+        self.normalize_group_score(ag);
         self.alignments.extend_from_slice(&ag);
         self.boundaries.push(self.alignments.len());
     }
@@ -154,31 +195,112 @@ struct EMInfo<'eqm, 'tinfo> {
     max_iter: u32,
 }
 
+struct FullLengthProbs {
+    length_bins: Vec<usize>,
+    probs: Vec<f64>,
+}
+
+impl FullLengthProbs {
+    fn from_data(
+        eq_map: &InMemoryAlignmentStore,
+        tinfo: &[TranscriptInfo],
+        len_bins: &[usize],
+    ) -> Self {
+        let mut num = vec![0; len_bins.len()];
+        let mut denom = vec![0; len_bins.len()];
+
+        for (alns, probs) in eq_map.iter() {
+            let a = alns.first().unwrap();
+            if alns.len() == 1 {
+                let target_id = a.reference_sequence_id().unwrap();
+                let tlen = tinfo[target_id].len.get();
+                let lindex = match len_bins.binary_search(&tlen) {
+                    Ok(i) => i,
+                    Err(i) => i,
+                };
+                let is_fl = (tlen - a.alignment_span()) < 20;
+                if is_fl {
+                    num[lindex] += 1;
+                }
+                denom[lindex] += 1;
+            }
+        }
+
+        let probs: Vec<f64> = num
+            .iter()
+            .zip(denom.iter())
+            .map(|(n, d)| {
+                if *d > 0 {
+                    (*n as f64) / (*d as f64)
+                } else {
+                    1e-5
+                }
+            })
+            .collect();
+
+        FullLengthProbs {
+            length_bins: len_bins.to_vec(),
+            probs,
+        }
+    }
+
+    fn get_prob_for(&self, len: usize) -> f64 {
+        let lindex = match self.length_bins.binary_search(&len) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+        self.probs[lindex]
+    }
+}
+
 #[inline]
 fn m_step(
     eq_map: &InMemoryAlignmentStore,
     tinfo: &[TranscriptInfo],
+    prob_full: &FullLengthProbs,
     prev_count: &mut [f64],
     curr_counts: &mut [f64],
 ) {
+    let mut len_probs: Vec<f64> = Vec::new();
     for (alns, probs) in eq_map.iter() {
         let mut denom = 0.0_f64;
         for (a, p) in alns.iter().zip(probs.iter()) {
             let target_id = a.reference_sequence_id().unwrap();
             let prob = *p as f64;
-            let cov_prob = if tinfo[target_id].coverage < 0.05 { 1e-5 } else { 1.0 };//powf(2.0) as f64;
-            denom += prev_count[target_id] * prob * cov_prob;
+            /*
+            let cov_prob = if tinfo[target_id].coverage < 0.15 { 1e-5 } else { 1.0 };//powf(2.0) as f64;
+
+            let tlen = tinfo[target_id].len.get();
+            let is_fl = (tlen - a.alignment_span()) < 20;
+            let fl_prob = if is_fl {
+                prob_full.get_prob_for(tlen)
+            } else {
+                1.0 - prob_full.get_prob_for(tlen)
+            };
+            len_probs.push(fl_prob);
+            */
+            let cov_prob = 1.0;
+            let fl_prob = 1.0;
+            len_probs.push(fl_prob);
+            denom += prev_count[target_id] * prob * cov_prob * fl_prob;
         }
 
         if denom > 1e-8 {
-            for (a, p) in alns.iter().zip(probs.iter()) {
+            for (i, (a, p)) in alns.iter().zip(probs.iter()).enumerate() {
                 let target_id = a.reference_sequence_id().unwrap();
                 let prob = *p as f64;
-                let cov_prob = if tinfo[target_id].coverage < 0.05 { 1e-5 } else { 1.0 };//powf(2.0) as f64;
-                curr_counts[target_id] += (prev_count[target_id] * prob * cov_prob) / denom;
+                //let cov_prob = if tinfo[target_id].coverage < 0.15 { 1e-5 } else { 1.0 };//powf(2.0) as f64;
+                let cov_prob = 1.0;
+                let len_prob = len_probs[i];
+                let inc = (prev_count[target_id] * prob * cov_prob * len_prob) / denom;
+                curr_counts[target_id] += inc;
             }
         }
+        len_probs.clear();
     }
+
+    //eprintln!("nunique : {}, ntotal : {}", nunique, eq_map.num_aligned_reads());
+    //prob_full_len / (eq_map.num_aligned_reads() as f64)
 }
 
 fn em(em_info: &EMInfo) -> Vec<f64> {
@@ -194,9 +316,30 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
 
     let mut rel_diff = 0.0_f64;
     let mut niter = 0_u32;
+    let mut fl_prob = 0.5f64;
+
+    let length_bins = vec![
+        200,
+        500,
+        1000,
+        2000,
+        5000,
+        10000,
+        15000,
+        20000,
+        25000,
+        usize::MAX,
+    ];
+    let len_probs = FullLengthProbs::from_data(eq_map, tinfo, &length_bins);
 
     while niter < max_iter {
-        m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
+        m_step(
+            eq_map,
+            tinfo,
+            &len_probs,
+            &mut prev_counts,
+            &mut curr_counts,
+        );
 
         //std::mem::swap(&)
         for i in 0..curr_counts.len() {
@@ -224,8 +367,13 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
             *x = 0.0
         }
     });
-    m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
-
+    m_step(
+        eq_map,
+        tinfo,
+        &len_probs,
+        &mut prev_counts,
+        &mut curr_counts,
+    );
     curr_counts
 }
 
@@ -267,7 +415,7 @@ fn main() -> io::Result<()> {
         if let Some(rname) = record.read_name() {
             let rstring: String =
                 <noodles_sam::record::read_name::ReadName as AsRef<str>>::as_ref(rname).to_owned();
-            // if this is an alignment for the same read, then 
+            // if this is an alignment for the same read, then
             // push it onto our temporary vector.
             if prev_read == rstring {
                 if let (Some(ref_id), false) = (
@@ -283,7 +431,7 @@ fn main() -> io::Result<()> {
             } else {
                 if !prev_read.is_empty() {
                     //println!("the previous read had {} mappings", records_for_read.len());
-                    store.add_group(&records_for_read);
+                    store.add_group(&mut records_for_read);
                     records_for_read.clear();
                     num_mapped += 1;
                 }
@@ -302,7 +450,7 @@ fn main() -> io::Result<()> {
         }
     }
     if !records_for_read.is_empty() {
-        store.add_group(&records_for_read);
+        store.add_group(&mut records_for_read);
         records_for_read.clear();
         num_mapped += 1;
     }
@@ -317,9 +465,9 @@ fn main() -> io::Result<()> {
     }
     eprintln!("done");
 
-    eprintln!("Number of mapped reads : {}", num_mapped);
-    eprintln!("normalizing alignment scores");
-    store.normalize_scores();
+    //eprintln!("Number of mapped reads : {}", num_mapped);
+    //eprintln!("normalizing alignment scores");
+    //store.normalize_scores();
     eprintln!("Total number of alignment records : {}", store.total_len());
     eprintln!("number of aligned reads : {}", store.num_aligned_reads());
 
@@ -331,25 +479,24 @@ fn main() -> io::Result<()> {
 
     let counts = em(&emi);
 
-    println!("tname\tcoverage\tlen\tnum_reads"); 
+    println!("tname\tcoverage\tlen\tnum_reads");
     // loop over the transcripts in the header and fill in the relevant
     // information here.
     for (i, (_rseq, rmap)) in header.reference_sequences().iter().enumerate() {
-        println!("{}\t{}\t{}\t{}", _rseq, txps[i].coverage, rmap.length(), counts[i]);
+        println!(
+            "{}\t{}\t{}\t{}",
+            _rseq,
+            txps[i].coverage,
+            rmap.length(),
+            counts[i]
+        );
     }
 
     Ok(())
 }
 
-
-
-
-
-
-
-
 //
-// ignore anything below this line for now 
+// ignore anything below this line for now
 //
 
 #[allow(unused)]
