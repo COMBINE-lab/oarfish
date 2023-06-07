@@ -99,7 +99,7 @@ impl InMemoryAlignmentStore {
 
     fn iter(&self) -> InMemoryAlignmentStoreIter {
         InMemoryAlignmentStoreIter {
-            store: &self,
+            store: self,
             idx: 0,
         }
     }
@@ -146,7 +146,7 @@ impl InMemoryAlignmentStore {
 
     fn add_group(&mut self, ag: &mut Vec<sam::alignment::record::Record>) {
         self.normalize_group_score(ag);
-        self.alignments.extend_from_slice(&ag);
+        self.alignments.extend_from_slice(ag);
         self.boundaries.push(self.alignments.len());
     }
 
@@ -155,7 +155,7 @@ impl InMemoryAlignmentStore {
     }
 
     fn num_aligned_reads(&self) -> usize {
-        if self.boundaries.len() > 0 {
+        if !self.boundaries.is_empty() {
             self.boundaries.len() - 1
         } else {
             0
@@ -591,13 +591,13 @@ fn main_old() -> io::Result<()> {
 
     for (k, v) in txp_to_exon.iter_mut() {
         let strand = evec[v[0]].strand();
-        v.sort_unstable_by_key(|x| evec[*x as usize].start());
+        v.sort_unstable_by_key(|x| evec[*x].start());
         let s = evec[v[0]].start();
         let starts: Vec<usize> = v
             .iter()
-            .map(|e| (evec[*e as usize].start() - s) as usize)
+            .map(|e| (evec[*e].start() - s) as usize)
             .collect();
-        let lens: Vec<usize> = v.iter().map(|e| evec[*e as usize].length()).collect();
+        let lens: Vec<usize> = v.iter().map(|e| evec[*e].length()).collect();
         println!("lens = {:?}, starts = {:?}", lens, starts);
         txp_features.insert(
             **k,
