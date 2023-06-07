@@ -7,6 +7,10 @@ use std::{
     num::NonZeroUsize,
 };
 
+use tracing::{info, warn};
+use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
+use num_format::{Locale, ToFormattedString};
+
 use bio_types::annot::loc::Loc;
 use bio_types::annot::spliced::Spliced;
 use bio_types::strand::Strand;
@@ -121,7 +125,7 @@ impl InMemoryAlignmentStore {
                 }
             }
 
-            for (i, score) in scores.iter_mut().enumerate() {
+            for score in scores.iter_mut() {
                 let fscore = *score as f32;
                 let mscore = max_score as f32;
                 if fscore > THRESH * mscore {
@@ -158,6 +162,7 @@ impl InMemoryAlignmentStore {
         }
     }
 
+    /*
     fn normalize_scores(&mut self) {
         self.probabilities = vec![0.0_f32; self.alignments.len()];
         for w in self.boundaries.windows(2) {
@@ -186,6 +191,7 @@ impl InMemoryAlignmentStore {
             }
         }
     }
+    */
 }
 
 /// Holds the info relevant for running the EM algorithm
@@ -357,7 +363,8 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
         }
         niter += 1;
         if niter % 10 == 0 {
-            eprintln!("iteration {}; rel diff {}", niter, rel_diff);
+            info!("iteration {}; rel diff {}", 
+                niter.to_formatted_string(&Locale::en), rel_diff);
         }
         rel_diff = 0.0_f64;
     }
@@ -378,6 +385,15 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
 }
 
 fn main() -> io::Result<()> {
+    tracing_subscriber::registry()
+        .with(fmt::layer().with_writer(io::stderr))
+        .with(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .init();
+
     let args = Args::parse();
 
     let mut reader = File::open(args.alignments)
@@ -387,7 +403,7 @@ fn main() -> io::Result<()> {
     let header = reader.read_header()?;
 
     for (prog, _pmap) in header.programs().iter() {
-        eprintln!("program: {}", prog);
+        info!("program: {}", prog);
     }
 
     let mut txps: Vec<TranscriptInfo> = Vec::with_capacity(header.reference_sequences().len());
@@ -455,7 +471,7 @@ fn main() -> io::Result<()> {
         num_mapped += 1;
     }
 
-    eprintln!("computing coverages");
+    info!("computing coverages");
     for t in txps.iter_mut() {
         let interval_set = IntervalSet::new(&t.ranges).expect("couldn't build interval set");
         let mut interval_set = interval_set.merge_connected();
@@ -463,13 +479,13 @@ fn main() -> io::Result<()> {
         let covered = interval_set.covered_units();
         t.coverage = (covered as f32) / (len as f32);
     }
-    eprintln!("done");
+    info!("done");
 
     //eprintln!("Number of mapped reads : {}", num_mapped);
     //eprintln!("normalizing alignment scores");
     //store.normalize_scores();
-    eprintln!("Total number of alignment records : {}", store.total_len());
-    eprintln!("number of aligned reads : {}", store.num_aligned_reads());
+    info!("Total number of alignment records : {}", store.total_len().to_formatted_string(&Locale::en));
+    info!("number of aligned reads : {}", store.num_aligned_reads().to_formatted_string(&Locale::en));
 
     let emi = EMInfo {
         eq_map: &store,
