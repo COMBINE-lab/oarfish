@@ -10,6 +10,7 @@ use std::{
 use tracing::{info, warn};
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 use num_format::{Locale, ToFormattedString};
+use typed_builder::TypedBuilder;
 
 use bio_types::annot::loc::Loc;
 use bio_types::annot::spliced::Spliced;
@@ -31,6 +32,20 @@ struct Args {
     /// Name of the person to greet
     #[clap(short, long, value_parser)]
     alignments: String,
+    // Maximum allowable distance of the right-most end of an alignment from the 3' transcript end
+    #[clap(short, long, value_parser, default_value_t = u32::MAX)]
+    three_prime_clip: u32,
+    // Maximum allowable distance of the left-most end of an alignment from the 5' transcript end
+    #[clap(short, long, value_parser, default_value_t = u32::MAX)]
+    five_prime_clip: u32,
+    // Fraction of the best possible alignment score that a secondary alignment must have for
+    // consideration
+    #[clap(short, long, value_parser, default_value_t = 0.95)]
+    score_threshold: f32,
+    // Fraction of a query that must be mapped within an alignemnt to consider the alignemnt 
+    // valid
+    #[clap(short, long, value_parser, default_value_t = 0.5)]
+    min_aligned_fraction: f32,
 }
 
 #[derive(Debug, PartialEq)]
@@ -59,6 +74,7 @@ impl TranscriptInfo {
 
 #[derive(Debug)]
 struct InMemoryAlignmentStore {
+    filter_opts: AlignmentFilters,
     alignments: Vec<sam::alignment::record::Record>,
     probabilities: Vec<f32>,
     // holds the boundaries between records for different reads
@@ -89,8 +105,9 @@ impl<'a> Iterator for InMemoryAlignmentStoreIter<'a> {
 }
 
 impl InMemoryAlignmentStore {
-    fn new() -> Self {
+    fn new(fo: AlignmentFilters) -> Self {
         InMemoryAlignmentStore {
+            filter_opts: fo,
             alignments: vec![],
             probabilities: vec![],
             boundaries: vec![0],
@@ -104,50 +121,13 @@ impl InMemoryAlignmentStore {
         }
     }
 
-    fn normalize_group_score(&mut self, ag: &mut Vec<sam::alignment::record::Record>) {
-        const THRESH: f32 = 0.95;
-        if ag.len() == 1 {
-            self.probabilities.push(1.0)
-        } else {
-            let mut max_score = 0_i32;
-            let mut scores = Vec::<i32>::with_capacity(ag.len());
-
-            // get the maximum score and fill in the score array
-            for a in ag.iter() {
-                let score_value = a
-                    .data()
-                    .get(&tag::ALIGNMENT_SCORE)
-                    .expect("could not get value");
-                let score = score_value.as_int().unwrap() as i32;
-                scores.push(score);
-                if score > max_score {
-                    max_score = score;
-                }
-            }
-
-            for score in scores.iter_mut() {
-                let fscore = *score as f32;
-                let mscore = max_score as f32;
-                if fscore > THRESH * mscore {
-                    let f = (fscore - mscore) / 10.0_f32;
-                    self.probabilities.push(f.exp());
-                } else {
-                    *score = -1;
-                }
-            }
-
-            let mut index = 0;
-            ag.retain(|_| {
-                index += 1;
-                scores[index - 1] > -1
-            })
-        }
-    }
-
     fn add_group(&mut self, ag: &mut Vec<sam::alignment::record::Record>) {
-        self.normalize_group_score(ag);
-        self.alignments.extend_from_slice(ag);
-        self.boundaries.push(self.alignments.len());
+        let probs = self.filter_opts.filter(ag);
+        if !ag.is_empty() {
+            self.alignments.extend_from_slice(ag);
+            self.probabilities.extend_from_slice(&probs);
+            self.boundaries.push(self.alignments.len());
+        }
     }
 
     fn total_len(&self) -> usize {
@@ -384,6 +364,68 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
     curr_counts
 }
 
+
+#[derive(TypedBuilder)]
+struct AlignmentFilters {
+    five_prime_clip: u32,
+    three_prime_clip: u32,
+    score_threshold: f32,
+    min_aligned_fraction: f32,
+}
+
+impl AlignmentFilters {
+    fn filter(self, ag: &mut Vec<sam::alignment::record::Record>) -> Vec<f32> {
+        ag.retain( |x| {
+            !x.flags().is_unmapped() &&
+            (x.alignment_start().unwrap().get() as u32) <= self.five_prime_clip &&
+            ((x.alignment_span() as f32) / (x.template_length() as f32)) >= self.min_aligned_fraction
+        });
+        if ag.len() == 1 {
+            vec![1.0_f32]
+        } else {
+            let mut max_score = i32::MIN;
+            let mut scores = Vec::<i32>::with_capacity(ag.len());
+            let mut probabilities = Vec::<f32>::with_capacity(ag.len());
+
+            // get the maximum score and fill in the score array
+            for a in ag.iter() {
+                let score_value = a
+                    .data()
+                    .get(&tag::ALIGNMENT_SCORE)
+                    .expect("could not get value");
+                let score = score_value.as_int().unwrap() as i32;
+                scores.push(score);
+                if score > max_score {
+                    max_score = score;
+                }
+            }
+
+            for score in scores.iter_mut() {
+                let fscore = *score as f32;
+                let mscore = max_score as f32;
+                if fscore > self.score_threshold * mscore {
+                    let f = (fscore - mscore) / 10.0_f32;
+                    probabilities.push(f.exp());
+                } else {
+                    *score = i32::MIN;
+                }
+            }
+
+            let mut index = 0;
+            ag.retain(|_| {
+                index += 1;
+                scores[index - 1] > i32::MIN
+            });
+
+            if ag.is_empty() {
+                warn!("No valid scores for read!");
+                warn!("max_score = {}. scores = {:?}", max_score, scores);
+            }
+            probabilities
+        }
+    }
+}
+
 fn main() -> io::Result<()> {
     tracing_subscriber::registry()
         .with(fmt::layer().with_writer(io::stderr))
@@ -399,6 +441,13 @@ fn main() -> io::Result<()> {
     let mut reader = File::open(args.alignments)
         .map(BufReader::new)
         .map(bam::Reader::new)?;
+
+    let filter_opts = AlignmentFilters::builder()
+        .five_prime_clip(args.five_prime_clip)
+        .three_prime_clip(args.three_prime_clip)
+        .score_threshold(args.score_threshold)
+        .min_aligned_fraction(args.min_aligned_fraction)
+        .build();
 
     let header = reader.read_header()?;
 
@@ -420,7 +469,7 @@ fn main() -> io::Result<()> {
     let mut prev_read = String::new();
     let mut num_mapped = 0_u64;
     let mut records_for_read = vec![];
-    let mut store = InMemoryAlignmentStore::new();
+    let mut store = InMemoryAlignmentStore::new(filter_opts);
 
     for result in reader.records(&header) {
         let record = result?;
