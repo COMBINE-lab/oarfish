@@ -2,8 +2,8 @@ use clap::Parser;
 
 use std::{
     collections::HashMap,
-    fs::File,
-    io::{self, BufReader},
+    fs::{File, OpenOptions},
+    io::{self, BufReader, BufWriter, Write},
     num::NonZeroUsize,
 };
 
@@ -30,8 +30,11 @@ use nested_intervals::IntervalSet;
 #[clap(author, version, about, long_about = None)]
 struct Args {
     /// Name of the person to greet
-    #[clap(short, long, value_parser)]
+    #[clap(short, long, value_parser, required = true)]
     alignments: String,
+    /// Location where output quantification file should be written
+    #[clap(short, long, value_parser, required = true)]
+    output: String,
     // Maximum allowable distance of the right-most end of an alignment from the 3' transcript end
     #[clap(short, long, value_parser, default_value_t = u32::MAX)]
     three_prime_clip: u32,
@@ -82,6 +85,7 @@ struct InMemoryAlignmentStore {
     probabilities: Vec<f32>,
     // holds the boundaries between records for different reads
     boundaries: Vec<usize>,
+    pub discard_table: DiscardTable,
 }
 
 struct InMemoryAlignmentStoreIter<'a> {
@@ -114,6 +118,7 @@ impl InMemoryAlignmentStore {
             alignments: vec![],
             probabilities: vec![],
             boundaries: vec![0],
+            discard_table: DiscardTable::new(),
         }
     }
 
@@ -129,7 +134,7 @@ impl InMemoryAlignmentStore {
         txps: &Vec<TranscriptInfo>,
         ag: &mut Vec<sam::alignment::record::Record>,
     ) {
-        let probs = self.filter_opts.filter(txps, ag);
+        let probs = self.filter_opts.filter(&mut self.discard_table, txps, ag);
         if !ag.is_empty() {
             self.alignments.extend_from_slice(ag);
             self.probabilities.extend_from_slice(&probs);
@@ -345,7 +350,7 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
         std::mem::swap(&mut prev_counts, &mut curr_counts);
         curr_counts.fill(0.0_f64);
 
-        if (rel_diff < 1e-3) && (niter > 50) {
+        if (rel_diff < 5e-3) && (niter > 10) {
             break;
         }
         niter += 1;
@@ -383,9 +388,35 @@ struct AlignmentFilters {
     min_aligned_len: u32,
 }
 
+#[derive(Debug)]
+struct DiscardTable {
+    discard_5p: u32,
+    discard_3p: u32,
+    discard_score: u32,
+    discard_aln_frac: u32,
+    discard_aln_len: u32,
+    discard_ori: u32,
+    discard_supp: u32,
+}
+
+impl DiscardTable {
+    fn new() -> Self {
+        DiscardTable {
+            discard_5p: 0,
+            discard_3p: 0,
+            discard_score: 0,
+            discard_aln_frac: 0,
+            discard_aln_len: 0,
+            discard_ori: 0,
+            discard_supp: 0,
+        }
+    }
+}
+
 impl AlignmentFilters {
     fn filter(
-        &self,
+        &mut self,
+        discard_table: &mut DiscardTable,
         txps: &Vec<TranscriptInfo>,
         ag: &mut Vec<sam::alignment::record::Record>,
     ) -> Vec<f32> {
@@ -394,13 +425,50 @@ impl AlignmentFilters {
                 let tid = x.reference_sequence_id().unwrap();
                 let aln_span = x.alignment_span();
 
-                (x.alignment_start().unwrap().get() as u32) <= self.five_prime_clip
-                    && ((aln_span as f32) / (x.template_length() as f32))
-                        >= self.min_aligned_fraction
-                    && (aln_span as u32) >= self.min_aligned_len
-                    && !x.flags().is_reverse_complemented()
-                    && (txps[tid].len.get() as u32 - (x.alignment_end().unwrap().get() as u32))
-                        <= self.three_prime_clip
+                // the read is not aligned to the - strand
+                let filt_ori = !x.flags().is_reverse_complemented();
+                if !filt_ori {
+                    discard_table.discard_ori += 1;
+                    return false;
+                }
+
+                let filt_supp = !x.flags().is_supplementary();
+                if !filt_supp {
+                    discard_table.discard_supp += 1;
+                    return false;
+                }
+
+                // enough absolute sequence (# of bases) is aligned
+                let filt_aln_len = (aln_span as u32) > self.min_aligned_len;
+                if !filt_aln_len {
+                    discard_table.discard_aln_len += 1;
+                    return false;
+                }
+
+                // not too far from the 5' end
+                let filt_5p = (x.alignment_start().unwrap().get() as u32) < self.five_prime_clip;
+                if !filt_5p {
+                    discard_table.discard_5p += 1;
+                    return false;
+                }
+
+                // not too far from the 3' end
+                let filt_3p = (x.alignment_end().unwrap().get() as u32)
+                    > (txps[tid].len.get() as u32 - self.three_prime_clip);
+                if !filt_3p {
+                    discard_table.discard_3p += 1;
+                    return false;
+                }
+
+                // enough of the read is aligned
+                let filt_aln_frac =
+                    ((aln_span as f32) / (x.sequence().len() as f32)) >= self.min_aligned_fraction;
+                if !filt_aln_frac {
+                    discard_table.discard_aln_frac += 1;
+                    return false;
+                }
+
+                true
             } else {
                 false
             }
@@ -436,6 +504,7 @@ impl AlignmentFilters {
                     probabilities.push(f.exp());
                 } else {
                     *score = i32::MIN;
+                    discard_table.discard_score += 1;
                 }
             }
 
@@ -512,10 +581,7 @@ fn main() -> io::Result<()> {
             // if this is an alignment for the same read, then
             // push it onto our temporary vector.
             if prev_read == rstring {
-                if let (Some(ref_id), false) = (
-                    record.reference_sequence_id(),
-                    record.flags().is_supplementary(),
-                ) {
+                if let Some(ref_id) = record.reference_sequence_id() {
                     records_for_read.push(record_copy);
                     txps[ref_id].ranges.push(
                         (record.alignment_start().unwrap().get() as u32)
@@ -530,10 +596,7 @@ fn main() -> io::Result<()> {
                     num_mapped += 1;
                 }
                 prev_read = rstring;
-                if let (Some(ref_id), false) = (
-                    record.reference_sequence_id(),
-                    record.flags().is_supplementary(),
-                ) {
+                if let Some(ref_id) = record.reference_sequence_id() {
                     records_for_read.push(record_copy);
                     txps[ref_id].ranges.push(
                         (record.alignment_start().unwrap().get() as u32)
@@ -548,6 +611,8 @@ fn main() -> io::Result<()> {
         records_for_read.clear();
         num_mapped += 1;
     }
+
+    info!("discard_table: {:?}", store.discard_table);
 
     info!("computing coverages");
     for t in txps.iter_mut() {
@@ -579,17 +644,26 @@ fn main() -> io::Result<()> {
 
     let counts = em(&emi);
 
-    println!("tname\tcoverage\tlen\tnum_reads");
+    let write = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .open(args.output)
+        .expect("Couldn't create output file");
+    let mut writer = BufWriter::new(write);
+
+    write!(writer, "tname\tcoverage\tlen\tnum_reads\n").expect("Couldn't write to output file.");
     // loop over the transcripts in the header and fill in the relevant
     // information here.
     for (i, (_rseq, rmap)) in header.reference_sequences().iter().enumerate() {
-        println!(
-            "{}\t{}\t{}\t{}",
+        write!(
+            writer,
+            "{}\t{}\t{}\t{}\n",
             _rseq,
             txps[i].coverage,
             rmap.length(),
             counts[i]
-        );
+        )
+        .expect("Couldn't write to output file.");
     }
 
     Ok(())
