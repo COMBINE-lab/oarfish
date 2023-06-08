@@ -7,9 +7,9 @@ use std::{
     num::NonZeroUsize,
 };
 
+use num_format::{Locale, ToFormattedString};
 use tracing::{info, warn};
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
-use num_format::{Locale, ToFormattedString};
 use typed_builder::TypedBuilder;
 
 use bio_types::annot::loc::Loc;
@@ -42,10 +42,13 @@ struct Args {
     // consideration
     #[clap(short, long, value_parser, default_value_t = 0.95)]
     score_threshold: f32,
-    // Fraction of a query that must be mapped within an alignemnt to consider the alignemnt 
+    // Fraction of a query that must be mapped within an alignemnt to consider the alignemnt
     // valid
     #[clap(short, long, value_parser, default_value_t = 0.5)]
     min_aligned_fraction: f32,
+    // Minimum number of nucleotides in the aligned portion of a read
+    #[clap(short = 'l', long, value_parser, default_value_t = 50)]
+    min_aligned_len: u32,
 }
 
 #[derive(Debug, PartialEq)]
@@ -121,8 +124,12 @@ impl InMemoryAlignmentStore {
         }
     }
 
-    fn add_group(&mut self, ag: &mut Vec<sam::alignment::record::Record>) {
-        let probs = self.filter_opts.filter(ag);
+    fn add_group(
+        &mut self,
+        txps: &Vec<TranscriptInfo>,
+        ag: &mut Vec<sam::alignment::record::Record>,
+    ) {
+        let probs = self.filter_opts.filter(txps, ag);
         if !ag.is_empty() {
             self.alignments.extend_from_slice(ag);
             self.probabilities.extend_from_slice(&probs);
@@ -343,8 +350,11 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
         }
         niter += 1;
         if niter % 10 == 0 {
-            info!("iteration {}; rel diff {}", 
-                niter.to_formatted_string(&Locale::en), rel_diff);
+            info!(
+                "iteration {}; rel diff {}",
+                niter.to_formatted_string(&Locale::en),
+                rel_diff
+            );
         }
         rel_diff = 0.0_f64;
     }
@@ -364,22 +374,38 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
     curr_counts
 }
 
-
-#[derive(TypedBuilder)]
+#[derive(TypedBuilder, Debug)]
 struct AlignmentFilters {
     five_prime_clip: u32,
     three_prime_clip: u32,
     score_threshold: f32,
     min_aligned_fraction: f32,
+    min_aligned_len: u32,
 }
 
 impl AlignmentFilters {
-    fn filter(self, ag: &mut Vec<sam::alignment::record::Record>) -> Vec<f32> {
-        ag.retain( |x| {
-            !x.flags().is_unmapped() &&
-            (x.alignment_start().unwrap().get() as u32) <= self.five_prime_clip &&
-            ((x.alignment_span() as f32) / (x.template_length() as f32)) >= self.min_aligned_fraction
+    fn filter(
+        &self,
+        txps: &Vec<TranscriptInfo>,
+        ag: &mut Vec<sam::alignment::record::Record>,
+    ) -> Vec<f32> {
+        ag.retain(|x| {
+            if !x.flags().is_unmapped() {
+                let tid = x.reference_sequence_id().unwrap();
+                let aln_span = x.alignment_span();
+
+                (x.alignment_start().unwrap().get() as u32) <= self.five_prime_clip
+                    && ((aln_span as f32) / (x.template_length() as f32))
+                        >= self.min_aligned_fraction
+                    && (aln_span as u32) >= self.min_aligned_len
+                    && !x.flags().is_reverse_complemented()
+                    && (txps[tid].len.get() as u32 - (x.alignment_end().unwrap().get() as u32))
+                        <= self.three_prime_clip
+            } else {
+                false
+            }
         });
+
         if ag.len() == 1 {
             vec![1.0_f32]
         } else {
@@ -400,10 +426,12 @@ impl AlignmentFilters {
                 }
             }
 
+            let mscore = max_score as f32;
+            let thresh_score = mscore - (mscore.abs() * (1.0 - self.score_threshold));
+
             for score in scores.iter_mut() {
                 let fscore = *score as f32;
-                let mscore = max_score as f32;
-                if fscore > self.score_threshold * mscore {
+                if fscore >= thresh_score {
                     let f = (fscore - mscore) / 10.0_f32;
                     probabilities.push(f.exp());
                 } else {
@@ -417,10 +445,10 @@ impl AlignmentFilters {
                 scores[index - 1] > i32::MIN
             });
 
-            if ag.is_empty() {
+            /*if ag.is_empty() {
                 warn!("No valid scores for read!");
                 warn!("max_score = {}. scores = {:?}", max_score, scores);
-            }
+            }*/
             probabilities
         }
     }
@@ -447,6 +475,7 @@ fn main() -> io::Result<()> {
         .three_prime_clip(args.three_prime_clip)
         .score_threshold(args.score_threshold)
         .min_aligned_fraction(args.min_aligned_fraction)
+        .min_aligned_len(args.min_aligned_len)
         .build();
 
     let header = reader.read_header()?;
@@ -496,7 +525,7 @@ fn main() -> io::Result<()> {
             } else {
                 if !prev_read.is_empty() {
                     //println!("the previous read had {} mappings", records_for_read.len());
-                    store.add_group(&mut records_for_read);
+                    store.add_group(&txps, &mut records_for_read);
                     records_for_read.clear();
                     num_mapped += 1;
                 }
@@ -515,7 +544,7 @@ fn main() -> io::Result<()> {
         }
     }
     if !records_for_read.is_empty() {
-        store.add_group(&mut records_for_read);
+        store.add_group(&txps, &mut records_for_read);
         records_for_read.clear();
         num_mapped += 1;
     }
@@ -533,8 +562,14 @@ fn main() -> io::Result<()> {
     //eprintln!("Number of mapped reads : {}", num_mapped);
     //eprintln!("normalizing alignment scores");
     //store.normalize_scores();
-    info!("Total number of alignment records : {}", store.total_len().to_formatted_string(&Locale::en));
-    info!("number of aligned reads : {}", store.num_aligned_reads().to_formatted_string(&Locale::en));
+    info!(
+        "Total number of alignment records : {}",
+        store.total_len().to_formatted_string(&Locale::en)
+    );
+    info!(
+        "number of aligned reads : {}",
+        store.num_aligned_reads().to_formatted_string(&Locale::en)
+    );
 
     let emi = EMInfo {
         eq_map: &store,
@@ -642,10 +677,7 @@ fn main_old() -> io::Result<()> {
         let strand = evec[v[0]].strand();
         v.sort_unstable_by_key(|x| evec[*x].start());
         let s = evec[v[0]].start();
-        let starts: Vec<usize> = v
-            .iter()
-            .map(|e| (evec[*e].start() - s) as usize)
-            .collect();
+        let starts: Vec<usize> = v.iter().map(|e| (evec[*e].start() - s) as usize).collect();
         let lens: Vec<usize> = v.iter().map(|e| evec[*e].length()).collect();
         println!("lens = {:?}, starts = {:?}", lens, starts);
         txp_features.insert(
