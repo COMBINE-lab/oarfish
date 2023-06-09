@@ -27,4 +27,14 @@ quant_sirv ref dataset:
 # quantify sirv data
 quant_sirv_data: (quant_sirv "o" "SRR6058583") (quant_sirv "o" "SRR6058584") (quant_sirv "c" "SRR6058583") (quant_sirv "c" "SRR6058584") (quant_sirv "i" "SRR6058583") (quant_sirv "i" "SRR6058584")
 
+map_nanocount_sample sample:
+  minimap2 -t 8 -ax map-ont -N 100 ../../data/ref_with_sequin.fa.mmi \
+  ../../data/{{sample}}_MinION_sequencing.fastq.gz | samtools view -@4 -h -F 2052 -bS > ../../data/{{sample}}.bam
 
+map_nanocount_samples: (map_nanocount_sample "ERR4352441") (map_nanocount_sample "ERR4352442") (map_nanocount_sample "ERR4352443") (map_nanocount_sample "ERR4352444") (map_nanocount_sample "ERR4368409") (map_nanocount_sample "ERR4368410")
+
+quant_nanocount_sample dataset:
+  ../target/release/oarfish -a ../../data/{{dataset}}.bam -t 50 -o ../../data/quants/oarfish/{{dataset}}_quant.tsv
+  NanoCount -i ../../data/SIRV/{{dataset}}.bam -x -o ../../data/quants/nanocount/{{dataset}}_quant.tsv
+
+quant_nanocount_samples: (quant_nanocount_sample "ERR4352441") (quant_nanocount_sample "ERR4352442") (quant_nanocount_sample "ERR4352443") (quant_nanocount_sample "ERR4352444") (quant_nanocount_sample "ERR4368409") (quant_nanocount_sample "ERR4368410")
