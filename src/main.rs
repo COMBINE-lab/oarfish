@@ -265,19 +265,23 @@ fn m_step(
         for (a, p) in alns.iter().zip(probs.iter()) {
             let target_id = a.reference_sequence_id().unwrap();
             let prob = *p as f64;
-            
-            let cov_prob = if tinfo[target_id].coverage < 0.15 { 1e-5 } else { 1.0 };//powf(2.0) as f64;
-            /*
 
-            let tlen = tinfo[target_id].len.get();
-            let is_fl = (tlen - a.alignment_span()) < 20;
-            let fl_prob = if is_fl {
-                prob_full.get_prob_for(tlen)
+            let cov_prob = if tinfo[target_id].coverage < 0.15 {
+                1e-5
             } else {
-                1.0 - prob_full.get_prob_for(tlen)
-            };
-            len_probs.push(fl_prob);
-            */
+                1.0
+            }; //powf(2.0) as f64;
+               /*
+
+               let tlen = tinfo[target_id].len.get();
+               let is_fl = (tlen - a.alignment_span()) < 20;
+               let fl_prob = if is_fl {
+                   prob_full.get_prob_for(tlen)
+               } else {
+                   1.0 - prob_full.get_prob_for(tlen)
+               };
+               len_probs.push(fl_prob);
+               */
             //let cov_prob = 1.0;
             let fl_prob = 1.0;
             len_probs.push(fl_prob);
@@ -288,8 +292,12 @@ fn m_step(
             for (i, (a, p)) in alns.iter().zip(probs.iter()).enumerate() {
                 let target_id = a.reference_sequence_id().unwrap();
                 let prob = *p as f64;
-                let cov_prob = if tinfo[target_id].coverage < 0.15 { 1e-5 } else { 1.0 };//powf(2.0) as f64;
-                //let cov_prob = 1.0;
+                let cov_prob = if tinfo[target_id].coverage < 0.15 {
+                    1e-5
+                } else {
+                    1.0
+                }; //powf(2.0) as f64;
+                   //let cov_prob = 1.0;
                 let len_prob = len_probs[i];
                 let inc = (prev_count[target_id] * prob * cov_prob * len_prob) / denom;
                 curr_counts[target_id] += inc;
