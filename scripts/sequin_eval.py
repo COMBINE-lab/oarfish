@@ -5,10 +5,7 @@ import json
 
 def main():
     # read ground truth
-    t = pd.read_excel(
-        "test_data/TableS3_S4_Sequin_counts_and_diff_expression.xlsx",
-        sheet_name="S3 - Sequin-transcript-count",
-    )
+    t = pd.read_csv("test_data/rnasequin_isoforms_2.4.tsv", sep="\t")
     t.columns = t.columns.str.upper()
 
     data_dir = "../data"
@@ -28,25 +25,21 @@ def main():
     m2 = {}
     for k, v in d.items():
         v = v.upper()
-        m[v] = pd.merge(x[v], t, left_on="tname", right_on="TRANSCRIPT", how="inner")
-        m2[v] = pd.merge(
-            y[v], t, left_on="transcript_name", right_on="TRANSCRIPT", how="inner"
+        m[v] = pd.merge(x[v], t, left_on="tname", right_on="NAME", how="inner")
+        m[v] = pd.merge(
+            y[v], m[v], left_on="transcript_name", right_on="NAME", how="inner"
         )
 
-    res_oarfish = []
-    res_nanocount = []
+    res = []
     for k, v in m.items():
-        if k in t.columns:
-            print(f"\n\n=== {k} ===\n")
-            res_oarfish.append(v.corr(method="spearman").loc[k, "num_reads"])
-            print(res_oarfish[-1])
-            v2 = m2[k]
-            res_nanocount.append(v2.corr(method="spearman").loc[k, "est_count"])
-            print(res_nanocount[-1])
-
-    print(
-        f"oarfish_mean = {np.array(res_oarfish).mean()}, nanocount_mean = {np.array(res_nanocount).mean()}"
-    )
+        mix = "MIX_B"
+        if k in ["UNDIFF1", "UNDIFF2"]:
+            mix = "MIX_A"
+        print(f"\n=== {k} ===\n")
+        res.append(
+            v.loc[:, ["num_reads", "est_count", mix]].corr(method="spearman")[mix]
+        )
+        print(res[-1])
 
 
 if __name__ == "__main__":
