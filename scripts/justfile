@@ -1,0 +1,30 @@
+
+# build sirv transcriptomes
+build_sirv_txomes:
+  gffread -E -v -w ../../data/SIRV/isoforms_o.fa \
+  -g ../test_data/SIRV_isoforms_multi-fasta_170612a.fasta \
+  ../test_data/SIRV_isoforms_multi-fasta-annotation_O_170612a.gtf
+
+  gffread -E -v -w ../../data/SIRV/isoforms_i.fa \
+  -g ../test_data/SIRV_isoforms_multi-fasta_170612a.fasta \
+  ../test_data/SIRV_isoforms_multi-fasta-annotation_I_170612a.gtf
+
+  gffread -E -v -w ../../data/SIRV/isoforms_c.fa \
+  -g ../test_data/SIRV_isoforms_multi-fasta_170612a.fasta \
+  ../test_data/SIRV_isoforms_multi-fasta-annotation_C_170612a.gtf
+
+map_sirv ref dataset:
+  minimap2 -t 8 -ax map-ont -N 100 ../../data/SIRV/isoforms_{{ref}}.fa \
+  ../{{dataset}}_1.fastq.gz | samtools view -@4 -h -F 2052 -bS > ../../data/SIRV/{{dataset}}_{{ref}}.bam
+
+# map sirv data
+map_sirv_data: (map_sirv "o" "SRR6058583") (map_sirv "o" "SRR6058584") (map_sirv "c" "SRR6058583") (map_sirv "c" "SRR6058584") (map_sirv "i" "SRR6058583") (map_sirv "i" "SRR6058584")
+
+quant_sirv ref dataset:
+  ../target/release/oarfish -a ../../data/SIRV/{{dataset}}_{{ref}}.bam -t 50 -o ../../data/SIRV/quants/oarfish/{{dataset}}_{{ref}}_quant.tsv
+  NanoCount -i ../../data/SIRV/{{dataset}}_{{ref}}.bam -x -o ../../data/SIRV/quants/nanocount/{{dataset}}_{{ref}}_quant.tsv
+
+# quantify sirv data
+quant_sirv_data: (quant_sirv "o" "SRR6058583") (quant_sirv "o" "SRR6058584") (quant_sirv "c" "SRR6058583") (quant_sirv "c" "SRR6058584") (quant_sirv "i" "SRR6058583") (quant_sirv "i" "SRR6058584")
+
+
