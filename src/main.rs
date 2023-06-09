@@ -350,7 +350,7 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
         std::mem::swap(&mut prev_counts, &mut curr_counts);
         curr_counts.fill(0.0_f64);
 
-        if (rel_diff < 5e-3) && (niter > 10) {
+        if (rel_diff < 1e-3) && (niter > 10) {
             break;
         }
         niter += 1;
