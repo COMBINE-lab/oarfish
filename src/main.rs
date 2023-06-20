@@ -8,7 +8,7 @@ use std::{
 };
 
 use num_format::{Locale, ToFormattedString};
-use tracing::{info, warn};
+use tracing::info;
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 use typed_builder::TypedBuilder;
 
@@ -23,7 +23,6 @@ use sam::record::data::field::tag;
 
 use bio_types::annot::contig::Contig;
 use coitrees::{COITree, IntervalNode};
-use nested_intervals::IntervalSet;
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -65,6 +64,7 @@ struct TranscriptInfo {
 }
 
 impl TranscriptInfo {
+    #[allow(dead_code)]
     fn new() -> Self {
         Self {
             len: NonZeroUsize::new(0).unwrap(),
@@ -176,7 +176,7 @@ impl InMemoryAlignmentStore {
 
     fn add_group(
         &mut self,
-        txps: &mut Vec<TranscriptInfo>,
+        txps: &mut [TranscriptInfo],
         ag: &mut Vec<sam::alignment::record::Record>,
     ) {
         let probs = self.filter_opts.filter(&mut self.discard_table, txps, ag);
@@ -285,10 +285,10 @@ fn m_step(
         }
 
         if denom > 1e-8 {
-            for (i, (a, p)) in alns.iter().zip(probs.iter()).enumerate() {
+            for (_i, (a, p)) in alns.iter().zip(probs.iter()).enumerate() {
                 let target_id = a.reference_sequence_id().unwrap();
                 let prob = *p as f64;
-                let cov_prob = tinfo[target_id].coverage_prob as f64;
+                let cov_prob = tinfo[target_id].coverage_prob;
 
                 let inc = (prev_count[target_id] * prob * cov_prob) / denom;
                 curr_counts[target_id] += inc;
@@ -303,7 +303,7 @@ fn m_step(
 
 fn em(em_info: &mut EMInfo) -> Vec<f64> {
     let eq_map = em_info.eq_map;
-    let mut tinfo: &mut Vec<TranscriptInfo> = em_info.txp_info;
+    let tinfo: &mut Vec<TranscriptInfo> = em_info.txp_info;
     let max_iter = em_info.max_iter;
     let total_weight: f64 = eq_map.num_aligned_reads() as f64;
 
@@ -314,9 +314,9 @@ fn em(em_info: &mut EMInfo) -> Vec<f64> {
 
     let mut rel_diff = 0.0_f64;
     let mut niter = 0_u32;
-    let mut fl_prob = 0.5f64;
+    let mut _fl_prob = 0.5f64;
 
-    let length_bins = vec![
+    let _length_bins = vec![
         200,
         500,
         1000,
@@ -331,7 +331,7 @@ fn em(em_info: &mut EMInfo) -> Vec<f64> {
     //let len_probs = FullLengthProbs::from_data(eq_map, tinfo, &length_bins);
 
     while niter < max_iter {
-        m_step(eq_map, &mut tinfo, &mut prev_counts, &mut curr_counts);
+        m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
 
         //std::mem::swap(&)
         for i in 0..curr_counts.len() {
@@ -407,7 +407,7 @@ impl AlignmentFilters {
     fn filter(
         &mut self,
         discard_table: &mut DiscardTable,
-        txps: &mut Vec<TranscriptInfo>,
+        txps: &mut [TranscriptInfo],
         ag: &mut Vec<sam::alignment::record::Record>,
     ) -> Vec<f32> {
         ag.retain(|x| {
@@ -570,7 +570,7 @@ fn main() -> io::Result<()> {
     //let mut rmap = HashMap<usize, ::new();
     //
     let mut prev_read = String::new();
-    let mut num_mapped = 0_u64;
+    let mut _num_mapped = 0_u64;
     let mut records_for_read = vec![];
     let mut store = InMemoryAlignmentStore::new(filter_opts);
 
@@ -586,7 +586,7 @@ fn main() -> io::Result<()> {
             // if this is an alignment for the same read, then
             // push it onto our temporary vector.
             if prev_read == rstring {
-                if let Some(ref_id) = record.reference_sequence_id() {
+                if let Some(_ref_id) = record.reference_sequence_id() {
                     records_for_read.push(record_copy);
                 }
             } else {
@@ -594,10 +594,10 @@ fn main() -> io::Result<()> {
                     //println!("the previous read had {} mappings", records_for_read.len());
                     store.add_group(&mut txps, &mut records_for_read);
                     records_for_read.clear();
-                    num_mapped += 1;
+                    _num_mapped += 1;
                 }
                 prev_read = rstring;
-                if let Some(ref_id) = record.reference_sequence_id() {
+                if let Some(_ref_id) = record.reference_sequence_id() {
                     records_for_read.push(record_copy);
                 }
             }
@@ -606,7 +606,7 @@ fn main() -> io::Result<()> {
     if !records_for_read.is_empty() {
         store.add_group(&mut txps, &mut records_for_read);
         records_for_read.clear();
-        num_mapped += 1;
+        _num_mapped += 1;
     }
 
     info!("discard_table: {:?}", store.discard_table);
@@ -643,13 +643,13 @@ fn main() -> io::Result<()> {
         .expect("Couldn't create output file");
     let mut writer = BufWriter::new(write);
 
-    write!(writer, "tname\tcoverage\tlen\tnum_reads\n").expect("Couldn't write to output file.");
+    writeln!(writer, "tname\tcoverage\tlen\tnum_reads").expect("Couldn't write to output file.");
     // loop over the transcripts in the header and fill in the relevant
     // information here.
     for (i, (_rseq, rmap)) in header.reference_sequences().iter().enumerate() {
-        write!(
+        writeln!(
             writer,
-            "{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}",
             _rseq,
             txps[i].coverage_prob,
             rmap.length(),
