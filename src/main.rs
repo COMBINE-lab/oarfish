@@ -36,8 +36,8 @@ struct Args {
     #[clap(short, long, value_parser, required = true)]
     output: String,
     // Maximum allowable distance of the right-most end of an alignment from the 3' transcript end
-    #[clap(short, long, value_parser, default_value_t = u32::MAX)]
-    three_prime_clip: u32,
+    #[clap(short, long, value_parser, default_value_t = u32::MAX as i64)]
+    three_prime_clip: i64,
     // Maximum allowable distance of the left-most end of an alignment from the 5' transcript end
     #[clap(short, long, value_parser, default_value_t = u32::MAX)]
     five_prime_clip: u32,
@@ -57,24 +57,69 @@ struct Args {
 #[derive(Debug, PartialEq)]
 struct TranscriptInfo {
     len: NonZeroUsize,
-    ranges: Vec<std::ops::Range<u32>>,
-    coverage: f32,
+    total_weight: f64,
+    coverage_bins: Vec<f64>,
+    //ranges: Vec<std::ops::Range<u32>>,
+    coverage_prob: f64,
+    lenf: f64,
 }
 
 impl TranscriptInfo {
     fn new() -> Self {
         Self {
             len: NonZeroUsize::new(0).unwrap(),
-            ranges: Vec::new(),
-            coverage: 0.0,
+            total_weight: 0.0_f64,
+            coverage_bins: vec![0.0_f64; 10],
+            //ranges: Vec::new(),
+            coverage_prob: 0.0,
+            lenf: 0_f64,
         }
     }
+
     fn with_len(len: NonZeroUsize) -> Self {
         Self {
             len,
-            ranges: Vec::new(),
-            coverage: 0.0,
+            total_weight: 0.0_f64,
+            coverage_bins: vec![0.0_f64; 10],
+            //ranges: Vec::new(),
+            coverage_prob: 0.0,
+            lenf: len.get() as f64,
         }
+    }
+
+    fn add_interval(&mut self, start: u32, stop: u32, weight: f64) {
+        const NUM_INTERVALS: usize = 10_usize;
+        const NUM_INTERVALS_F: f64 = 10.0_f64;
+        // find the starting bin
+        let start_bin = ((((start as f64) / self.lenf) * NUM_INTERVALS_F).floor() as usize)
+            .min(NUM_INTERVALS - 1);
+        let end_bin = ((((stop as f64) / self.lenf) * NUM_INTERVALS_F).floor() as usize)
+            .min(NUM_INTERVALS - 1);
+        for bin in &mut self.coverage_bins[start_bin..=end_bin] {
+            *bin += weight;
+        }
+        self.total_weight += weight;
+    }
+
+    fn compute_coverage_prob(&mut self) {
+        // first normalize
+        const EVEN_COV: f64 = 0.1_f64;
+        let sum: f64 = self.coverage_bins.iter().sum();
+        let deviation: f64 = if sum > 0.0 {
+            self.coverage_bins
+                .iter()
+                .copied()
+                .fold(0.0_f64, |a, e| a + ((e / sum) - EVEN_COV).abs())
+        } else {
+            2.0_f64
+        };
+        let coverage_prob = (-deviation * 4.0).exp();
+        self.coverage_prob = coverage_prob;
+    }
+
+    fn clear_coverage_dist(&mut self) {
+        self.coverage_bins.fill(0.0_f64);
+        self.total_weight = 0.0_f64;
     }
 }
 
@@ -131,7 +176,7 @@ impl InMemoryAlignmentStore {
 
     fn add_group(
         &mut self,
-        txps: &Vec<TranscriptInfo>,
+        txps: &mut Vec<TranscriptInfo>,
         ag: &mut Vec<sam::alignment::record::Record>,
     ) {
         let probs = self.filter_opts.filter(&mut self.discard_table, txps, ag);
@@ -153,46 +198,16 @@ impl InMemoryAlignmentStore {
             0
         }
     }
-
-    /*
-    fn normalize_scores(&mut self) {
-        self.probabilities = vec![0.0_f32; self.alignments.len()];
-        for w in self.boundaries.windows(2) {
-            let s: usize = w[0];
-            let e: usize = w[1];
-            if e - s > 1 {
-                let mut max_score = 0_i32;
-                let mut scores = Vec::<i32>::with_capacity(e - s);
-                for a in &self.alignments[s..e] {
-                    let score_value = a
-                        .data()
-                        .get(&tag::ALIGNMENT_SCORE)
-                        .expect("could not get value");
-                    let score = score_value.as_int().unwrap() as i32;
-                    scores.push(score);
-                    if score > max_score {
-                        max_score = score;
-                    }
-                }
-                for (i, score) in scores.iter().enumerate() {
-                    let f = ((*score as f32) - (max_score as f32)) / 10.0_f32;
-                    self.probabilities[s + i] = f.exp();
-                }
-            } else {
-                self.probabilities[s] = 1.0
-            }
-        }
-    }
-    */
 }
 
 /// Holds the info relevant for running the EM algorithm
 struct EMInfo<'eqm, 'tinfo> {
     eq_map: &'eqm InMemoryAlignmentStore,
-    txp_info: &'tinfo Vec<TranscriptInfo>,
+    txp_info: &'tinfo mut Vec<TranscriptInfo>,
     max_iter: u32,
 }
 
+/*
 struct FullLengthProbs {
     length_bins: Vec<usize>,
     probs: Vec<f64>,
@@ -250,69 +265,45 @@ impl FullLengthProbs {
         self.probs[lindex]
     }
 }
+*/
 
 #[inline]
 fn m_step(
     eq_map: &InMemoryAlignmentStore,
-    tinfo: &[TranscriptInfo],
-    prob_full: &FullLengthProbs,
+    tinfo: &mut [TranscriptInfo],
     prev_count: &mut [f64],
     curr_counts: &mut [f64],
 ) {
-    let mut len_probs: Vec<f64> = Vec::new();
     for (alns, probs) in eq_map.iter() {
         let mut denom = 0.0_f64;
         for (a, p) in alns.iter().zip(probs.iter()) {
             let target_id = a.reference_sequence_id().unwrap();
             let prob = *p as f64;
+            let cov_prob = tinfo[target_id].coverage_prob;
 
-            let cov_prob = if tinfo[target_id].coverage < 0.15 {
-                1e-5
-            } else {
-                1.0
-            }; //powf(2.0) as f64;
-               /*
-
-               let tlen = tinfo[target_id].len.get();
-               let is_fl = (tlen - a.alignment_span()) < 20;
-               let fl_prob = if is_fl {
-                   prob_full.get_prob_for(tlen)
-               } else {
-                   1.0 - prob_full.get_prob_for(tlen)
-               };
-               len_probs.push(fl_prob);
-               */
-            //let cov_prob = 1.0;
-            let fl_prob = 1.0;
-            len_probs.push(fl_prob);
-            denom += prev_count[target_id] * prob * cov_prob * fl_prob;
+            denom += prev_count[target_id] * prob * cov_prob;
         }
 
         if denom > 1e-8 {
             for (i, (a, p)) in alns.iter().zip(probs.iter()).enumerate() {
                 let target_id = a.reference_sequence_id().unwrap();
                 let prob = *p as f64;
-                let cov_prob = if tinfo[target_id].coverage < 0.15 {
-                    1e-5
-                } else {
-                    1.0
-                }; //powf(2.0) as f64;
-                   //let cov_prob = 1.0;
-                let len_prob = len_probs[i];
-                let inc = (prev_count[target_id] * prob * cov_prob * len_prob) / denom;
+                let cov_prob = tinfo[target_id].coverage_prob as f64;
+
+                let inc = (prev_count[target_id] * prob * cov_prob) / denom;
                 curr_counts[target_id] += inc;
+
+                let start = a.alignment_start().unwrap().get() as u32;
+                let stop = a.alignment_end().unwrap().get() as u32;
+                tinfo[target_id].add_interval(start, stop, inc);
             }
         }
-        len_probs.clear();
     }
-
-    //eprintln!("nunique : {}, ntotal : {}", nunique, eq_map.num_aligned_reads());
-    //prob_full_len / (eq_map.num_aligned_reads() as f64)
 }
 
-fn em(em_info: &EMInfo) -> Vec<f64> {
+fn em(em_info: &mut EMInfo) -> Vec<f64> {
     let eq_map = em_info.eq_map;
-    let tinfo = em_info.txp_info;
+    let mut tinfo: &mut Vec<TranscriptInfo> = em_info.txp_info;
     let max_iter = em_info.max_iter;
     let total_weight: f64 = eq_map.num_aligned_reads() as f64;
 
@@ -337,16 +328,10 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
         25000,
         usize::MAX,
     ];
-    let len_probs = FullLengthProbs::from_data(eq_map, tinfo, &length_bins);
+    //let len_probs = FullLengthProbs::from_data(eq_map, tinfo, &length_bins);
 
     while niter < max_iter {
-        m_step(
-            eq_map,
-            tinfo,
-            &len_probs,
-            &mut prev_counts,
-            &mut curr_counts,
-        );
+        m_step(eq_map, &mut tinfo, &mut prev_counts, &mut curr_counts);
 
         //std::mem::swap(&)
         for i in 0..curr_counts.len() {
@@ -354,6 +339,8 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
                 let rd = (curr_counts[i] - prev_counts[i]) / prev_counts[i];
                 rel_diff = if rel_diff > rd { rel_diff } else { rd };
             }
+            tinfo[i].compute_coverage_prob();
+            tinfo[i].clear_coverage_dist();
         }
 
         std::mem::swap(&mut prev_counts, &mut curr_counts);
@@ -378,20 +365,14 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
             *x = 0.0
         }
     });
-    m_step(
-        eq_map,
-        tinfo,
-        &len_probs,
-        &mut prev_counts,
-        &mut curr_counts,
-    );
+    m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
     curr_counts
 }
 
 #[derive(TypedBuilder, Debug)]
 struct AlignmentFilters {
     five_prime_clip: u32,
-    three_prime_clip: u32,
+    three_prime_clip: i64,
     score_threshold: f32,
     min_aligned_fraction: f32,
     min_aligned_len: u32,
@@ -426,7 +407,7 @@ impl AlignmentFilters {
     fn filter(
         &mut self,
         discard_table: &mut DiscardTable,
-        txps: &Vec<TranscriptInfo>,
+        txps: &mut Vec<TranscriptInfo>,
         ag: &mut Vec<sam::alignment::record::Record>,
     ) -> Vec<f32> {
         ag.retain(|x| {
@@ -462,8 +443,8 @@ impl AlignmentFilters {
                 }
 
                 // not too far from the 3' end
-                let filt_3p = (x.alignment_end().unwrap().get() as u32)
-                    > (txps[tid].len.get() as u32 - self.three_prime_clip);
+                let filt_3p = (x.alignment_end().unwrap().get() as i64)
+                    > (txps[tid].len.get() as i64 - self.three_prime_clip);
                 if !filt_3p {
                     discard_table.discard_3p += 1;
                     return false;
@@ -484,6 +465,14 @@ impl AlignmentFilters {
         });
 
         if ag.len() == 1 {
+            if let Some(a) = ag.first() {
+                let tid = a.reference_sequence_id().unwrap();
+                txps[tid].add_interval(
+                    a.alignment_start().unwrap().get() as u32,
+                    a.alignment_end().unwrap().get() as u32,
+                    1.0_f64,
+                );
+            }
             vec![1.0_f32]
         } else {
             let mut max_score = i32::MIN;
@@ -506,11 +495,18 @@ impl AlignmentFilters {
             let mscore = max_score as f32;
             let thresh_score = mscore - (mscore.abs() * (1.0 - self.score_threshold));
 
-            for score in scores.iter_mut() {
+            for (i, score) in scores.iter_mut().enumerate() {
                 let fscore = *score as f32;
                 if fscore >= thresh_score {
                     let f = (fscore - mscore) / 10.0_f32;
                     probabilities.push(f.exp());
+
+                    let tid = ag[i].reference_sequence_id().unwrap();
+                    txps[tid].add_interval(
+                        ag[i].alignment_start().unwrap().get() as u32,
+                        ag[i].alignment_end().unwrap().get() as u32,
+                        1.0_f64,
+                    );
                 } else {
                     *score = i32::MIN;
                     discard_table.discard_score += 1;
@@ -592,31 +588,23 @@ fn main() -> io::Result<()> {
             if prev_read == rstring {
                 if let Some(ref_id) = record.reference_sequence_id() {
                     records_for_read.push(record_copy);
-                    txps[ref_id].ranges.push(
-                        (record.alignment_start().unwrap().get() as u32)
-                            ..(record.alignment_end().unwrap().get() as u32),
-                    );
                 }
             } else {
                 if !prev_read.is_empty() {
                     //println!("the previous read had {} mappings", records_for_read.len());
-                    store.add_group(&txps, &mut records_for_read);
+                    store.add_group(&mut txps, &mut records_for_read);
                     records_for_read.clear();
                     num_mapped += 1;
                 }
                 prev_read = rstring;
                 if let Some(ref_id) = record.reference_sequence_id() {
                     records_for_read.push(record_copy);
-                    txps[ref_id].ranges.push(
-                        (record.alignment_start().unwrap().get() as u32)
-                            ..(record.alignment_end().unwrap().get() as u32),
-                    );
                 }
             }
         }
     }
     if !records_for_read.is_empty() {
-        store.add_group(&txps, &mut records_for_read);
+        store.add_group(&mut txps, &mut records_for_read);
         records_for_read.clear();
         num_mapped += 1;
     }
@@ -625,17 +613,11 @@ fn main() -> io::Result<()> {
 
     info!("computing coverages");
     for t in txps.iter_mut() {
-        let interval_set = IntervalSet::new(&t.ranges).expect("couldn't build interval set");
-        let mut interval_set = interval_set.merge_connected();
-        let len = t.len.get() as u32;
-        let covered = interval_set.covered_units();
-        t.coverage = (covered as f32) / (len as f32);
+        t.compute_coverage_prob();
     }
+
     info!("done");
 
-    //eprintln!("Number of mapped reads : {}", num_mapped);
-    //eprintln!("normalizing alignment scores");
-    //store.normalize_scores();
     info!(
         "Total number of alignment records : {}",
         store.total_len().to_formatted_string(&Locale::en)
@@ -645,17 +627,18 @@ fn main() -> io::Result<()> {
         store.num_aligned_reads().to_formatted_string(&Locale::en)
     );
 
-    let emi = EMInfo {
+    let mut emi = EMInfo {
         eq_map: &store,
-        txp_info: &txps,
+        txp_info: &mut txps,
         max_iter: 1000,
     };
 
-    let counts = em(&emi);
+    let counts = em(&mut emi);
 
     let write = OpenOptions::new()
         .write(true)
         .create(true)
+        .truncate(true)
         .open(args.output)
         .expect("Couldn't create output file");
     let mut writer = BufWriter::new(write);
@@ -668,7 +651,7 @@ fn main() -> io::Result<()> {
             writer,
             "{}\t{}\t{}\t{}\n",
             _rseq,
-            txps[i].coverage,
+            txps[i].coverage_prob,
             rmap.length(),
             counts[i]
         )
