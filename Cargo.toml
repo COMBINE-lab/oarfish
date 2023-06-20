@@ -22,11 +22,6 @@ typed-builder = "0.14.0"
 name = "oarfish"
 path = "src/main.rs"
 
-
-[lib]
-name = "liboarfish"
-path = "src/lib.rs"
-
 [profile.release]
 debug-assertions = false
 lto = "thin"
