@@ -53,6 +53,33 @@ struct Args {
     min_aligned_len: u32,
 }
 
+
+#[derive(Clone, Debug, PartialEq)]
+struct AlnInfo {
+    ref_id: u32,
+    start: u32,
+    end: u32,
+    prob: f64,
+    strand: Strand
+}
+
+
+impl From<&sam::alignment::record::Record> for AlnInfo {
+    fn from(aln: &sam::alignment::record::Record) -> Self {
+        Self{
+            ref_id: aln.reference_sequence_id().unwrap() as u32,
+            start: aln.alignment_start().unwrap().get() as u32,
+            end: aln.alignment_end().unwrap().get() as u32,
+            prob: 0.0_f64,
+            strand: if aln.flags().is_reverse_complemented() {
+                Strand::Reverse
+            } else {
+                Strand::Forward
+            }
+        }
+    }
+}
+
 #[derive(Debug, PartialEq)]
 struct TranscriptInfo {
     len: NonZeroUsize,
@@ -126,7 +153,7 @@ impl TranscriptInfo {
 #[derive(Debug)]
 struct InMemoryAlignmentStore {
     filter_opts: AlignmentFilters,
-    alignments: Vec<sam::alignment::record::Record>,
+    alignments: Vec<AlnInfo>,
     probabilities: Vec<f32>,
     // holds the boundaries between records for different reads
     boundaries: Vec<usize>,
@@ -139,7 +166,7 @@ struct InMemoryAlignmentStoreIter<'a> {
 }
 
 impl<'a> Iterator for InMemoryAlignmentStoreIter<'a> {
-    type Item = (&'a [sam::alignment::record::Record], &'a [f32]);
+    type Item = (&'a [AlnInfo], &'a [f32]);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx + 1 >= self.store.boundaries.len() {
@@ -179,9 +206,9 @@ impl InMemoryAlignmentStore {
         txps: &mut [TranscriptInfo],
         ag: &mut Vec<sam::alignment::record::Record>,
     ) {
-        let probs = self.filter_opts.filter(&mut self.discard_table, txps, ag);
+        let (alns, probs) = self.filter_opts.filter(&mut self.discard_table, txps, ag);
         if !ag.is_empty() {
-            self.alignments.extend_from_slice(ag);
+            self.alignments.extend_from_slice(&alns);
             self.probabilities.extend_from_slice(&probs);
             self.boundaries.push(self.alignments.len());
         }
@@ -277,24 +304,23 @@ fn m_step(
     for (alns, probs) in eq_map.iter() {
         let mut denom = 0.0_f64;
         for (a, p) in alns.iter().zip(probs.iter()) {
-            let target_id = a.reference_sequence_id().unwrap();
+            let target_id = a.ref_id as usize;
             let prob = *p as f64;
             let cov_prob = tinfo[target_id].coverage_prob;
-
             denom += prev_count[target_id] * prob * cov_prob;
         }
 
         if denom > 1e-8 {
             for (_i, (a, p)) in alns.iter().zip(probs.iter()).enumerate() {
-                let target_id = a.reference_sequence_id().unwrap();
+                let target_id = a.ref_id as usize;
                 let prob = *p as f64;
                 let cov_prob = tinfo[target_id].coverage_prob;
 
                 let inc = (prev_count[target_id] * prob * cov_prob) / denom;
                 curr_counts[target_id] += inc;
 
-                let start = a.alignment_start().unwrap().get() as u32;
-                let stop = a.alignment_end().unwrap().get() as u32;
+                let start = a.start;
+                let stop = a.end;
                 tinfo[target_id].add_interval(start, stop, inc);
             }
         }
@@ -409,7 +435,7 @@ impl AlignmentFilters {
         discard_table: &mut DiscardTable,
         txps: &mut [TranscriptInfo],
         ag: &mut Vec<sam::alignment::record::Record>,
-    ) -> Vec<f32> {
+    ) -> (Vec<AlnInfo>, Vec<f32>) {
         ag.retain(|x| {
             if !x.flags().is_unmapped() {
                 let tid = x.reference_sequence_id().unwrap();
@@ -465,6 +491,7 @@ impl AlignmentFilters {
         });
 
         if ag.len() == 1 {
+            let mut av = vec![];
             if let Some(a) = ag.first() {
                 let tid = a.reference_sequence_id().unwrap();
                 txps[tid].add_interval(
@@ -472,8 +499,9 @@ impl AlignmentFilters {
                     a.alignment_end().unwrap().get() as u32,
                     1.0_f64,
                 );
+                av.push(a.into());
             }
-            vec![1.0_f32]
+            (av, vec![1.0_f32])
         } else {
             let mut max_score = i32::MIN;
             let mut scores = Vec::<i32>::with_capacity(ag.len());
@@ -523,7 +551,7 @@ impl AlignmentFilters {
                 warn!("No valid scores for read!");
                 warn!("max_score = {}. scores = {:?}", max_score, scores);
             }*/
-            probabilities
+            (ag.iter().map(|x| { x.into() } ).collect(), probabilities)
         }
     }
 }
