@@ -53,20 +53,18 @@ struct Args {
     min_aligned_len: u32,
 }
 
-
 #[derive(Clone, Debug, PartialEq)]
 struct AlnInfo {
     ref_id: u32,
     start: u32,
     end: u32,
     prob: f64,
-    strand: Strand
+    strand: Strand,
 }
-
 
 impl From<&sam::alignment::record::Record> for AlnInfo {
     fn from(aln: &sam::alignment::record::Record) -> Self {
-        Self{
+        Self {
             ref_id: aln.reference_sequence_id().unwrap() as u32,
             start: aln.alignment_start().unwrap().get() as u32,
             end: aln.alignment_end().unwrap().get() as u32,
@@ -75,7 +73,7 @@ impl From<&sam::alignment::record::Record> for AlnInfo {
                 Strand::Reverse
             } else {
                 Strand::Forward
-            }
+            },
         }
     }
 }
@@ -551,7 +549,7 @@ impl AlignmentFilters {
                 warn!("No valid scores for read!");
                 warn!("max_score = {}. scores = {:?}", max_score, scores);
             }*/
-            (ag.iter().map(|x| { x.into() } ).collect(), probabilities)
+            (ag.iter().map(|x| x.into()).collect(), probabilities)
         }
     }
 }
