@@ -1,7 +1,6 @@
 use clap::Parser;
 
 use std::{
-    collections::HashMap,
     fs::{File, OpenOptions},
     io::{self, BufReader, BufWriter, Write},
 };
@@ -10,15 +9,8 @@ use num_format::{Locale, ToFormattedString};
 use tracing::info;
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 
-use bio_types::annot::loc::Loc;
-use bio_types::annot::spliced::Spliced;
-use bio_types::strand::Strand;
 use noodles_bam as bam;
-use noodles_gtf as gtf;
-use noodles_gtf::record::Strand as NoodlesStrand;
 
-use bio_types::annot::contig::Contig;
-use coitrees::{COITree, IntervalNode};
 mod util;
 use crate::util::oarfish_types::{AlignmentFilters, InMemoryAlignmentStore, TranscriptInfo};
 
