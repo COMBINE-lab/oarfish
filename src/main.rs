@@ -49,6 +49,12 @@ struct Args {
     // Minimum number of nucleotides in the aligned portion of a read
     #[clap(short = 'l', long, value_parser, default_value_t = 50)]
     min_aligned_len: u32,
+    // Allow both forward-strand and reverse-complement alignments
+    #[clap(short = 'n', long, value_parser)]
+    allow_negative_strand: bool,
+    // Apply the coverage model
+    #[clap(long, value_parser)]
+    model_coverage: bool,
 }
 
 /// Holds the info relevant for running the EM algorithm
@@ -153,6 +159,7 @@ fn m_step(
 
 fn em(em_info: &mut EMInfo) -> Vec<f64> {
     let eq_map = em_info.eq_map;
+    let fops = &eq_map.filter_opts;
     let tinfo: &mut Vec<TranscriptInfo> = em_info.txp_info;
     let max_iter = em_info.max_iter;
     let total_weight: f64 = eq_map.num_aligned_reads() as f64;
@@ -189,8 +196,10 @@ fn em(em_info: &mut EMInfo) -> Vec<f64> {
                 let rd = (curr_counts[i] - prev_counts[i]) / prev_counts[i];
                 rel_diff = if rel_diff > rd { rel_diff } else { rd };
             }
-            tinfo[i].compute_coverage_prob();
-            tinfo[i].clear_coverage_dist();
+            if fops.model_coverage {
+                tinfo[i].compute_coverage_prob();
+                tinfo[i].clear_coverage_dist();
+            }
         }
 
         std::mem::swap(&mut prev_counts, &mut curr_counts);
@@ -241,6 +250,8 @@ fn main() -> io::Result<()> {
         .score_threshold(args.score_threshold)
         .min_aligned_fraction(args.min_aligned_fraction)
         .min_aligned_len(args.min_aligned_len)
+        .allow_rc(args.allow_negative_strand)
+        .model_coverage(args.model_coverage)
         .build();
 
     let header = reader.read_header()?;
@@ -302,9 +313,11 @@ fn main() -> io::Result<()> {
 
     info!("discard_table: {:?}", store.discard_table);
 
-    info!("computing coverages");
-    for t in txps.iter_mut() {
-        t.compute_coverage_prob();
+    if store.filter_opts.model_coverage {
+        info!("computing coverages");
+        for t in txps.iter_mut() {
+            t.compute_coverage_prob();
+        }
     }
 
     info!("done");
@@ -349,115 +362,5 @@ fn main() -> io::Result<()> {
         .expect("Couldn't write to output file.");
     }
 
-    Ok(())
-}
-
-//
-// ignore anything below this line for now
-//
-
-#[allow(unused)]
-fn main_old() -> io::Result<()> {
-    let args = Args::parse();
-
-    let mut reader = File::open(args.alignments)
-        .map(BufReader::new)
-        .map(gtf::Reader::new)?;
-    let mut evec = Vec::new();
-    let mut tvec = Vec::new();
-    let mut tmap = HashMap::new();
-
-    for result in reader.records() {
-        let record = result?;
-        match record.ty() {
-            "exon" => {
-                let s: isize = (usize::from(record.start()) as isize) - 1;
-                let e: isize = usize::from(record.end()) as isize;
-                let l: usize = (e - s).try_into().unwrap();
-                let mut t = String::new();
-                for e in record.attributes().iter() {
-                    if e.key() == "transcript_id" {
-                        t = e.value().to_owned();
-                    }
-                }
-
-                let ni = tmap.len();
-                let tid = *tmap.entry(t.clone()).or_insert(ni);
-
-                // if this is what we just inserted
-                if ni == tid {
-                    tvec.push(Spliced::new(0, 1, 1, Strand::Forward));
-                }
-
-                let strand = match record.strand().unwrap() {
-                    NoodlesStrand::Forward => Strand::Forward,
-                    NoodlesStrand::Reverse => Strand::Reverse,
-                };
-                let c = Contig::new(tid, s, l, strand);
-                evec.push(c);
-            }
-            "transcript" => {
-                let mut t = String::new();
-                for e in record.attributes().iter() {
-                    if e.key() == "transcript_id" {
-                        t = e.value().to_owned();
-                    }
-                }
-                let ni = tmap.len();
-                let tid = *tmap.entry(t.clone()).or_insert(ni);
-
-                // if this is what we just inserted
-                if ni == tid {
-                    tvec.push(Spliced::new(0, 1, 1, Strand::Forward));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let mut txp_to_exon = HashMap::new();
-
-    let mut l = 0;
-    let mut max_len = 0;
-    for (i, e) in evec.iter().enumerate() {
-        let mut v = txp_to_exon.entry(e.refid()).or_insert(vec![]);
-        v.push(i);
-        l = v.len();
-        if l > max_len {
-            max_len = l;
-        }
-    }
-
-    let mut txp_features: HashMap<usize, _> = HashMap::new();
-
-    for (k, v) in txp_to_exon.iter_mut() {
-        let strand = evec[v[0]].strand();
-        v.sort_unstable_by_key(|x| evec[*x].start());
-        let s = evec[v[0]].start();
-        let starts: Vec<usize> = v.iter().map(|e| (evec[*e].start() - s) as usize).collect();
-        let lens: Vec<usize> = v.iter().map(|e| evec[*e].length()).collect();
-        println!("lens = {:?}, starts = {:?}", lens, starts);
-        txp_features.insert(
-            **k,
-            Spliced::with_lengths_starts(k, s, &lens, &starts, strand).unwrap(),
-        );
-    }
-
-    let interval_vec: Vec<IntervalNode<usize, usize>> = evec
-        .iter()
-        .enumerate()
-        .map(|(i, e)| {
-            IntervalNode::new(
-                e.start() as i32,
-                (e.start() + e.length() as isize) as i32,
-                i,
-            )
-        })
-        .collect();
-    let ct = COITree::new(interval_vec);
-
-    println!("parsed {} exons", evec.len());
-    println!("parsed {} transcripts", tvec.len());
-    println!("max exon transcript had {} exons", max_len);
     Ok(())
 }

@@ -48,7 +48,7 @@ impl TranscriptInfo {
             total_weight: 0.0_f64,
             coverage_bins: vec![0.0_f64; 10],
             //ranges: Vec::new(),
-            coverage_prob: 0.0,
+            coverage_prob: 1.0,
             lenf: 0_f64,
         }
     }
@@ -59,7 +59,7 @@ impl TranscriptInfo {
             total_weight: 0.0_f64,
             coverage_bins: vec![0.0_f64; 10],
             //ranges: Vec::new(),
-            coverage_prob: 0.0,
+            coverage_prob: 1.0,
             lenf: len.get() as f64,
         }
     }
@@ -102,7 +102,7 @@ impl TranscriptInfo {
 
 #[derive(Debug)]
 pub struct InMemoryAlignmentStore {
-    filter_opts: AlignmentFilters,
+    pub filter_opts: AlignmentFilters,
     alignments: Vec<AlnInfo>,
     probabilities: Vec<f32>,
     // holds the boundaries between records for different reads
@@ -183,6 +183,8 @@ pub struct AlignmentFilters {
     score_threshold: f32,
     min_aligned_fraction: f32,
     min_aligned_len: u32,
+    allow_rc: bool,
+    pub model_coverage: bool,
 }
 
 #[derive(Debug)]
@@ -223,8 +225,8 @@ impl AlignmentFilters {
                 let aln_span = x.alignment_span();
 
                 // the read is not aligned to the - strand
-                let filt_ori = !x.flags().is_reverse_complemented();
-                if !filt_ori {
+                let is_rc = x.flags().is_reverse_complemented();
+                if is_rc && !self.allow_rc {
                     discard_table.discard_ori += 1;
                     return false;
                 }
