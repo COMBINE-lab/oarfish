@@ -1,4 +1,5 @@
 use std::num::NonZeroUsize;
+use std::fmt;
 
 use typed_builder::TypedBuilder;
 
@@ -209,6 +210,19 @@ impl DiscardTable {
             discard_ori: 0,
             discard_supp: 0,
         }
+    }
+}
+
+impl fmt::Display for DiscardTable {
+    
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "discarded because of distance from 5' {}\n", self.discard_5p).expect("couldn't format discard table.");
+        write!(f, "discarded because of distance from 3' {}\n", self.discard_3p).expect("couldn't format discard table.");
+        write!(f, "discarded because of score fraction {}\n", self.discard_score).expect("couldn't format discard table.");
+        write!(f, "discarded because of aligned fraction {}\n", self.discard_aln_frac).expect("couldn't format discard table.");
+        write!(f, "discarded because of aligned length {}\n", self.discard_aln_len).expect("couldn't format discard table.");
+        write!(f, "discarded because of aligned orientation {}\n", self.discard_ori).expect("couldn't format discard table.");
+        write!(f, "discarded because alignment is supplemental {}\n", self.discard_supp)
     }
 }
 

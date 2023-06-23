@@ -1,57 +1,50 @@
 
 # build sirv transcriptomes
 build_sirv_txomes:
-  gffread -E -v -w ../../data/SIRV/isoforms_o.fa \
+  gffread -E -v -w ../../data/nanocount_paper/SIRV/isoforms_o.fa \
   -g ../test_data/SIRV_isoforms_multi-fasta_170612a.fasta \
   ../test_data/SIRV_isoforms_multi-fasta-annotation_O_170612a.gtf
 
-  gffread -E -v -w ../../data/SIRV/isoforms_i.fa \
+  gffread -E -v -w ../../data/nanocount_paper/SIRV/isoforms_i.fa \
   -g ../test_data/SIRV_isoforms_multi-fasta_170612a.fasta \
   ../test_data/SIRV_isoforms_multi-fasta-annotation_I_170612a.gtf
 
-  gffread -E -v -w ../../data/SIRV/isoforms_c.fa \
+  gffread -E -v -w ../../data/nanocount_paper/SIRV/isoforms_c.fa \
   -g ../test_data/SIRV_isoforms_multi-fasta_170612a.fasta \
   ../test_data/SIRV_isoforms_multi-fasta-annotation_C_170612a.gtf
 
 map_sirv ref dataset:
-  minimap2 -t 8 -ax map-ont -N 100 ../../data/SIRV/isoforms_{{ref}}.fa \
-  ../{{dataset}}_1.fastq.gz | samtools view -@4 -h -F 2052 -bS > ../../data/SIRV/{{dataset}}_{{ref}}.bam
+  minimap2 -t 8 -ax map-ont -N 100 ../../data/nanocount_paper/SIRV/isoforms_{{ref}}.fa \
+  ../../data/nanocount_paper/{{dataset}}_1.fastq.gz | samtools view -@4 -h -F 2052 -bS > ../../data/nanocount_paper/SIRV/{{dataset}}_{{ref}}.bam
 
 # map sirv data
 map_sirv_data: (map_sirv "o" "SRR6058583") (map_sirv "o" "SRR6058584") (map_sirv "c" "SRR6058583") (map_sirv "c" "SRR6058584") (map_sirv "i" "SRR6058583") (map_sirv "i" "SRR6058584")
 
 quant_sirv ref dataset:
-  ../target/release/oarfish -a ../../data/SIRV/{{dataset}}_{{ref}}.bam -t 50 -o ../../data/SIRV/quants/oarfish/{{dataset}}_{{ref}}_quant.tsv
-  NanoCount -i ../../data/SIRV/{{dataset}}_{{ref}}.bam -x -o ../../data/SIRV/quants/nanocount/{{dataset}}_{{ref}}_quant.tsv
+  ../target/release/oarfish -a ../../data/nanocount_paper/SIRV/{{dataset}}_{{ref}}.bam -t 50 -o ../../data/nanocount_paper/SIRV/quants/oarfish/{{dataset}}_{{ref}}_quant.tsv
+  NanoCount -i ../../data/nanocount_paper/SIRV/{{dataset}}_{{ref}}.bam -x -o ../../data/nanocount_paper/SIRV/quants/nanocount/{{dataset}}_{{ref}}_quant.tsv
 
 # quantify sirv data
 quant_sirv_data: (quant_sirv "o" "SRR6058583") (quant_sirv "o" "SRR6058584") (quant_sirv "c" "SRR6058583") (quant_sirv "c" "SRR6058584") (quant_sirv "i" "SRR6058583") (quant_sirv "i" "SRR6058584")
 
 quant_sirv_oarfish ref dataset:
-  ../target/release/oarfish -a ../../data/SIRV/{{dataset}}_{{ref}}.bam -t 50 -o ../../data/SIRV/quants/oarfish/{{dataset}}_{{ref}}_quant.tsv
+  ../target/release/oarfish -a ../../data/nanocount_paper/SIRV/{{dataset}}_{{ref}}.bam -t 50 -o ../../data/nanocount_paper/SIRV/quants/oarfish/{{dataset}}_{{ref}}_quant.tsv
 
 quant_sirv_data_oarfish: (quant_sirv_oarfish "o" "SRR6058583") (quant_sirv_oarfish "o" "SRR6058584") (quant_sirv_oarfish "c" "SRR6058583") (quant_sirv_oarfish "c" "SRR6058584") (quant_sirv_oarfish "i" "SRR6058583") (quant_sirv_oarfish "i" "SRR6058584")
 
 map_nanocount_sample sample:
-  minimap2 -t 8 -ax map-ont -N 100 ../../data/ref_with_sequin.fa.mmi \
-  ../../data/{{sample}}_MinION_sequencing.fastq.gz | samtools view -@4 -h -F 2052 -bS > ../../data/{{sample}}.bam
+  minimap2 -t 8 -ax map-ont -N 100 ../../data/nanocount_paper/ref_with_sequin.fa.mmi \
+  ../../data/nanocount_paper/{{sample}}_MinION_sequencing.fastq.gz | samtools view -@4 -h -F 2052 -bS > ../../data/nanocount_paper/{{sample}}.bam
 
 map_nanocount_samples: (map_nanocount_sample "ERR4352441") (map_nanocount_sample "ERR4352442") (map_nanocount_sample "ERR4352443") (map_nanocount_sample "ERR4352444") (map_nanocount_sample "ERR4368409") (map_nanocount_sample "ERR4368410")
 
 quant_nanocount_sample dataset:
-  ../target/release/oarfish -a ../../data/{{dataset}}.bam -t 50 -o ../../data/quants/oarfish/{{dataset}}_quant.tsv
-  NanoCount -i ../../data/SIRV/{{dataset}}.bam -x -o ../../data/quants/nanocount/{{dataset}}_quant.tsv
+  ../target/release/oarfish -a ../../data/nanocount_paper/{{dataset}}.bam -t 50 -o ../../data/nanocount_paper/quants/oarfish/{{dataset}}_quant.tsv
+  NanoCount -i ../../data/nanocount_paper/SIRV/{{dataset}}.bam -x -o ../../data/nanocount_paper/quants/nanocount/{{dataset}}_quant.tsv
 
 quant_nanocount_samples: (quant_nanocount_sample "ERR4352441") (quant_nanocount_sample "ERR4352442") (quant_nanocount_sample "ERR4352443") (quant_nanocount_sample "ERR4352444") (quant_nanocount_sample "ERR4368409") (quant_nanocount_sample "ERR4368410")
 
 quant_nanocount_sample_oarfish dataset:
-  ../target/release/oarfish -a ../../data/{{dataset}}.bam -t 50 -o ../../data/quants/oarfish/{{dataset}}_quant.tsv
+  ../target/release/oarfish -a ../../data/nanocount_paper/{{dataset}}.bam -t 50 -o ../../data/nanocount_paper/quants/oarfish/{{dataset}}_quant.tsv
 
 quant_nanocount_samples_oarfish: (quant_nanocount_sample_oarfish "ERR4352441") (quant_nanocount_sample_oarfish "ERR4352442") (quant_nanocount_sample_oarfish "ERR4352443") (quant_nanocount_sample_oarfish "ERR4352444") (quant_nanocount_sample_oarfish "ERR4368409") (quant_nanocount_sample_oarfish "ERR4368410")
-
-
-
-print_bambu_samples: 
-  for file in $bambu_spikein_samples; do\
-    echo $file; \
-  done

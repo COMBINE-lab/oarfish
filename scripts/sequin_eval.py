@@ -8,7 +8,7 @@ def main():
     t = pd.read_csv("test_data/rnasequin_isoforms_2.4.tsv", sep="\t")
     t.columns = t.columns.str.upper()
 
-    data_dir = "../data"
+    data_dir = "../data/nanocount_paper/"
     d = json.loads(open(f"{data_dir}/data_map.json").read())
     for k, v in d.items():
         d[k] = v.upper()

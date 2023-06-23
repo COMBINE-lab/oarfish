@@ -11,7 +11,7 @@ def main():
 
     d = {"SRR6058583": "E2", "SRR6058584": "E0"}
 
-    data_dir = "../data"
+    data_dir = "../data/nanocount_paper/"
     for a in ["c", "i", "o"]:
         merged = {}
         for k, v in d.items():

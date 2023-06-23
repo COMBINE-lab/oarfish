@@ -248,26 +248,30 @@ fn main() -> io::Result<()> {
 
     let header = reader.read_header()?;
 
+    // explicitly check that alignment was done with a supported 
+    // aligner (right now, just minimap2).
     for (prog, _pmap) in header.programs().iter() {
-        info!("program: {}", prog);
+        assert_eq!(prog, "minimap2", "Currently, only minimap2 is supported as an aligner. The bam file listed {}.", prog);
     }
 
+    // where we'll write down the per-transcript information we need
+    // to track.
     let mut txps: Vec<TranscriptInfo> = Vec::with_capacity(header.reference_sequences().len());
 
     // loop over the transcripts in the header and fill in the relevant
     // information here.
     for (_rseq, rmap) in header.reference_sequences().iter() {
-        // println!("ref: {}, rmap : {:?}", rseq, rmap.length());
         txps.push(TranscriptInfo::with_len(rmap.length()));
     }
 
-    //let mut rmap = HashMap<usize, ::new();
-    //
     let mut prev_read = String::new();
     let mut _num_mapped = 0_u64;
     let mut records_for_read = vec![];
     let mut store = InMemoryAlignmentStore::new(filter_opts);
 
+    // Parse the input alignemnt file, gathering the alignments aggregated 
+    // by their source read. **Note**: this requires that we have a 
+    // name-sorted input bam file (currently, aligned against the transcriptome).
     for result in reader.records(&header) {
         let record = result?;
         if record.flags().is_unmapped() {
@@ -303,7 +307,7 @@ fn main() -> io::Result<()> {
         _num_mapped += 1;
     }
 
-    info!("discard_table: {:?}", store.discard_table);
+    info!("discard_table: {}\n", store.discard_table);
 
     if store.filter_opts.model_coverage {
         info!("computing coverages");
