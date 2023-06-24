@@ -14,7 +14,7 @@ use noodles_bam as bam;
 mod util;
 use crate::util::oarfish_types::{AlignmentFilters, InMemoryAlignmentStore, TranscriptInfo};
 
-/// Simple program to greet a person
+/// transcript quantification from long-read RNA-seq data
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
