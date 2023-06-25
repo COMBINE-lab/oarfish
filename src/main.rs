@@ -1,189 +1,158 @@
 use clap::Parser;
 
 use std::{
-    collections::HashMap,
-    fs::File,
-    io::{self, BufReader},
-    num::NonZeroUsize,
+    fs::{File, OpenOptions},
+    io::{self, BufReader, BufWriter, Write},
 };
 
-use bio_types::annot::loc::Loc;
-use bio_types::annot::spliced::Spliced;
-use bio_types::strand::Strand;
+use num_format::{Locale, ToFormattedString};
+use tracing::info;
+use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
+
 use noodles_bam as bam;
-use noodles_gtf as gtf;
-use noodles_gtf::record::Strand as NoodlesStrand;
-use noodles_sam as sam;
-use sam::record::data::field::tag;
 
-use bio_types::annot::contig::Contig;
-use coitrees::{COITree, IntervalNode};
-use nested_intervals::IntervalSet;
+mod util;
+use crate::util::oarfish_types::{AlignmentFilters, InMemoryAlignmentStore, TranscriptInfo};
 
-/// Simple program to greet a person
+/// transcript quantification from long-read RNA-seq data
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
     /// Name of the person to greet
-    #[clap(short, long, value_parser)]
+    #[clap(short, long, value_parser, required = true)]
     alignments: String,
-}
-
-#[derive(Debug, PartialEq)]
-struct TranscriptInfo {
-    len: NonZeroUsize,
-    ranges: Vec<std::ops::Range<u32>>,
-    coverage: f32,
-}
-
-impl TranscriptInfo {
-    fn new() -> Self {
-        Self {
-            len: NonZeroUsize::new(0).unwrap(),
-            ranges: Vec::new(),
-            coverage: 0.0,
-        }
-    }
-    fn with_len(len: NonZeroUsize) -> Self {
-        Self {
-            len,
-            ranges: Vec::new(),
-            coverage: 0.0,
-        }
-    }
-}
-
-#[derive(Debug)]
-struct InMemoryAlignmentStore {
-    alignments: Vec<sam::alignment::record::Record>,
-    probabilities: Vec<f32>,
-    // holds the boundaries between records for different reads
-    boundaries: Vec<usize>,
-}
-
-struct InMemoryAlignmentStoreIter<'a> {
-    store: &'a InMemoryAlignmentStore,
-    idx: usize,
-}
-
-impl<'a> Iterator for InMemoryAlignmentStoreIter<'a> {
-    type Item = (&'a [sam::alignment::record::Record], &'a [f32]);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.idx + 1 >= self.store.boundaries.len() {
-            None
-        } else {
-            let start = self.store.boundaries[self.idx];
-            let end = self.store.boundaries[self.idx + 1];
-            self.idx += 1;
-            Some((
-                &self.store.alignments[start..end],
-                &self.store.probabilities[start..end],
-            ))
-        }
-    }
-}
-
-impl InMemoryAlignmentStore {
-    fn new() -> Self {
-        InMemoryAlignmentStore {
-            alignments: vec![],
-            probabilities: vec![],
-            boundaries: vec![0],
-        }
-    }
-
-    fn iter(&self) -> InMemoryAlignmentStoreIter {
-        InMemoryAlignmentStoreIter {
-            store: &self,
-            idx: 0,
-        }
-    }
-
-    fn add_group(&mut self, ag: &Vec<sam::alignment::record::Record>) {
-        self.alignments.extend_from_slice(&ag);
-        self.boundaries.push(self.alignments.len());
-    }
-
-    fn total_len(&self) -> usize {
-        self.alignments.len()
-    }
-
-    fn num_aligned_reads(&self) -> usize {
-        if self.boundaries.len() > 0 {
-            self.boundaries.len() - 1
-        } else {
-            0
-        }
-    }
-
-    fn normalize_scores(&mut self) {
-        self.probabilities = vec![0.0_f32; self.alignments.len()];
-        for w in self.boundaries.windows(2) {
-            let s: usize = w[0];
-            let e: usize = w[1];
-            if e - s > 1 {
-                let mut max_score = 0_i32;
-                let mut scores = Vec::<i32>::with_capacity(e - s);
-                for a in &self.alignments[s..e] {
-                    let score_value = a
-                        .data()
-                        .get(&tag::ALIGNMENT_SCORE)
-                        .expect("could not get value");
-                    let score = score_value.as_int().unwrap() as i32;
-                    scores.push(score);
-                    if score > max_score {
-                        max_score = score;
-                    }
-                }
-                for (i, score) in scores.iter().enumerate() {
-                    let f = ((*score as f32) - (max_score as f32)) / 10.0_f32;
-                    self.probabilities[s + i] = f.exp();
-                }
-            } else {
-                self.probabilities[s] = 1.0
-            }
-        }
-    }
+    /// Location where output quantification file should be written
+    #[clap(short, long, value_parser, required = true)]
+    output: String,
+    // Maximum allowable distance of the right-most end of an alignment from the 3' transcript end
+    #[clap(short, long, value_parser, default_value_t = u32::MAX as i64)]
+    three_prime_clip: i64,
+    // Maximum allowable distance of the left-most end of an alignment from the 5' transcript end
+    #[clap(short, long, value_parser, default_value_t = u32::MAX)]
+    five_prime_clip: u32,
+    // Fraction of the best possible alignment score that a secondary alignment must have for
+    // consideration
+    #[clap(short, long, value_parser, default_value_t = 0.95)]
+    score_threshold: f32,
+    // Fraction of a query that must be mapped within an alignemnt to consider the alignemnt
+    // valid
+    #[clap(short, long, value_parser, default_value_t = 0.5)]
+    min_aligned_fraction: f32,
+    // Minimum number of nucleotides in the aligned portion of a read
+    #[clap(short = 'l', long, value_parser, default_value_t = 50)]
+    min_aligned_len: u32,
+    // Allow both forward-strand and reverse-complement alignments
+    #[clap(short = 'n', long, value_parser)]
+    allow_negative_strand: bool,
+    // Apply the coverage model
+    #[clap(long, value_parser)]
+    model_coverage: bool,
 }
 
 /// Holds the info relevant for running the EM algorithm
 struct EMInfo<'eqm, 'tinfo> {
     eq_map: &'eqm InMemoryAlignmentStore,
-    txp_info: &'tinfo Vec<TranscriptInfo>,
+    txp_info: &'tinfo mut Vec<TranscriptInfo>,
     max_iter: u32,
 }
+
+/*
+struct FullLengthProbs {
+    length_bins: Vec<usize>,
+    probs: Vec<f64>,
+}
+
+impl FullLengthProbs {
+    fn from_data(
+        eq_map: &InMemoryAlignmentStore,
+        tinfo: &[TranscriptInfo],
+        len_bins: &[usize],
+    ) -> Self {
+        let mut num = vec![0; len_bins.len()];
+        let mut denom = vec![0; len_bins.len()];
+
+        for (alns, probs) in eq_map.iter() {
+            let a = alns.first().unwrap();
+            if alns.len() == 1 {
+                let target_id = a.reference_sequence_id().unwrap();
+                let tlen = tinfo[target_id].len.get();
+                let lindex = match len_bins.binary_search(&tlen) {
+                    Ok(i) => i,
+                    Err(i) => i,
+                };
+                let is_fl = (tlen - a.alignment_span()) < 20;
+                if is_fl {
+                    num[lindex] += 1;
+                }
+                denom[lindex] += 1;
+            }
+        }
+
+        let probs: Vec<f64> = num
+            .iter()
+            .zip(denom.iter())
+            .map(|(n, d)| {
+                if *d > 0 {
+                    (*n as f64) / (*d as f64)
+                } else {
+                    1e-5
+                }
+            })
+            .collect();
+
+        FullLengthProbs {
+            length_bins: len_bins.to_vec(),
+            probs,
+        }
+    }
+
+    fn get_prob_for(&self, len: usize) -> f64 {
+        let lindex = match self.length_bins.binary_search(&len) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+        self.probs[lindex]
+    }
+}
+*/
 
 #[inline]
 fn m_step(
     eq_map: &InMemoryAlignmentStore,
-    tinfo: &[TranscriptInfo],
+    tinfo: &mut [TranscriptInfo],
     prev_count: &mut [f64],
     curr_counts: &mut [f64],
 ) {
     for (alns, probs) in eq_map.iter() {
         let mut denom = 0.0_f64;
         for (a, p) in alns.iter().zip(probs.iter()) {
-            let target_id = a.reference_sequence_id().unwrap();
+            let target_id = a.ref_id as usize;
             let prob = *p as f64;
-            let cov_prob = if tinfo[target_id].coverage < 0.05 { 1e-5 } else { 1.0 };//powf(2.0) as f64;
+            let cov_prob = tinfo[target_id].coverage_prob;
             denom += prev_count[target_id] * prob * cov_prob;
         }
 
         if denom > 1e-8 {
-            for (a, p) in alns.iter().zip(probs.iter()) {
-                let target_id = a.reference_sequence_id().unwrap();
+            for (_i, (a, p)) in alns.iter().zip(probs.iter()).enumerate() {
+                let target_id = a.ref_id as usize;
                 let prob = *p as f64;
-                let cov_prob = if tinfo[target_id].coverage < 0.05 { 1e-5 } else { 1.0 };//powf(2.0) as f64;
-                curr_counts[target_id] += (prev_count[target_id] * prob * cov_prob) / denom;
+                let cov_prob = tinfo[target_id].coverage_prob;
+
+                let inc = (prev_count[target_id] * prob * cov_prob) / denom;
+                curr_counts[target_id] += inc;
+
+                let start = a.start;
+                let stop = a.end;
+                tinfo[target_id].add_interval(start, stop, inc);
             }
         }
     }
 }
 
-fn em(em_info: &EMInfo) -> Vec<f64> {
+fn em(em_info: &mut EMInfo) -> Vec<f64> {
     let eq_map = em_info.eq_map;
-    let tinfo = em_info.txp_info;
+    let fops = &eq_map.filter_opts;
+    let tinfo: &mut Vec<TranscriptInfo> = em_info.txp_info;
     let max_iter = em_info.max_iter;
     let total_weight: f64 = eq_map.num_aligned_reads() as f64;
 
@@ -194,6 +163,21 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
 
     let mut rel_diff = 0.0_f64;
     let mut niter = 0_u32;
+    let mut _fl_prob = 0.5f64;
+
+    let _length_bins = vec![
+        200,
+        500,
+        1000,
+        2000,
+        5000,
+        10000,
+        15000,
+        20000,
+        25000,
+        usize::MAX,
+    ];
+    //let len_probs = FullLengthProbs::from_data(eq_map, tinfo, &length_bins);
 
     while niter < max_iter {
         m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
@@ -204,17 +188,25 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
                 let rd = (curr_counts[i] - prev_counts[i]) / prev_counts[i];
                 rel_diff = if rel_diff > rd { rel_diff } else { rd };
             }
+            if fops.model_coverage {
+                tinfo[i].compute_coverage_prob();
+                tinfo[i].clear_coverage_dist();
+            }
         }
 
         std::mem::swap(&mut prev_counts, &mut curr_counts);
         curr_counts.fill(0.0_f64);
 
-        if (rel_diff < 1e-3) && (niter > 50) {
+        if (rel_diff < 1e-3) && (niter > 10) {
             break;
         }
         niter += 1;
         if niter % 10 == 0 {
-            eprintln!("iteration {}; rel diff {}", niter, rel_diff);
+            info!(
+                "iteration {}; rel diff {}",
+                niter.to_formatted_string(&Locale::en),
+                rel_diff
+            );
         }
         rel_diff = 0.0_f64;
     }
@@ -225,39 +217,61 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
         }
     });
     m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
-
     curr_counts
 }
 
 fn main() -> io::Result<()> {
+    tracing_subscriber::registry()
+        .with(fmt::layer().with_writer(io::stderr))
+        .with(
+            EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .init();
+
     let args = Args::parse();
 
     let mut reader = File::open(args.alignments)
         .map(BufReader::new)
         .map(bam::Reader::new)?;
 
+    let filter_opts = AlignmentFilters::builder()
+        .five_prime_clip(args.five_prime_clip)
+        .three_prime_clip(args.three_prime_clip)
+        .score_threshold(args.score_threshold)
+        .min_aligned_fraction(args.min_aligned_fraction)
+        .min_aligned_len(args.min_aligned_len)
+        .allow_rc(args.allow_negative_strand)
+        .model_coverage(args.model_coverage)
+        .build();
+
     let header = reader.read_header()?;
 
+    // explicitly check that alignment was done with a supported 
+    // aligner (right now, just minimap2).
     for (prog, _pmap) in header.programs().iter() {
-        eprintln!("program: {}", prog);
+        assert_eq!(prog, "minimap2", "Currently, only minimap2 is supported as an aligner. The bam file listed {}.", prog);
     }
 
+    // where we'll write down the per-transcript information we need
+    // to track.
     let mut txps: Vec<TranscriptInfo> = Vec::with_capacity(header.reference_sequences().len());
 
     // loop over the transcripts in the header and fill in the relevant
     // information here.
     for (_rseq, rmap) in header.reference_sequences().iter() {
-        // println!("ref: {}, rmap : {:?}", rseq, rmap.length());
         txps.push(TranscriptInfo::with_len(rmap.length()));
     }
 
-    //let mut rmap = HashMap<usize, ::new();
-    //
     let mut prev_read = String::new();
-    let mut num_mapped = 0_u64;
+    let mut _num_mapped = 0_u64;
     let mut records_for_read = vec![];
-    let mut store = InMemoryAlignmentStore::new();
+    let mut store = InMemoryAlignmentStore::new(filter_opts);
 
+    // Parse the input alignemnt file, gathering the alignments aggregated 
+    // by their source read. **Note**: this requires that we have a 
+    // name-sorted input bam file (currently, aligned against the transcriptome).
     for result in reader.records(&header) {
         let record = result?;
         if record.flags().is_unmapped() {
@@ -267,196 +281,82 @@ fn main() -> io::Result<()> {
         if let Some(rname) = record.read_name() {
             let rstring: String =
                 <noodles_sam::record::read_name::ReadName as AsRef<str>>::as_ref(rname).to_owned();
-            // if this is an alignment for the same read, then 
+            // if this is an alignment for the same read, then
             // push it onto our temporary vector.
             if prev_read == rstring {
-                if let (Some(ref_id), false) = (
-                    record.reference_sequence_id(),
-                    record.flags().is_supplementary(),
-                ) {
+                if let Some(_ref_id) = record.reference_sequence_id() {
                     records_for_read.push(record_copy);
-                    txps[ref_id].ranges.push(
-                        (record.alignment_start().unwrap().get() as u32)
-                            ..(record.alignment_end().unwrap().get() as u32),
-                    );
                 }
             } else {
                 if !prev_read.is_empty() {
                     //println!("the previous read had {} mappings", records_for_read.len());
-                    store.add_group(&records_for_read);
+                    store.add_group(&mut txps, &mut records_for_read);
                     records_for_read.clear();
-                    num_mapped += 1;
+                    _num_mapped += 1;
                 }
                 prev_read = rstring;
-                if let (Some(ref_id), false) = (
-                    record.reference_sequence_id(),
-                    record.flags().is_supplementary(),
-                ) {
+                if let Some(_ref_id) = record.reference_sequence_id() {
                     records_for_read.push(record_copy);
-                    txps[ref_id].ranges.push(
-                        (record.alignment_start().unwrap().get() as u32)
-                            ..(record.alignment_end().unwrap().get() as u32),
-                    );
                 }
             }
         }
     }
     if !records_for_read.is_empty() {
-        store.add_group(&records_for_read);
+        store.add_group(&mut txps, &mut records_for_read);
         records_for_read.clear();
-        num_mapped += 1;
+        _num_mapped += 1;
     }
 
-    eprintln!("computing coverages");
-    for t in txps.iter_mut() {
-        let interval_set = IntervalSet::new(&t.ranges).expect("couldn't build interval set");
-        let mut interval_set = interval_set.merge_connected();
-        let len = t.len.get() as u32;
-        let covered = interval_set.covered_units();
-        t.coverage = (covered as f32) / (len as f32);
+    info!("discard_table: {}\n", store.discard_table);
+
+    if store.filter_opts.model_coverage {
+        info!("computing coverages");
+        for t in txps.iter_mut() {
+            t.compute_coverage_prob();
+        }
     }
-    eprintln!("done");
 
-    eprintln!("Number of mapped reads : {}", num_mapped);
-    eprintln!("normalizing alignment scores");
-    store.normalize_scores();
-    eprintln!("Total number of alignment records : {}", store.total_len());
-    eprintln!("number of aligned reads : {}", store.num_aligned_reads());
+    info!("done");
 
-    let emi = EMInfo {
+    info!(
+        "Total number of alignment records : {}",
+        store.total_len().to_formatted_string(&Locale::en)
+    );
+    info!(
+        "number of aligned reads : {}",
+        store.num_aligned_reads().to_formatted_string(&Locale::en)
+    );
+
+    let mut emi = EMInfo {
         eq_map: &store,
-        txp_info: &txps,
+        txp_info: &mut txps,
         max_iter: 1000,
     };
 
-    let counts = em(&emi);
+    let counts = em(&mut emi);
 
-    println!("tname\tcoverage\tlen\tnum_reads"); 
+    let write = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(args.output)
+        .expect("Couldn't create output file");
+    let mut writer = BufWriter::new(write);
+
+    writeln!(writer, "tname\tcoverage\tlen\tnum_reads").expect("Couldn't write to output file.");
     // loop over the transcripts in the header and fill in the relevant
     // information here.
     for (i, (_rseq, rmap)) in header.reference_sequences().iter().enumerate() {
-        println!("{}\t{}\t{}\t{}", _rseq, txps[i].coverage, rmap.length(), counts[i]);
+        writeln!(
+            writer,
+            "{}\t{}\t{}\t{}",
+            _rseq,
+            txps[i].coverage_prob,
+            rmap.length(),
+            counts[i]
+        )
+        .expect("Couldn't write to output file.");
     }
 
-    Ok(())
-}
-
-
-
-
-
-
-
-
-//
-// ignore anything below this line for now 
-//
-
-#[allow(unused)]
-fn main_old() -> io::Result<()> {
-    let args = Args::parse();
-
-    let mut reader = File::open(args.alignments)
-        .map(BufReader::new)
-        .map(gtf::Reader::new)?;
-    let mut evec = Vec::new();
-    let mut tvec = Vec::new();
-    let mut tmap = HashMap::new();
-
-    for result in reader.records() {
-        let record = result?;
-        match record.ty() {
-            "exon" => {
-                let s: isize = (usize::from(record.start()) as isize) - 1;
-                let e: isize = usize::from(record.end()) as isize;
-                let l: usize = (e - s).try_into().unwrap();
-                let mut t = String::new();
-                for e in record.attributes().iter() {
-                    if e.key() == "transcript_id" {
-                        t = e.value().to_owned();
-                    }
-                }
-
-                let ni = tmap.len();
-                let tid = *tmap.entry(t.clone()).or_insert(ni);
-
-                // if this is what we just inserted
-                if ni == tid {
-                    tvec.push(Spliced::new(0, 1, 1, Strand::Forward));
-                }
-
-                let strand = match record.strand().unwrap() {
-                    NoodlesStrand::Forward => Strand::Forward,
-                    NoodlesStrand::Reverse => Strand::Reverse,
-                };
-                let c = Contig::new(tid, s, l, strand);
-                evec.push(c);
-            }
-            "transcript" => {
-                let mut t = String::new();
-                for e in record.attributes().iter() {
-                    if e.key() == "transcript_id" {
-                        t = e.value().to_owned();
-                    }
-                }
-                let ni = tmap.len();
-                let tid = *tmap.entry(t.clone()).or_insert(ni);
-
-                // if this is what we just inserted
-                if ni == tid {
-                    tvec.push(Spliced::new(0, 1, 1, Strand::Forward));
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let mut txp_to_exon = HashMap::new();
-
-    let mut l = 0;
-    let mut max_len = 0;
-    for (i, e) in evec.iter().enumerate() {
-        let mut v = txp_to_exon.entry(e.refid()).or_insert(vec![]);
-        v.push(i);
-        l = v.len();
-        if l > max_len {
-            max_len = l;
-        }
-    }
-
-    let mut txp_features: HashMap<usize, _> = HashMap::new();
-
-    for (k, v) in txp_to_exon.iter_mut() {
-        let strand = evec[v[0]].strand();
-        v.sort_unstable_by_key(|x| evec[*x as usize].start());
-        let s = evec[v[0]].start();
-        let starts: Vec<usize> = v
-            .iter()
-            .map(|e| (evec[*e as usize].start() - s) as usize)
-            .collect();
-        let lens: Vec<usize> = v.iter().map(|e| evec[*e as usize].length()).collect();
-        println!("lens = {:?}, starts = {:?}", lens, starts);
-        txp_features.insert(
-            **k,
-            Spliced::with_lengths_starts(k, s, &lens, &starts, strand).unwrap(),
-        );
-    }
-
-    let interval_vec: Vec<IntervalNode<usize, usize>> = evec
-        .iter()
-        .enumerate()
-        .map(|(i, e)| {
-            IntervalNode::new(
-                e.start() as i32,
-                (e.start() + e.length() as isize) as i32,
-                i,
-            )
-        })
-        .collect();
-    let ct = COITree::new(interval_vec);
-
-    println!("parsed {} exons", evec.len());
-    println!("parsed {} transcripts", tvec.len());
-    println!("max exon transcript had {} exons", max_len);
     Ok(())
 }
