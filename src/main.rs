@@ -10,6 +10,7 @@ use tracing::info;
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 
 use noodles_bam as bam;
+use noodles_sam;
 
 mod util;
 use crate::util::oarfish_types::{AlignmentFilters, InMemoryAlignmentStore, TranscriptInfo};
@@ -51,71 +52,21 @@ struct Args {
 
 /// Holds the info relevant for running the EM algorithm
 struct EMInfo<'eqm, 'tinfo> {
+    // the read alignment infomation we'll need to 
+    // perform the EM
     eq_map: &'eqm InMemoryAlignmentStore,
+    // relevant information about each target transcript
     txp_info: &'tinfo mut Vec<TranscriptInfo>,
+    // maximum number of iterations the EM will run 
+    // before returning an estimate.
     max_iter: u32,
 }
 
-/*
-struct FullLengthProbs {
-    length_bins: Vec<usize>,
-    probs: Vec<f64>,
-}
-
-impl FullLengthProbs {
-    fn from_data(
-        eq_map: &InMemoryAlignmentStore,
-        tinfo: &[TranscriptInfo],
-        len_bins: &[usize],
-    ) -> Self {
-        let mut num = vec![0; len_bins.len()];
-        let mut denom = vec![0; len_bins.len()];
-
-        for (alns, probs) in eq_map.iter() {
-            let a = alns.first().unwrap();
-            if alns.len() == 1 {
-                let target_id = a.reference_sequence_id().unwrap();
-                let tlen = tinfo[target_id].len.get();
-                let lindex = match len_bins.binary_search(&tlen) {
-                    Ok(i) => i,
-                    Err(i) => i,
-                };
-                let is_fl = (tlen - a.alignment_span()) < 20;
-                if is_fl {
-                    num[lindex] += 1;
-                }
-                denom[lindex] += 1;
-            }
-        }
-
-        let probs: Vec<f64> = num
-            .iter()
-            .zip(denom.iter())
-            .map(|(n, d)| {
-                if *d > 0 {
-                    (*n as f64) / (*d as f64)
-                } else {
-                    1e-5
-                }
-            })
-            .collect();
-
-        FullLengthProbs {
-            length_bins: len_bins.to_vec(),
-            probs,
-        }
-    }
-
-    fn get_prob_for(&self, len: usize) -> f64 {
-        let lindex = match self.length_bins.binary_search(&len) {
-            Ok(i) => i,
-            Err(i) => i,
-        };
-        self.probs[lindex]
-    }
-}
-*/
-
+/// Performs one iteration of the EM algorithm by looping over all 
+/// alignments and computing their estimated probability of being 
+/// the true alignment (using the abunance estimates from `prev_counts`).
+/// Then, `curr_counts` is computed by summing over the expected assignment 
+/// likelihood for all reads mapping to each target.
 #[inline]
 fn m_step(
     eq_map: &InMemoryAlignmentStore,
@@ -123,16 +74,24 @@ fn m_step(
     prev_count: &mut [f64],
     curr_counts: &mut [f64],
 ) {
+
     for (alns, probs) in eq_map.iter() {
         let mut denom = 0.0_f64;
         for (a, p) in alns.iter().zip(probs.iter()) {
+            // Compute the probability of assignment of the 
+            // current read based on this alignment and the 
+            // target's estimated abundance.
             let target_id = a.ref_id as usize;
             let prob = *p as f64;
             let cov_prob = tinfo[target_id].coverage_prob;
             denom += prev_count[target_id] * prob * cov_prob;
         }
 
+        // If this read can be assigned
         if denom > 1e-8 {
+            // Loop over all possible assignment locations and proportionally 
+            // allocate the read according to our model and current parameter
+            // estimates.
             for (_i, (a, p)) in alns.iter().zip(probs.iter()).enumerate() {
                 let target_id = a.ref_id as usize;
                 let prob = *p as f64;
@@ -149,6 +108,10 @@ fn m_step(
     }
 }
 
+/// Perform the EM algorithm to estimate the abundances of the 
+/// target sequences.  The return value is a `Vec` of f64 values, 
+/// each of which is the estimated number of fragments arising from 
+/// each target.
 fn em(em_info: &mut EMInfo) -> Vec<f64> {
     let eq_map = em_info.eq_map;
     let fops = &eq_map.filter_opts;
@@ -179,10 +142,13 @@ fn em(em_info: &mut EMInfo) -> Vec<f64> {
     ];
     //let len_probs = FullLengthProbs::from_data(eq_map, tinfo, &length_bins);
 
+    // for up to the maximum number of iterations
     while niter < max_iter {
+        // allocate the fragments and compute the new counts
         m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
 
-        //std::mem::swap(&)
+        // compute the relative difference in the parameter estimates
+        // between the current and previous rounds
         for i in 0..curr_counts.len() {
             if prev_counts[i] > 1e-8 {
                 let rd = (curr_counts[i] - prev_counts[i]) / prev_counts[i];
@@ -194,12 +160,20 @@ fn em(em_info: &mut EMInfo) -> Vec<f64> {
             }
         }
 
+        // swap the current and previous abundances
         std::mem::swap(&mut prev_counts, &mut curr_counts);
+        // clear out the new abundances 
         curr_counts.fill(0.0_f64);
 
+        // if the maximum relative difference is small enough
+        // and we've done at least 10 rounds of the EM, then 
+        // exit (early stop).
         if (rel_diff < 1e-3) && (niter > 10) {
             break;
         }
+        // increment the iteration and, if this iteration 
+        // is a multiple of 10, print out  the maximum relative
+        // difference we observed.
         niter += 1;
         if niter % 10 == 0 {
             info!(
@@ -211,17 +185,52 @@ fn em(em_info: &mut EMInfo) -> Vec<f64> {
         rel_diff = 0.0_f64;
     }
 
+    // set very small abundances to 0
     prev_counts.iter_mut().for_each(|x| {
         if *x < 1e-8 {
             *x = 0.0
         }
     });
+    // perform one more EM round, since we just zeroed out 
+    // very small abundances
     m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
+    //  return the final estimated abundances
     curr_counts
 }
 
+fn write_output(output: String, header: &noodles_sam::header::Header, txps: &[TranscriptInfo], counts: &[f64]) -> io::Result<()> {
+    let write = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(output)
+        .expect("Couldn't create output file");
+    let mut writer = BufWriter::new(write);
+
+    writeln!(writer, "tname\tcoverage\tlen\tnum_reads").expect("Couldn't write to output file.");
+    // loop over the transcripts in the header and fill in the relevant
+    // information here.
+    for (i, (_rseq, rmap)) in header.reference_sequences().iter().enumerate() {
+        writeln!(
+            writer,
+            "{}\t{}\t{}\t{}",
+            _rseq,
+            txps[i].coverage_prob,
+            rmap.length(),
+            counts[i]
+        )
+        .expect("Couldn't write to output file.");
+    }
+
+    Ok(())
+}
+
 fn main() -> io::Result<()> {
+    // set up the logging.  Here we will take the 
+    // logging level from the environment variable if 
+    // it is set.  Otherwise, we'll set the default 
     tracing_subscriber::registry()
+        // log level to INFO.
         .with(fmt::layer().with_writer(io::stderr))
         .with(
             EnvFilter::builder()
@@ -236,6 +245,8 @@ fn main() -> io::Result<()> {
         .map(BufReader::new)
         .map(bam::Reader::new)?;
 
+    // set all of the filter options that the user 
+    // wants to apply.
     let filter_opts = AlignmentFilters::builder()
         .five_prime_clip(args.five_prime_clip)
         .three_prime_clip(args.three_prime_clip)
@@ -264,6 +275,8 @@ fn main() -> io::Result<()> {
         txps.push(TranscriptInfo::with_len(rmap.length()));
     }
 
+    // we'll need these to keep track of which alignments belong 
+    // to which reads.
     let mut prev_read = String::new();
     let mut _num_mapped = 0_u64;
     let mut records_for_read = vec![];
@@ -327,6 +340,8 @@ fn main() -> io::Result<()> {
         store.num_aligned_reads().to_formatted_string(&Locale::en)
     );
 
+    // wrap up all of the relevant information we need for estimation 
+    // in an EMInfo struct and then call the EM algorithm.
     let mut emi = EMInfo {
         eq_map: &store,
         txp_info: &mut txps,
@@ -335,28 +350,67 @@ fn main() -> io::Result<()> {
 
     let counts = em(&mut emi);
 
-    let write = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(args.output)
-        .expect("Couldn't create output file");
-    let mut writer = BufWriter::new(write);
+    // write the output
+    write_output(args.output, &header, &txps, &counts)
+}
 
-    writeln!(writer, "tname\tcoverage\tlen\tnum_reads").expect("Couldn't write to output file.");
-    // loop over the transcripts in the header and fill in the relevant
-    // information here.
-    for (i, (_rseq, rmap)) in header.reference_sequences().iter().enumerate() {
-        writeln!(
-            writer,
-            "{}\t{}\t{}\t{}",
-            _rseq,
-            txps[i].coverage_prob,
-            rmap.length(),
-            counts[i]
-        )
-        .expect("Couldn't write to output file.");
+/*
+struct FullLengthProbs {
+    length_bins: Vec<usize>,
+    probs: Vec<f64>,
+}
+
+impl FullLengthProbs {
+    fn from_data(
+        eq_map: &InMemoryAlignmentStore,
+        tinfo: &[TranscriptInfo],
+        len_bins: &[usize],
+    ) -> Self {
+        let mut num = vec![0; len_bins.len()];
+        let mut denom = vec![0; len_bins.len()];
+
+        for (alns, probs) in eq_map.iter() {
+            let a = alns.first().unwrap();
+            if alns.len() == 1 {
+                let target_id = a.reference_sequence_id().unwrap();
+                let tlen = tinfo[target_id].len.get();
+                let lindex = match len_bins.binary_search(&tlen) {
+                    Ok(i) => i,
+                    Err(i) => i,
+                };
+                let is_fl = (tlen - a.alignment_span()) < 20;
+                if is_fl {
+                    num[lindex] += 1;
+                }
+                denom[lindex] += 1;
+            }
+        }
+
+        let probs: Vec<f64> = num
+            .iter()
+            .zip(denom.iter())
+            .map(|(n, d)| {
+                if *d > 0 {
+                    (*n as f64) / (*d as f64)
+                } else {
+                    1e-5
+                }
+            })
+            .collect();
+
+        FullLengthProbs {
+            length_bins: len_bins.to_vec(),
+            probs,
+        }
     }
 
-    Ok(())
+    fn get_prob_for(&self, len: usize) -> f64 {
+        let lindex = match self.length_bins.binary_search(&len) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+        self.probs[lindex]
+    }
 }
+*/
+
