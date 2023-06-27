@@ -25,27 +25,27 @@ struct Args {
     /// Location where output quantification file should be written
     #[clap(short, long, value_parser, required = true)]
     output: String,
-    // Maximum allowable distance of the right-most end of an alignment from the 3' transcript end
+    /// Maximum allowable distance of the right-most end of an alignment from the 3' transcript end
     #[clap(short, long, value_parser, default_value_t = u32::MAX as i64)]
     three_prime_clip: i64,
-    // Maximum allowable distance of the left-most end of an alignment from the 5' transcript end
+    /// Maximum allowable distance of the left-most end of an alignment from the 5' transcript end
     #[clap(short, long, value_parser, default_value_t = u32::MAX)]
     five_prime_clip: u32,
-    // Fraction of the best possible alignment score that a secondary alignment must have for
-    // consideration
+    /// Fraction of the best possible alignment score that a secondary alignment must have for
+    /// consideration
     #[clap(short, long, value_parser, default_value_t = 0.95)]
     score_threshold: f32,
-    // Fraction of a query that must be mapped within an alignemnt to consider the alignemnt
-    // valid
+    /// Fraction of a query that must be mapped within an alignemnt to consider the alignemnt
+    /// valid
     #[clap(short, long, value_parser, default_value_t = 0.5)]
     min_aligned_fraction: f32,
-    // Minimum number of nucleotides in the aligned portion of a read
+    /// Minimum number of nucleotides in the aligned portion of a read
     #[clap(short = 'l', long, value_parser, default_value_t = 50)]
     min_aligned_len: u32,
-    // Allow both forward-strand and reverse-complement alignments
+    /// Allow both forward-strand and reverse-complement alignments
     #[clap(short = 'n', long, value_parser)]
     allow_negative_strand: bool,
-    // Apply the coverage model
+    /// Apply the coverage model
     #[clap(long, value_parser)]
     model_coverage: bool,
 }
