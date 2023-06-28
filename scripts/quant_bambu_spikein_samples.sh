@@ -7,6 +7,6 @@ samples_cdna=("SGNex_Hct116_cDNA_replicate3_run3" "SGNex_Hct116_cDNA_replicate4_
 
 ## using rush (Go program)
 RUSH=~/go/bin/rush
-echo ${samples_drna[@]} | $RUSH -j 16 --eta -T "r" -D " " "../target/release/oarfish -a ../../data/bambu_paper/aln/{}.bam -o ../../data/bambu_paper/quants/oarfish/{}.tsv"
-echo ${samples_cdna[@]} | $RUSH -j 16 --eta -T "r" -D " " "../target/release/oarfish -t 50 -a ../../data/bambu_paper/aln/{}.bam -o ../../data/bambu_paper/quants/oarfish/{}.tsv"
+echo ${samples_drna[@]} | $RUSH -j 16 --eta -T "r" -D " " "../target/release/oarfish -t 50 -a ../../data/bambu_paper/aln/{}.bam -o ../../data/bambu_paper/quants/oarfish/{}.tsv"
+echo ${samples_cdna[@]} | $RUSH -j 16 --eta -T "r" -D " " "../target/release/oarfish -n -a ../../data/bambu_paper/aln/{}.bam -o ../../data/bambu_paper/quants/oarfish/{}.tsv"
 
