@@ -21,7 +21,7 @@ process quant_samples_oarfish {
     path "${sample_name}_quant.tsv"
 
   """
-  ${params.oarfish} -a ${ref_bam} -t 50 -o ${sample_name}_quant.tsv
+  ${params.oarfish} -a ${ref_bam} --max-em-iter 100 -t 50 -o ${sample_name}_quant.tsv
   """
 }
 

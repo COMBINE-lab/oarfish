@@ -13,17 +13,17 @@ def main():
     t['conc_norm'] = (t.conc / t.conc.sum()) 
 
     xd = {}
-    prefix_d = '../../data/bambu_paper/quants/'
+    prefix_d = 'bambu_data/quants/'
     for sn in e.Sample:
         m = 'oarfish'
         n = '/'.join([prefix_d, m, sn])
         k = (sn, m)
-        xd[k] = pd.read_csv(f'{n}.tsv', sep='\t')
+        xd[k] = pd.read_csv(f'{n}_quant.tsv', sep='\t')
         xd[k]['num_reads_norm'] = (xd[k].num_reads / xd[k].num_reads.sum()) 
         m = 'nanocount'
         n = '/'.join([prefix_d, m, sn])
         k = (sn, m)
-        xd[k] = pd.read_csv(f'{n}.tsv', sep='\t')
+        xd[k] = pd.read_csv(f'{n}_quant.tsv', sep='\t')
         xd[k]['num_reads_norm'] = (xd[k].est_count / xd[k].est_count.sum()) 
  
     res = []

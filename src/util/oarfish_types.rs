@@ -1,5 +1,5 @@
-use std::num::NonZeroUsize;
 use std::fmt;
+use std::num::NonZeroUsize;
 
 use typed_builder::TypedBuilder;
 
@@ -14,6 +14,12 @@ pub struct AlnInfo {
     pub end: u32,
     pub prob: f64,
     pub strand: Strand,
+}
+
+impl AlnInfo {
+    pub fn alignment_span(&self) -> u32 {
+        self.end - self.start
+    }
 }
 
 impl From<&sam::alignment::record::Record> for AlnInfo {
@@ -38,7 +44,7 @@ pub struct TranscriptInfo {
     total_weight: f64,
     coverage_bins: Vec<f64>,
     pub coverage_prob: f64,
-    lenf: f64,
+    pub lenf: f64,
 }
 
 impl TranscriptInfo {
@@ -214,15 +220,48 @@ impl DiscardTable {
 }
 
 impl fmt::Display for DiscardTable {
-    
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "discarded because of distance from 5' {}\n", self.discard_5p).expect("couldn't format discard table.");
-        write!(f, "discarded because of distance from 3' {}\n", self.discard_3p).expect("couldn't format discard table.");
-        write!(f, "discarded because of score fraction {}\n", self.discard_score).expect("couldn't format discard table.");
-        write!(f, "discarded because of aligned fraction {}\n", self.discard_aln_frac).expect("couldn't format discard table.");
-        write!(f, "discarded because of aligned length {}\n", self.discard_aln_len).expect("couldn't format discard table.");
-        write!(f, "discarded because of aligned orientation {}\n", self.discard_ori).expect("couldn't format discard table.");
-        write!(f, "discarded because alignment is supplemental {}\n", self.discard_supp)
+        write!(
+            f,
+            "discarded because of distance from 5' {}\n",
+            self.discard_5p
+        )
+        .expect("couldn't format discard table.");
+        write!(
+            f,
+            "discarded because of distance from 3' {}\n",
+            self.discard_3p
+        )
+        .expect("couldn't format discard table.");
+        write!(
+            f,
+            "discarded because of score fraction {}\n",
+            self.discard_score
+        )
+        .expect("couldn't format discard table.");
+        write!(
+            f,
+            "discarded because of aligned fraction {}\n",
+            self.discard_aln_frac
+        )
+        .expect("couldn't format discard table.");
+        write!(
+            f,
+            "discarded because of aligned length {}\n",
+            self.discard_aln_len
+        )
+        .expect("couldn't format discard table.");
+        write!(
+            f,
+            "discarded because of aligned orientation {}\n",
+            self.discard_ori
+        )
+        .expect("couldn't format discard table.");
+        write!(
+            f,
+            "discarded because alignment is supplemental {}\n",
+            self.discard_supp
+        )
     }
 }
 
