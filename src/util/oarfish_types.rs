@@ -1,6 +1,10 @@
 use std::fmt;
 use std::num::NonZeroUsize;
 
+use tabled::builder::Builder;
+use tabled::settings::Style;
+use std::iter::FromIterator;
+
 use typed_builder::TypedBuilder;
 
 use bio_types::strand::Strand;
@@ -216,6 +220,32 @@ impl DiscardTable {
             discard_ori: 0,
             discard_supp: 0,
         }
+    }
+}
+
+impl DiscardTable {
+    pub fn to_table(&self) -> tabled::tables::Table {
+        let d5 = format!("{}", self.discard_5p);
+        let d3 = format!("{}", self.discard_3p);
+        let dscore = format!("{}", self.discard_score);
+        let dfrac = format!("{}", self.discard_aln_frac);
+        let dlen = format!("{}", self.discard_aln_len);
+        let dori = format!("{}", self.discard_ori);
+        let dsupp = format!("{}", self.discard_supp);
+ 
+        let data = vec![
+            ["discarded reason", "num. discarded"],
+            ["too far from 5' end", &d5],
+            ["too far from 3' end", &d3],
+            ["score too low", &dscore],
+            ["aligned fraction too low", &dfrac],
+            ["aligned length too short", &dlen],
+            ["inconsistent orientation", &dori],
+            ["supplementary alignment", &dsupp]
+        ];
+        let mut binding = Builder::from_iter(data).build();
+        let table = binding.with(Style::rounded());
+        table.clone()
     }
 }
 

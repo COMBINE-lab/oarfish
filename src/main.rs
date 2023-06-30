@@ -147,11 +147,19 @@ fn em(em_info: &mut EMInfo) -> Vec<f64> {
     let mut _fl_prob = 0.5f64;
 
     let length_bins = vec![
+        100,
         200,
+        300,
         500,
+        750,
         1000,
+        1500,
         2000,
+        2500,
+        3000,
+        3500,
         5000,
+        7500,
         10000,
         15000,
         20000,
@@ -176,13 +184,16 @@ fn em(em_info: &mut EMInfo) -> Vec<f64> {
         for i in 0..curr_counts.len() {
             if prev_counts[i] > 1e-8 {
                 let rd = (curr_counts[i] - prev_counts[i]) / prev_counts[i];
-                rel_diff = if rel_diff > rd { rel_diff } else { rd };
+                rel_diff = rel_diff.max(rd);
             }
             if fops.model_coverage {
                 tinfo[i].compute_coverage_prob();
                 tinfo[i].clear_coverage_dist();
             }
         }
+        // during the previous round we re-estimated the length 
+        // probabilities, so now swap those with the old ones 
+        // so that the next iteration uses the current model.
         len_probs.swap_probs();
 
         // swap the current and previous abundances
@@ -360,7 +371,7 @@ fn main() -> io::Result<()> {
         _num_mapped += 1;
     }
 
-    info!("discard_table: {}\n", store.discard_table);
+    info!("discard_table: \n{}\n", store.discard_table.to_table());
 
     if store.filter_opts.model_coverage {
         info!("computing coverages");
@@ -402,7 +413,7 @@ struct FullLengthProbs {
 }
 
 impl FullLengthProbs {
-    const NUM_BINS: usize = 20;
+    const NUM_BINS: usize = 10;
 
     fn get_bin(span: u32, len: f64) -> usize {
         let len_frac = (len - span as f64) / len;
@@ -478,6 +489,6 @@ impl FullLengthProbs {
                 lb.iter_mut().for_each(|v| *v /= tot);
             }
         }
-        self.new_probs.fill(vec![0.0f64; 20]);
+        self.new_probs.fill(vec![0.0f64; FullLengthProbs::NUM_BINS]);
     }
 }
