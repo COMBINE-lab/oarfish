@@ -1,15 +1,16 @@
 use std::fmt;
 use std::num::NonZeroUsize;
 
+use std::iter::FromIterator;
 use tabled::builder::Builder;
 use tabled::settings::Style;
-use std::iter::FromIterator;
 
 use typed_builder::TypedBuilder;
 
 use bio_types::strand::Strand;
 use noodles_sam as sam;
 use sam::record::data::field::tag;
+use tracing::{info, warn};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AlnInfo {
@@ -168,7 +169,7 @@ impl InMemoryAlignmentStore {
         ag: &mut Vec<sam::alignment::record::Record>,
     ) {
         let (alns, probs) = self.filter_opts.filter(&mut self.discard_table, txps, ag);
-        if !ag.is_empty() {
+        if !alns.is_empty() {
             self.alignments.extend_from_slice(&alns);
             self.probabilities.extend_from_slice(&probs);
             self.boundaries.push(self.alignments.len());
@@ -207,6 +208,7 @@ pub struct DiscardTable {
     discard_aln_len: u32,
     discard_ori: u32,
     discard_supp: u32,
+    valid_best_aln: u32,
 }
 
 impl DiscardTable {
@@ -219,6 +221,7 @@ impl DiscardTable {
             discard_aln_len: 0,
             discard_ori: 0,
             discard_supp: 0,
+            valid_best_aln: 0,
         }
     }
 }
@@ -232,16 +235,18 @@ impl DiscardTable {
         let dlen = format!("{}", self.discard_aln_len);
         let dori = format!("{}", self.discard_ori);
         let dsupp = format!("{}", self.discard_supp);
- 
+        let vread = format!("{}", self.valid_best_aln);
+
         let data = vec![
-            ["discarded reason", "num. discarded"],
+            ["reason", "count"],
             ["too far from 5' end", &d5],
             ["too far from 3' end", &d3],
             ["score too low", &dscore],
             ["aligned fraction too low", &dfrac],
             ["aligned length too short", &dlen],
             ["inconsistent orientation", &dori],
-            ["supplementary alignment", &dsupp]
+            ["supplementary alignment", &dsupp],
+            ["reads with valid best alignment", &vread],
         ];
         let mut binding = Builder::from_iter(data).build();
         let table = binding.with(Style::rounded());
@@ -302,10 +307,35 @@ impl AlignmentFilters {
         txps: &mut [TranscriptInfo],
         ag: &mut Vec<sam::alignment::record::Record>,
     ) -> (Vec<AlnInfo>, Vec<f32>) {
+        // track the best score of any alignment we've seen
+        // so far for this read (this will designate the
+        // "primary" alignment for the read).
+        let mut best_retained_score = i32::MIN;
+        // the fraction of the best read that is contained in
+        // its alignment.
+        let mut aln_frac_at_best_retained = 0_f32;
+        // the number of nucleotides contained in the alignment
+        // for the best read.
+        let mut aln_len_at_best_retained = 0_u32;
+
+        // because of the SAM format, we can't rely on the sequence 
+        // itself to be present in each alignment record (only the primary)
+        // so, here we explicitly look for a non-zero sequence.
+        let seq_len = ag.iter().find_map( |x|  {
+            let l = x.sequence().len();
+            if l > 0 { Some(l as u32) } else { None }
+        }).unwrap_or(0_u32);
+
         ag.retain(|x| {
             if !x.flags().is_unmapped() {
                 let tid = x.reference_sequence_id().unwrap();
-                let aln_span = x.alignment_span();
+                let aln_span = x.alignment_span() as u32;
+                let score = x
+                    .data()
+                    .get(&tag::ALIGNMENT_SCORE)
+                    .expect("could not get value")
+                    .as_int()
+                    .unwrap_or(i32::MIN as i64) as i32;
 
                 // the read is not aligned to the - strand
                 let is_rc = x.flags().is_reverse_complemented();
@@ -314,110 +344,123 @@ impl AlignmentFilters {
                     return false;
                 }
 
-                let filt_supp = !x.flags().is_supplementary();
-                if !filt_supp {
+                let is_supp = x.flags().is_supplementary();
+                if is_supp {
                     discard_table.discard_supp += 1;
                     return false;
                 }
 
                 // enough absolute sequence (# of bases) is aligned
-                let filt_aln_len = (aln_span as u32) > self.min_aligned_len;
-                if !filt_aln_len {
+                let filt_aln_len = (aln_span as u32) < self.min_aligned_len;
+                if filt_aln_len {
                     discard_table.discard_aln_len += 1;
-                    return false;
-                }
-
-                // not too far from the 5' end
-                let filt_5p = (x.alignment_start().unwrap().get() as u32) < self.five_prime_clip;
-                if !filt_5p {
-                    discard_table.discard_5p += 1;
                     return false;
                 }
 
                 // not too far from the 3' end
                 let filt_3p = (x.alignment_end().unwrap().get() as i64)
-                    > (txps[tid].len.get() as i64 - self.three_prime_clip);
-                if !filt_3p {
+                    <= (txps[tid].len.get() as i64 - self.three_prime_clip);
+                if filt_3p {
                     discard_table.discard_3p += 1;
                     return false;
                 }
 
-                // enough of the read is aligned
-                let filt_aln_frac =
-                    ((aln_span as f32) / (x.sequence().len() as f32)) >= self.min_aligned_fraction;
-                if !filt_aln_frac {
-                    discard_table.discard_aln_frac += 1;
+                // not too far from the 5' end
+                let filt_5p = (x.alignment_start().unwrap().get() as u32) >= self.five_prime_clip;
+                if filt_5p {
+                    discard_table.discard_5p += 1;
                     return false;
                 }
 
+                // at this point, we've committed to retaining this
+                // alignment. if it has the best score, then record this
+                // as the best retained alignment score seen so far
+                if score > best_retained_score {
+                    best_retained_score = score;
+                    // and record the alignment's length
+                    // and covered fraction
+                    aln_len_at_best_retained = aln_span;
+                    aln_frac_at_best_retained = if seq_len > 0 {
+                        (aln_span as f32) / (seq_len as f32)
+                    } else {
+                        0_f32
+                    };
+                }
                 true
             } else {
                 false
             }
         });
 
-        if ag.len() == 1 {
-            let mut av = vec![];
-            if let Some(a) = ag.first() {
-                let tid = a.reference_sequence_id().unwrap();
+        if ag.is_empty() || aln_len_at_best_retained == 0 || best_retained_score <= 0 {
+            // There were no valid alignments
+            return (vec![], vec![]);
+        } 
+        if aln_frac_at_best_retained < self.min_aligned_fraction {
+            // The best retained alignment did not have sufficient
+            // coverage to be kept
+            discard_table.discard_aln_frac += 1;
+            return (vec![], vec![]);
+        }
+
+        // if we got here, then we have a valid "best" alignment
+        discard_table.valid_best_aln += 1;
+
+        let mut probabilities = Vec::<f32>::with_capacity(ag.len());
+        let mscore = best_retained_score as f32;
+        let inv_max_score = 1.0 / mscore;
+
+        // get a vector of all of the scores
+        let mut scores: Vec<i32> = ag
+            .iter_mut()
+            .map(|a| {
+                a.data()
+                    .get(&tag::ALIGNMENT_SCORE)
+                    .expect("could not get value")
+                    .as_int()
+                    .unwrap_or(0) as i32
+            })
+            .collect();
+
+        for (i, score) in scores.iter_mut().enumerate() {
+            let fscore = *score as f32;
+            let score_ok = (fscore * inv_max_score) >= self.score_threshold; //>= thresh_score;
+            if score_ok {
+                let f = (fscore - mscore) / 10.0_f32;
+                probabilities.push(f.exp());
+
+                let tid = ag[i].reference_sequence_id().unwrap();
                 txps[tid].add_interval(
-                    a.alignment_start().unwrap().get() as u32,
-                    a.alignment_end().unwrap().get() as u32,
+                    ag[i].alignment_start().unwrap().get() as u32,
+                    ag[i].alignment_end().unwrap().get() as u32,
                     1.0_f64,
                 );
-                av.push(a.into());
+            } else {
+                *score = i32::MIN;
+                discard_table.discard_score += 1;
             }
-            (av, vec![1.0_f32])
-        } else {
-            let mut max_score = i32::MIN;
-            let mut scores = Vec::<i32>::with_capacity(ag.len());
-            let mut probabilities = Vec::<f32>::with_capacity(ag.len());
-
-            // get the maximum score and fill in the score array
-            for a in ag.iter() {
-                let score_value = a
-                    .data()
-                    .get(&tag::ALIGNMENT_SCORE)
-                    .expect("could not get value");
-                let score = score_value.as_int().unwrap() as i32;
-                scores.push(score);
-                if score > max_score {
-                    max_score = score;
-                }
-            }
-
-            let mscore = max_score as f32;
-            let thresh_score = mscore - (mscore.abs() * (1.0 - self.score_threshold));
-
-            for (i, score) in scores.iter_mut().enumerate() {
-                let fscore = *score as f32;
-                if fscore >= thresh_score {
-                    let f = (fscore - mscore) / 10.0_f32;
-                    probabilities.push(f.exp());
-
-                    let tid = ag[i].reference_sequence_id().unwrap();
-                    txps[tid].add_interval(
-                        ag[i].alignment_start().unwrap().get() as u32,
-                        ag[i].alignment_end().unwrap().get() as u32,
-                        1.0_f64,
-                    );
-                } else {
-                    *score = i32::MIN;
-                    discard_table.discard_score += 1;
-                }
-            }
-
-            let mut index = 0;
-            ag.retain(|_| {
-                index += 1;
-                scores[index - 1] > i32::MIN
-            });
-
-            /*if ag.is_empty() {
-                warn!("No valid scores for read!");
-                warn!("max_score = {}. scores = {:?}", max_score, scores);
-            }*/
-            (ag.iter().map(|x| x.into()).collect(), probabilities)
         }
+
+        let mut index = 0;
+        ag.retain(|_| {
+            index += 1;
+            scores[index - 1] > i32::MIN
+        });
+
+        if ag.is_empty() {
+            println!("max score : {}", best_retained_score);
+            println!("scores : {:?}", scores);
+        } else {
+            //discard_table.valid_best_aln += 1;
+        }
+        /*
+        if !ag.is_empty() {
+            discard_table.valid_best_aln += 1;
+        }*/
+        /*if ag.is_empty() {
+            warn!("No valid scores for read!");
+            warn!("max_score = {}. scores = {:?}", max_score, scores);
+        }*/
+        (ag.iter().map(|x| x.into()).collect(), probabilities)
     }
 }

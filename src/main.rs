@@ -83,6 +83,7 @@ struct EMInfo<'eqm, 'tinfo> {
 fn m_step(
     eq_map: &InMemoryAlignmentStore,
     tinfo: &mut [TranscriptInfo],
+    model_coverage: bool,
     flinfo: &mut FullLengthProbs,
     prev_count: &mut [f64],
     curr_counts: &mut [f64],
@@ -97,7 +98,11 @@ fn m_step(
             let prob = *p as f64;
             let cov_prob = tinfo[target_id].coverage_prob;
             let len = tinfo[target_id].lenf as usize;
-            let fl_prob = flinfo.get_prob_for(&a, len);
+            let fl_prob = if model_coverage {
+                flinfo.get_prob_for(&a, len)
+            } else {
+                1.0
+            };
 
             denom += prev_count[target_id] * prob * cov_prob * fl_prob;
         }
@@ -112,14 +117,20 @@ fn m_step(
                 let prob = *p as f64;
                 let cov_prob = tinfo[target_id].coverage_prob;
                 let len = tinfo[target_id].lenf as usize;
-                let fl_prob = flinfo.get_prob_for(&a, len);
+                let fl_prob = if model_coverage {
+                    flinfo.get_prob_for(&a, len)
+                } else {
+                    1.0
+                };
                 let inc = (prev_count[target_id] * prob * cov_prob * fl_prob) / denom;
                 curr_counts[target_id] += inc;
 
-                let start = a.start;
-                let stop = a.end;
-                tinfo[target_id].add_interval(start, stop, inc);
-                flinfo.update_probs(&a, len, inc);
+                if model_coverage {
+                    let start = a.start;
+                    let stop = a.end;
+                    tinfo[target_id].add_interval(start, stop, inc);
+                    flinfo.update_probs(&a, len, inc);
+                }
             }
         }
     }
@@ -174,6 +185,7 @@ fn em(em_info: &mut EMInfo) -> Vec<f64> {
         m_step(
             eq_map,
             tinfo,
+            fops.model_coverage,
             &mut len_probs,
             &mut prev_counts,
             &mut curr_counts,
@@ -191,10 +203,13 @@ fn em(em_info: &mut EMInfo) -> Vec<f64> {
                 tinfo[i].clear_coverage_dist();
             }
         }
-        // during the previous round we re-estimated the length 
-        // probabilities, so now swap those with the old ones 
-        // so that the next iteration uses the current model.
-        len_probs.swap_probs();
+
+        if fops.model_coverage {
+            // during the previous round we re-estimated the length
+            // probabilities, so now swap those with the old ones
+            // so that the next iteration uses the current model.
+            len_probs.swap_probs();
+        }
 
         // swap the current and previous abundances
         std::mem::swap(&mut prev_counts, &mut curr_counts);
@@ -232,6 +247,7 @@ fn em(em_info: &mut EMInfo) -> Vec<f64> {
     m_step(
         eq_map,
         tinfo,
+        fops.model_coverage,
         &mut len_probs,
         &mut prev_counts,
         &mut curr_counts,
