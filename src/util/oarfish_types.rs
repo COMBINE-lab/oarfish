@@ -318,13 +318,20 @@ impl AlignmentFilters {
         // for the best read.
         let mut aln_len_at_best_retained = 0_u32;
 
-        // because of the SAM format, we can't rely on the sequence 
+        // because of the SAM format, we can't rely on the sequence
         // itself to be present in each alignment record (only the primary)
         // so, here we explicitly look for a non-zero sequence.
-        let seq_len = ag.iter().find_map( |x|  {
-            let l = x.sequence().len();
-            if l > 0 { Some(l as u32) } else { None }
-        }).unwrap_or(0_u32);
+        let seq_len = ag
+            .iter()
+            .find_map(|x| {
+                let l = x.sequence().len();
+                if l > 0 {
+                    Some(l as u32)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0_u32);
 
         ag.retain(|x| {
             if !x.flags().is_unmapped() {
@@ -337,13 +344,16 @@ impl AlignmentFilters {
                     .as_int()
                     .unwrap_or(i32::MIN as i64) as i32;
 
-                // the read is not aligned to the - strand
+                // the alignment is to the - strand
                 let is_rc = x.flags().is_reverse_complemented();
                 if is_rc && !self.allow_rc {
                     discard_table.discard_ori += 1;
                     return false;
                 }
 
+                // the alignment is supplementary
+                // *NOTE*: this removes "supplementary" alignments, *not*
+                // "secondary" alignments.
                 let is_supp = x.flags().is_supplementary();
                 if is_supp {
                     discard_table.discard_supp += 1;
@@ -395,7 +405,7 @@ impl AlignmentFilters {
         if ag.is_empty() || aln_len_at_best_retained == 0 || best_retained_score <= 0 {
             // There were no valid alignments
             return (vec![], vec![]);
-        } 
+        }
         if aln_frac_at_best_retained < self.min_aligned_fraction {
             // The best retained alignment did not have sufficient
             // coverage to be kept
@@ -447,20 +457,6 @@ impl AlignmentFilters {
             scores[index - 1] > i32::MIN
         });
 
-        if ag.is_empty() {
-            println!("max score : {}", best_retained_score);
-            println!("scores : {:?}", scores);
-        } else {
-            //discard_table.valid_best_aln += 1;
-        }
-        /*
-        if !ag.is_empty() {
-            discard_table.valid_best_aln += 1;
-        }*/
-        /*if ag.is_empty() {
-            warn!("No valid scores for read!");
-            warn!("max_score = {}. scores = {:?}", max_score, scores);
-        }*/
         (ag.iter().map(|x| x.into()).collect(), probabilities)
     }
 }
