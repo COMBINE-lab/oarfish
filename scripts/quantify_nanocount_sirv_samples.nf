@@ -32,7 +32,7 @@ process quant_samples_oarfish {
     path "${sample_id}_${ref_type}_quant.tsv"
 
   """
-  ${params.oarfish} -a ${ref_bam} --max-em-iter 100 --convergence-thresh 0.005 -t 55 -o ${sample_id}_${ref_type}_quant.tsv
+  ${params.oarfish} -a ${ref_bam} --max-em-iter 100 --convergence-thresh 0.0047 -t 55 -o ${sample_id}_${ref_type}_quant.tsv
   """
 }
 

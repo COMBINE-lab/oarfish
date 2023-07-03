@@ -426,7 +426,7 @@ impl AlignmentFilters {
             let fscore = *score as f32;
             let score_ok = (fscore * inv_max_score) >= self.score_threshold; //>= thresh_score;
             if score_ok {
-                let f = (fscore - mscore) / 10.0_f32;
+                let f = 10_f32 * ((fscore - mscore) / mscore);
                 probabilities.push(f.exp());
 
                 let tid = ag[i].reference_sequence_id().unwrap();
