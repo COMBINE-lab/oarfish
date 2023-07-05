@@ -8,10 +8,13 @@ def eval_sim(args):
     y = pd.read_csv(args.predicted_abundances, sep='\t')
     y['txp_name'] = y.tname.str.split('.').str.get(0)
 
-    m = pd.merge(x, y, on='txp_name', how='outer')
+    m = pd.merge(x, y[['txp_name', 'num_reads']], on='txp_name', how='outer')
     m = m.fillna(0.0)
 
-    print(m.corr(method='spearman'))
+    numeric_cols = m.select_dtypes(include='number').columns
+    correlation = m[numeric_cols].corr(method='spearman')
+    print(correlation)
+    #print(m.corr(method='spearman'))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

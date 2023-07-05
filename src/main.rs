@@ -20,6 +20,8 @@ use bio_types::annot::contig::Contig;
 use coitrees::{COITree, IntervalNode};
 use nested_intervals::IntervalSet;
 
+//use statrs::distribution::{Multinomial, Discrete};
+
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -33,7 +35,7 @@ struct Args {
 struct TranscriptInfo {
     len: NonZeroUsize,
     ranges: Vec<std::ops::Range<u32>>,
-    coverage: f32,
+    coverage: f64,
 }
 
 impl TranscriptInfo {
@@ -158,30 +160,35 @@ struct EMInfo<'eqm, 'tinfo> {
 fn m_step(
     eq_map: &InMemoryAlignmentStore,
     tinfo: &[TranscriptInfo],
+    read_coverage_prob: &Vec<Vec<f64>>,
     prev_count: &mut [f64],
     curr_counts: &mut [f64],
 ) {
-    for (alns, probs) in eq_map.iter() {
+    for ((alns, probs), coverage_probs) in eq_map.iter().zip(read_coverage_prob.iter()) {
         let mut denom = 0.0_f64;
-        for (a, p) in alns.iter().zip(probs.iter()) {
+        for (a, (p, cp)) in alns.iter().zip(probs.iter().zip(coverage_probs.iter())) {
             let target_id = a.reference_sequence_id().unwrap();
             let prob = *p as f64;
-            let cov_prob = if tinfo[target_id].coverage < 0.05 { 1e-5 } else { 1.0 };//powf(2.0) as f64;
+            //let cov_prob = if tinfo[target_id].coverage < 0.5 { 1e-5 } else { 1.0 };//powf(2.0) as f64;
+            //let cov_prob = tinfo[target_id].coverage;//powf(2.0) as f64;
+            let cov_prob = *cp;
             denom += prev_count[target_id] * prob * cov_prob;
         }
 
         if denom > 1e-8 {
-            for (a, p) in alns.iter().zip(probs.iter()) {
+            for (a, (p,cp)) in alns.iter().zip(probs.iter().zip(coverage_probs.iter())) {
                 let target_id = a.reference_sequence_id().unwrap();
                 let prob = *p as f64;
-                let cov_prob = if tinfo[target_id].coverage < 0.05 { 1e-5 } else { 1.0 };//powf(2.0) as f64;
+                //let cov_prob = if tinfo[target_id].coverage < 0.5 { 1e-5 } else { 1.0 };//powf(2.0) as f64;
+                //let cov_prob = tinfo[target_id].coverage;
+                let cov_prob = *cp;
                 curr_counts[target_id] += (prev_count[target_id] * prob * cov_prob) / denom;
             }
         }
     }
 }
 
-fn em(em_info: &EMInfo) -> Vec<f64> {
+fn em(em_info: &EMInfo, read_coverage_prob: &Vec<Vec<f64>>) -> Vec<f64> {
     let eq_map = em_info.eq_map;
     let tinfo = em_info.txp_info;
     let max_iter = em_info.max_iter;
@@ -196,7 +203,7 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
     let mut niter = 0_u32;
 
     while niter < max_iter {
-        m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
+        m_step(eq_map, tinfo, read_coverage_prob, &mut prev_counts, &mut curr_counts);
 
         //std::mem::swap(&)
         for i in 0..curr_counts.len() {
@@ -224,9 +231,155 @@ fn em(em_info: &EMInfo) -> Vec<f64> {
             *x = 0.0
         }
     });
-    m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
+    m_step(eq_map, tinfo, read_coverage_prob, &mut prev_counts, &mut curr_counts);
 
     curr_counts
+}
+
+
+fn bin_transcript(transcript_len: u32, num_bins: u32) -> Vec<std::ops::Range<u32>> {
+
+    let bin_size = transcript_len / num_bins;
+    let transcript_bins: Vec<std::ops::Range<u32>> = (0..num_bins)
+        .map(|i| i * bin_size..(i + 1) * bin_size)
+        .collect();
+
+    transcript_bins
+}
+
+fn poisson_probability(k: u32, t: f64, r: f64) -> f64{
+
+    if t < 0.0 {
+        panic!("Error: Invalid input. Interval length must be a positive value.");
+    }
+
+    if r < 0.0 {
+        panic!("Error: Invalid input. Rate must be a positive value.");
+    }
+
+    if r == 0.0 || t == 0.0 {
+        return 0.0;
+    }
+
+    let log_numerator1 = (r * t).ln() * k as f64;
+    let log_numerator2 = (-r * t).exp().ln();
+    let log_denominator = factorial_ln(k) as f64;
+    
+    let result = (log_numerator1 + log_numerator2 - log_denominator).exp();
+    
+    if result.is_nan() || result.is_infinite() {
+        
+        panic!("Error: Invalid result. Poisson Probability value is NaN or infinity.");
+    }
+    
+    result
+    
+}
+
+fn factorial_ln(n: u32) -> f64 {
+    if n == 0 {
+        0.0
+    } else {
+        (1..=n).map(|x| (x as f64).ln()).sum()
+    }
+}
+
+fn multinomial_probability(interval_count: Vec<u32>, interval_length: Vec<u32>, distinct_rate: f64) -> f64{
+
+    let mut interval_counts = interval_count;
+    let interval_lengths = interval_length;
+    if interval_counts.iter().sum::<u32>() == 0 {
+        return 0.0;
+    }
+
+    if distinct_rate == 0.0 {
+        return 0.0;
+    }
+
+    
+    let mut probabilities: Vec<f64> = interval_counts
+                                  .iter()
+                                  .zip(interval_lengths.iter())
+                                  .map(|(&count, &length)| {
+                                  if count ==0 || length == 0 {
+                                      0.0 
+                                  } else {
+                                      (count as f64) / (length as f64 * distinct_rate)
+                                  }
+                                  }).collect();
+
+    //obtain the indices of the probabilities that have the zero values
+    let mut zero_value_indices: Vec<usize> = Vec::new();
+    for (i, &prob) in probabilities.iter().enumerate(){
+        if prob == 0.0{
+            zero_value_indices.push(i);
+        }
+    }
+    //remove the zero_valu_indices from the probabilities and interval_counts
+    for &i in zero_value_indices.iter().rev(){
+        probabilities.remove(i);
+        interval_counts.remove(i);
+    }
+
+    //check if the sum of probabilities are equal to 1
+    let probabilities_sum: f64 = probabilities.iter().sum();
+    if probabilities_sum < 0.9999 || probabilities_sum > 1.0001 {
+        panic!("Invalid probabilities: Sum is not equal to 1.0");
+    }
+
+    //check if the length of the probabilities is equal to the length of interval_counts
+    if probabilities.len() != interval_counts.len(){
+        panic!("the length of probabilities and interval_counts are not equal!");
+    }
+
+    //let multinomial = Multinomial::new(probabilities.as_slice(), interval_counts.iter().sum::<u32>() as u64).expect("Invalid probabilities");
+    //let prob_dr_multinomial: f64 = multinomial.ln_pmf(&interval_counts.iter().map(|&count| count as u64).collect::<Vec<u64>>());
+    //let result = prob_dr_multinomial.exp();
+
+    let log_numerator1: f64 = factorial_ln(interval_counts.iter().sum::<u32>()); 
+    let log_denominator: f64 =  interval_counts.iter().map(|&count| factorial_ln(count)).sum();//factorial_ln(k) as f64;
+    let log_numerator2: f64 = probabilities.iter().zip(interval_counts.iter()).map(|(&prob, &count)| prob.ln() * (count as f64)).sum();
+    
+    let mut result = (log_numerator1 - log_denominator + log_numerator2 ).exp();
+
+    if result.is_nan() || result.is_infinite() {
+
+        panic!("Error: Invalid result. Poisson Probability value is NaN or infinity.");
+    }
+    
+    if (result > 1.0) && (result < 1.0001){
+
+        result = 1.0_f64;
+    }
+    
+    result    
+    
+}
+
+
+fn normalize_read_probs(em_info: &EMInfo) -> Vec<Vec<f64>>{
+
+    let eq_map = em_info.eq_map;
+    let tinfo = em_info.txp_info;
+    let mut normalize_probs_vec: Vec<Vec<f64>> = Vec::new();
+    let mut normalize_probs_temp: Vec<f64> = vec![];
+
+    for (alns, _probs) in eq_map.iter() {
+
+        for a in alns.iter() {
+
+            let target_id = a.reference_sequence_id().unwrap();
+            let cov_prob = tinfo[target_id].coverage;
+            normalize_probs_temp.push(cov_prob);
+        }  
+        let sum_normalize_probs_temp: f64 = normalize_probs_temp.iter().sum();    
+        let normalized_prob_section: Vec<f64> = normalize_probs_temp.iter().map(|&prob| prob/sum_normalize_probs_temp).collect();
+        normalize_probs_vec.push(normalized_prob_section);
+        normalize_probs_temp.clear();
+    }
+
+    //panic!("end of normalize function");
+    normalize_probs_vec
 }
 
 fn main() -> io::Result<()> {
@@ -309,11 +462,100 @@ fn main() -> io::Result<()> {
 
     eprintln!("computing coverages");
     for t in txps.iter_mut() {
+        
+        let len = t.len.get() as u32; //transcript length
+
+        //obtain the start and end of reads aligned to these transcripts
+        let mut start_end_ranges: Vec<u32> = t.ranges.iter().map(|range| vec![range.start, range.end]).flatten().collect();
+        start_end_ranges.push(0); // push the first position of the transcript
+        start_end_ranges.push(len); // push the last position of the transcript
+        start_end_ranges.sort(); // Sort the vector in ascending order
+        start_end_ranges.dedup(); // Remove consecutive duplicates
+        //convert the sorted vector of starts and ends into a vector of consecutive ranges
+        let distinct_interval: Vec<std::ops::Range<u32>> = start_end_ranges.windows(2).map(|window| window[0]..window[1]).collect(); 
+        let interval_length : Vec<u32> = start_end_ranges.windows(2).map(|window| window[1] - window[0]).collect(); 
+        //obtain the number of reads aligned in each distinct intervals
+        let mut interval_counts: Vec<u32> = Vec::new();
+        for interval in distinct_interval
+        {
+            interval_counts.push(t.ranges.iter().filter(|range| range.start <= interval.start && range.end >= interval.end).count() as u32);
+        }
+
+        
+        //obtain the rates for Poisson distribution
+        let shared_rate: f64 = (interval_counts.iter().sum::<u32>() as f64) / (interval_length.iter().sum::<u32>() as f64);
+
+        let shared_rate_tlen: f64 = (interval_counts.iter().sum::<u32>() as f64) / (len as f64);
+
+        let distinct_rate: f64 =  interval_counts.iter().zip(interval_length.iter()).map(|(&count, &length)| (count as f64)/ (length as f64)).sum();
+
+        //obtain the probability based on Poisson equation using shared_rate
+        let prob_shr: f64 = interval_counts.iter().zip(interval_length.iter()).map(|(&count, &length)| poisson_probability(count, length as f64, shared_rate)).product();
+
+        //obtain the probability based on Poisson equation using shared_rate_tlen
+        let prob_shr_tlen: f64 = interval_counts.iter().zip(interval_length.iter()).map(|(&count, &length)| poisson_probability(count, length as f64, shared_rate_tlen)).product();
+
+        //obtain the probability based on Poisson equation using distinct rate
+        let prob_dr_poisson: f64 = poisson_probability(interval_counts.iter().sum(), len as f64, distinct_rate);
+
+        //obtain the probability based on multinomial equation using distinct rate
+        let prob_dr_multinomial: f64 = multinomial_probability(interval_counts, interval_length, distinct_rate); 
+
+        //let interval_count1 = interval_counts.clone();
+        //let interval_lengths2 = interval_length.clone();
+        
+        if prob_shr > 1.0 {
+            eprintln!("prob is: {:?}", prob_shr);
+            panic!("The probability value is greater than 1");
+        }
+        
+        //println!("prob is: {:?}", prob_dr_multinomial);
+        
+        //obtain the uniform probability
         let interval_set = IntervalSet::new(&t.ranges).expect("couldn't build interval set");
         let mut interval_set = interval_set.merge_connected();
-        let len = t.len.get() as u32;
         let covered = interval_set.covered_units();
-        t.coverage = (covered as f32) / (len as f32);
+        let prob_uniform = (covered as f64) / (len as f64);
+
+        
+        //==============================================================================================================
+        //defin the 20 bins for the transcript t
+        let num_bins = 10;
+        let bins = bin_transcript(len, num_bins);
+        let mut bin_counts: Vec<u32> = vec![0; bins.len()];
+        let mut bin_lengths: Vec<u32> = vec![(bins[0].end -bins[0].start); bins.len()];
+        //println!("bins.ranges: {:?}", bins);
+        //obtain the number of counts in each bin based on decision rule
+        for read in t.ranges.iter(){
+            for (i, bin) in bins.iter().enumerate(){
+                if read.start <= bin.start && read.end >= bin.end{
+                    bin_counts[i] = bin_counts[i] + 1;
+                } 
+                else if read.start >= bin.start && read.end >= bin.start && read.start <=bin.end && read.end <=bin.end  {
+                    if (read.end - read.start) >= (bin.end - bin.start)/2 {
+                        bin_counts[i] = bin_counts[i] + 1;
+                    }
+                }
+                else if read.start >= bin.start && read.start <bin.end  {
+                    if (bin.end - read.start) >= (bin.end - bin.start)/2 {
+                        bin_counts[i] = bin_counts[i] + 1;
+                    }
+                }
+                else if read.end > bin.start && read.end <=bin.end  {
+                    if (read.end - bin.start) >= (bin.end - bin.start)/2 {
+                        bin_counts[i] = bin_counts[i] + 1;
+                    }
+                }
+                
+            }
+        }
+        let shared_rate_20bins: f64 = (bin_counts.iter().sum::<u32>() as f64) / (bin_lengths.iter().sum::<u32>() as f64);
+        let distinct_rate_20bins: f64 =  bin_counts.iter().zip(bin_lengths.iter()).map(|(&count, &length)| (count as f64)/ (length as f64)).sum();
+        let prob_shr_20bins: f64 = bin_counts.iter().zip(bin_lengths.iter()).map(|(&count, &length)| poisson_probability(count, length as f64, shared_rate_20bins)).product();
+        let prob_dr_multinomial_20bins: f64 = multinomial_probability(bin_counts, bin_lengths, distinct_rate_20bins); 
+
+        //println!("interval set: {:?}", interval_set);
+        t.coverage = prob_dr_multinomial_20bins;
     }
     eprintln!("done");
 
@@ -328,8 +570,8 @@ fn main() -> io::Result<()> {
         txp_info: &txps,
         max_iter: 1000,
     };
-
-    let counts = em(&emi);
+    let read_coverage_probs: Vec<Vec<f64>> = normalize_read_probs(&emi);
+    let counts = em(&emi, &read_coverage_probs);
 
     println!("tname\tcoverage\tlen\tnum_reads"); 
     // loop over the transcripts in the header and fill in the relevant
