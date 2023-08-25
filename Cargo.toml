@@ -17,6 +17,8 @@ statrs = "0.16"
 special = "0.10.2"
 tracing = "0.1.37"
 tracing-subscriber = {version="0.3.17", features=["env-filter"]}
+kernel-density-estimation = "0.1.0"
+libc = "0.2"
 
 [[bin]]
 name = "oarfish"
