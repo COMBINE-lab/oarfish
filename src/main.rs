@@ -44,6 +44,8 @@ struct Args {
     rate: String,
     #[clap(short, long, value_parser, default_value_t = 1)]
     bins: u32,
+    #[clap(short, long, value_parser, default_value_t = 20)]
+    threads: usize,
 }
 
 
@@ -376,40 +378,48 @@ fn main() -> io::Result<()> {
     eprintln!("number of aligned reads : {}", store.num_aligned_reads());
 
     eprintln!("computing coverages");
+
+    //defining the global threading
+    //rayon::ThreadPoolBuilder::new()
+    //.num_threads(args.threads)
+    //.build_global()
+    //.unwrap();
     
     let num_alignments: Vec<usize>;
     let num_discarded_alignments: Vec<usize>;
     let num_discarded_reads_decision_rule: usize;
 
     if !coverage {
-        (num_alignments, num_discarded_alignments) = nocoverage_prob::no_coverage_prob(&mut txps);
+        num_alignments = nocoverage_prob::no_coverage_prob(&mut txps, args.threads);
+        num_discarded_alignments = vec![0; txps.len()];
         num_discarded_reads_decision_rule = 0;
 
     }else{
         match prob {
             "uniform" => {
-                (num_alignments, num_discarded_alignments) = uniform_prob::uniform_prob(&mut txps);
+                num_alignments = uniform_prob::uniform_prob(&mut txps, args.threads);
+                num_discarded_alignments = vec![0; txps.len()];
                 num_discarded_reads_decision_rule = 0;
             }
             "DisPoisson" => {
-                (num_alignments, num_discarded_alignments) = poisson_prob::discrete_poisson_prob(&mut txps, rate, &bins);
+                (num_alignments, num_discarded_alignments) = poisson_prob::discrete_poisson_prob(&mut txps, rate, &bins, args.threads);
                 num_discarded_reads_decision_rule = num_discarded_reads_fun(&store, &txps, &bins);
             }
             "ConPoisson" => {
-                (num_alignments, num_discarded_alignments) = poisson_prob::continuous_poisson_prob(&mut txps, rate, &bins);
+                (num_alignments, num_discarded_alignments) = poisson_prob::continuous_poisson_prob(&mut txps, rate, &bins, args.threads);
                 num_discarded_reads_decision_rule = 0;
             }
             "multinomial" => {
-                (num_alignments, num_discarded_alignments) = multinomial_prob::multinomial_prob(&mut txps, rate, &bins);
+                (num_alignments, num_discarded_alignments) = multinomial_prob::multinomial_prob(&mut txps, rate, &bins, args.threads);
                 num_discarded_reads_decision_rule = num_discarded_reads_fun(&store, &txps, &bins);
             }
             "LW" => {
-                (num_alignments, num_discarded_alignments) = lander_waterman_prob::lander_waterman_prob(&mut txps, rate, &bins);
+                (num_alignments, num_discarded_alignments) = lander_waterman_prob::lander_waterman_prob(&mut txps, rate, &bins, args.threads);
                 num_discarded_reads_decision_rule = if rate == "dr" {num_discarded_reads_fun(&store, &txps, &bins)} else {0};
             }
             "kde" => {
                 let start_time = Instant::now();
-                num_alignments = kde_prob::kde_prob(&mut txps, rate);
+                num_alignments = kde_prob::kde_prob(&mut txps, rate, args.threads);
                 let end_time = Instant::now();
                 let elapsed_time = end_time.duration_since(start_time);
                 eprintln!("Time taken for kde: {:?}", elapsed_time);
@@ -419,7 +429,7 @@ fn main() -> io::Result<()> {
             }
             "kde_c" => {
                 let start_time = Instant::now();
-                num_alignments = kde_prob::kde_c_prob(&mut txps, rate);
+                num_alignments = kde_prob::kde_c_prob(&mut txps, rate, args.threads);
                 let end_time = Instant::now();
                 let elapsed_time = end_time.duration_since(start_time);
                 eprintln!("Time taken for kde: {:?}", elapsed_time);
