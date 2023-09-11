@@ -44,7 +44,7 @@ struct Args {
     rate: String,
     #[clap(short, long, value_parser, default_value_t = 1)]
     bins: u32,
-    #[clap(short, long, value_parser, default_value_t = 20)]
+    #[clap(short, long, value_parser, default_value_t = 1)]
     threads: usize,
 }
 
@@ -163,7 +163,7 @@ fn normalize_read_probs(em_info: &variables::EMInfo, coverage: bool, prob: &str,
                     //cov_prob = (tinfo[target_id].coverage_prob[end_aln] - tinfo[target_id].coverage_prob[start_aln]) as f64;
                     cov_prob = (get_coverag_prob(coverage_prob, end_aln) - get_coverag_prob(coverage_prob, start_aln)) as f64;
 
-                } else if prob == "multinomial" || prob == "LW" {
+                } else if prob == "multinomial" || prob == "LW" || prob == "DisPoisson" || prob == "ConPoisson" {
                     //eprintln!("it is here");
                     let start_aln = a.alignment_start().unwrap().get() as usize;
                     let end_aln = a.alignment_end().unwrap().get() as usize;
