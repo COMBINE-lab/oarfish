@@ -46,6 +46,8 @@ struct Args {
     bins: u32,
     #[clap(short, long, value_parser, default_value_t = 1)]
     threads: usize,
+    #[clap(short, long, value_parser, default_value_t = String::from("none"))]
+    short_quant: String,
 }
 
 
@@ -89,7 +91,7 @@ fn m_step(
     //eprintln!("dropped:{:?}", dropped);
 }
 
-fn em(em_info: &variables::EMInfo, read_coverage_prob: &Vec<Vec<f64>>) -> (Vec<f64>, usize) {
+fn em(em_info: &variables::EMInfo, read_coverage_prob: &Vec<Vec<f64>>, short_read_path: String, txps_name: Vec<String>) -> (Vec<f64>, usize) {
     let eq_map = em_info.eq_map;
     let tinfo = em_info.txp_info;
     let max_iter = em_info.max_iter;
@@ -97,8 +99,14 @@ fn em(em_info: &variables::EMInfo, read_coverage_prob: &Vec<Vec<f64>>) -> (Vec<f
     let mut num_dropped_reads: usize = 0;
 
     // init
-    let avg = total_weight / (tinfo.len() as f64);
-    let mut prev_counts = vec![avg; tinfo.len()];
+    let mut prev_counts: Vec<f64>;
+    if short_read_path == "none" {
+        let avg = total_weight / (tinfo.len() as f64);
+        prev_counts = vec![avg; tinfo.len()];
+    } else {
+        prev_counts = common_functions::short_quant_vec(short_read_path, txps_name);
+    }
+
     let mut curr_counts = vec![0.0f64; tinfo.len()];
 
     let mut rel_diff = 0.0_f64;
@@ -310,8 +318,9 @@ fn main() -> io::Result<()> {
 
     // loop over the transcripts in the header and fill in the relevant
     // information here.
-    for (_rseq, rmap) in header.reference_sequences().iter() {
-        // println!("ref: {}, rmap : {:?}", rseq, rmap.length());
+    let mut txps_name: Vec<String> = Vec::new();
+    for (rseq, rmap) in header.reference_sequences().iter() {
+        txps_name.push(rseq.to_string());
         txps.push(variables::TranscriptInfo::with_len(rmap.length()));
     }
 
@@ -453,11 +462,10 @@ fn main() -> io::Result<()> {
         max_iter: 1000,
     };
 
-
     let read_coverage_probs: Vec<Vec<f64>> = normalize_read_probs(&emi, coverage, &prob, &rate);
     
     common_functions::write_read_coverage(args.out_cov_prob, &read_coverage_probs).expect("Failed to write output");
-    let (counts, num_discarded_reads_em)  = em(&emi, &read_coverage_probs);
+    let (counts, num_discarded_reads_em)  = em(&emi, &read_coverage_probs, args.short_quant, txps_name);
 
     //write the stat output
     let num_reads = store.num_aligned_reads();

@@ -1,6 +1,7 @@
 use std::num::NonZeroUsize;
 use noodles_sam as sam;
 use sam::record::data::field::tag;
+use serde::Deserialize;
 
 #[derive(Debug, PartialEq)]
 pub struct TranscriptInfo {
@@ -128,4 +129,13 @@ pub struct EMInfo<'eqm, 'tinfo> {
     pub eq_map: &'eqm InMemoryAlignmentStore,
     pub txp_info: &'tinfo Vec<TranscriptInfo>,
     pub max_iter: u32,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct Record {
+    pub Name: String,
+    pub Length: i32,
+    pub EffectiveLength: f64,
+    pub TPM: f64,
+    pub NumReads: f64,
 }
