@@ -10,6 +10,7 @@ mod multinomial_prob;
 mod kde_prob;
 
 use clap::Parser;
+use noodles_sam::record::ReadName;
 
 
 use std::{
@@ -149,13 +150,18 @@ fn em(em_info: &variables::EMInfo, read_coverage_prob: &Vec<Vec<f64>>, short_rea
 
 
 
-fn normalize_read_probs(em_info: &variables::EMInfo, coverage: bool, prob: &str, rate: &str) -> Vec<Vec<f64>>{
+fn normalize_read_probs(em_info: &variables::EMInfo, coverage: bool, prob: &str, rate: &str, txps_name: &Vec<String>) -> (Vec<Vec<f64>>, Vec<String>, Vec<ReadName>, Vec<f64>){
 
     let eq_map: &variables::InMemoryAlignmentStore = em_info.eq_map;
     let tinfo: &Vec<variables::TranscriptInfo> = em_info.txp_info;
     let mut normalize_probs_vec: Vec<Vec<f64>> = Vec::new();
     let mut normalize_probs_temp: Vec<f64> = vec![];
     let mut kde_c_tinfo: Vec<usize> = vec![0 ; tinfo.len()];
+
+    let mut output_txp_names: Vec<String> = vec![];
+    let mut output_read_names: Vec<ReadName> = vec![];
+    let mut output_read_probs: Vec<f64> = vec![];
+
 
     for (alns, _probs) in eq_map.iter() {
         let mut normalized_prob_section: Vec<f64> = vec![];
@@ -164,6 +170,10 @@ fn normalize_read_probs(em_info: &variables::EMInfo, coverage: bool, prob: &str,
             for a in alns.iter() {
                 let target_id = a.reference_sequence_id().unwrap();
                 let cov_prob: f64;
+
+                output_txp_names.push(txps_name[target_id].clone());
+                a.read_name().map(|read_name| output_read_names.push(read_name.clone()));
+
                 if prob == "kde" || (prob == "kde_c" && rate == "1D") {
                     let start_aln = a.alignment_start().unwrap().get() as usize;
                     let end_aln = a.alignment_end().unwrap().get() as usize;
@@ -193,7 +203,7 @@ fn normalize_read_probs(em_info: &variables::EMInfo, coverage: bool, prob: &str,
                     panic!("Error: Invalid result. normalize_read_probs function.");
                 }
                 normalize_probs_temp.push(cov_prob);
-            }  
+            }
             let sum_normalize_probs_temp: f64 = if normalize_probs_temp.iter().sum::<f64>() > 0.0 {normalize_probs_temp.iter().sum()} else {1.0};    
             normalized_prob_section = normalize_probs_temp.iter().map(|&prob| prob/sum_normalize_probs_temp).collect();
             //normalized_prob_section = normalize_probs_temp.clone();
@@ -201,13 +211,15 @@ fn normalize_read_probs(em_info: &variables::EMInfo, coverage: bool, prob: &str,
             normalized_prob_section = vec![1.0 as f64; alns.len()];
         }
         
+        output_read_probs.extend(normalized_prob_section.clone());
         normalize_probs_vec.push(normalized_prob_section);
         normalize_probs_temp.clear();
     }
 
     //panic!("end of normalize function");
-    normalize_probs_vec
+    (normalize_probs_vec, output_txp_names, output_read_names, output_read_probs)
 }
+
 
 fn get_coverag_prob(coverage_prob: &Vec<f32>, position: usize) -> f32 {
 
@@ -462,9 +474,13 @@ fn main() -> io::Result<()> {
         max_iter: 1000,
     };
 
-    let read_coverage_probs: Vec<Vec<f64>> = normalize_read_probs(&emi, coverage, &prob, &rate);
+    let read_coverage_probs: Vec<Vec<f64>>;
+    let output_txp_names: Vec<String>;
+    let output_read_names: Vec<ReadName>;
+    let output_read_probs: Vec<f64>;
+    (read_coverage_probs, output_txp_names, output_read_names, output_read_probs) = normalize_read_probs(&emi, coverage, &prob, &rate, &txps_name);
     
-    common_functions::write_read_coverage(args.out_cov_prob, &read_coverage_probs).expect("Failed to write output");
+    common_functions::write_read_coverage(args.out_cov_prob, &output_txp_names, &output_read_names, &output_read_probs).expect("Failed to write output");
     let (counts, num_discarded_reads_em)  = em(&emi, &read_coverage_probs, args.short_quant, txps_name);
 
     //write the stat output

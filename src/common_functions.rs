@@ -7,6 +7,7 @@ use std::{
 };
 use csv::ReaderBuilder;
 use ndarray::Array2;
+use noodles_sam::record::ReadName;
 
 pub fn bin_transcript_decision_rule(t: &TranscriptInfo, num_bins: &u32) -> (Vec<u32>, Vec<f32>, usize, Vec<f64>) {
 
@@ -199,7 +200,9 @@ pub fn write_output(
 
 pub fn write_read_coverage(
     output: String, 
-    read_coverage_probs: &Vec<Vec<f64>>,
+    output_txp_names: &Vec<String>,
+    output_read_names: &Vec<ReadName>,
+    output_read_probs: &Vec<f64>,
 ) -> io::Result<()> {
     let write = OpenOptions::new()
         .write(true)
@@ -208,18 +211,29 @@ pub fn write_read_coverage(
         .open(output)
         .expect("Couldn't create output file");
     let mut writer = BufWriter::new(write);
-    //writeln!(writer, "tname\tnum_alignments\tnum_discarded_alignments\tcount").expect("Couldn't write to output file.");
+    writeln!(writer, "Read_Name\tTxps_Name\tRead_Prob").expect("Couldn't write to output file.");
 
-    for prob in read_coverage_probs.iter() {
-        for (i, p) in prob.iter().enumerate(){
-            write!(
-                writer,
-                "{}\t",
-                p,
-            ).expect("Couldn't write to output file.");
-        }
-        writeln!(writer).expect("Couldn't write to output file.");
+    for (read, (txp, prob)) in output_read_names.iter().zip(output_txp_names.iter().zip(output_read_probs.iter())) {
+        writeln!(
+            writer,
+            "{}\t{}\t{}",
+            read,
+            txp,
+            prob
+        )
+        .expect("Couldn't write to output file.");
     }
+
+    //for prob in read_coverage_probs.iter() {
+    //    for (i, p) in prob.iter().enumerate(){
+    //        write!(
+    //            writer,
+    //            "{}\t",
+    //            p,
+    //        ).expect("Couldn't write to output file.");
+    //    }
+    //    writeln!(writer).expect("Couldn't write to output file.");
+    //}
 
     Ok(())
 }
