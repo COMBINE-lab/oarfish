@@ -99,6 +99,7 @@ impl InMemoryAlignmentStore {
 
     pub fn normalize_scores(&mut self) {
         self.as_probabilities = vec![0.0_f32; self.alignments.len()];
+        self.coverage_probabilities = vec![0.0_f64; self.alignments.len()];
         for w in self.boundaries.windows(2) {
             let s: usize = w[0];
             let e: usize = w[1];

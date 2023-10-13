@@ -154,15 +154,16 @@ fn em(em_info: &variables::EMInfo, short_read_path: String, txps_name: Vec<Strin
 
 
 fn normalize_read_probs(eq_map: &mut variables::InMemoryAlignmentStore, txp_info: &Vec<variables::TranscriptInfo>, coverage: bool, prob: &str, rate: &str) {
-
+    //eprintln!("in the normalized function");
     let mut normalize_probs_temp: Vec<f64> = vec![];
     let mut kde_c_tinfo: Vec<usize> = vec![0 ; txp_info.len()];
     let mut normalized_coverage_prob: Vec<f64> = vec![];
 
-
+    //eprintln!("before for loop");
     for (alns, _as_probs, _coverage_prob) in eq_map.iter() {
+        //eprintln!("before if");
         let mut normalized_prob_section: Vec<f64> = vec![];
-
+        
         if coverage {
             for a in alns.iter() {
                 let target_id = a.reference_sequence_id().unwrap();
@@ -207,6 +208,7 @@ fn normalize_read_probs(eq_map: &mut variables::InMemoryAlignmentStore, txp_info
         normalized_coverage_prob.extend(normalized_prob_section);
         normalize_probs_temp.clear();
     }
+    //eprintln!("after for loop");
     eq_map.coverage_probabilities = normalized_coverage_prob;
 }
 
@@ -229,7 +231,7 @@ fn get_coverag_prob(coverage_prob: &Vec<f32>, position: usize) -> f32 {
 
 
 fn num_discarded_reads_fun(store: &variables::InMemoryAlignmentStore, t: &Vec<variables::TranscriptInfo>, num_bins: &u32) -> usize {
-
+    //eprintln!("in the num_discarded_reads_fun");
     let mut num_discarded_reads: usize = 0;
 
 
@@ -423,6 +425,7 @@ fn main() -> io::Result<()> {
             "multinomial" => {
                 (num_alignments, num_discarded_alignments) = multinomial_prob::multinomial_prob(&mut txps, rate, &bins, args.threads);
                 num_discarded_reads_decision_rule = num_discarded_reads_fun(&store, &txps, &bins);
+                //num_discarded_reads_decision_rule = 0;
             }
             "LW" => {
                 (num_alignments, num_discarded_alignments) = lander_waterman_prob::lander_waterman_prob(&mut txps, rate, &bins, args.threads);
@@ -430,7 +433,7 @@ fn main() -> io::Result<()> {
             }
             "binomial" => {
                 (num_alignments, num_discarded_alignments) = binomial_continuous::binomial_continuous_prob(&mut txps, rate, &bins, args.threads);
-                num_discarded_reads_decision_rule = num_discarded_reads_fun(&store, &txps, &bins);
+                num_discarded_reads_decision_rule = 0;
             }
             //"kde" => {
             //    let start_time = Instant::now();
@@ -470,14 +473,13 @@ fn main() -> io::Result<()> {
         txp_info: &txps,
         max_iter: 1000,
     };
-    
+
     common_functions::write_out_probs(args.cdf_output, args.cov_prob_output, &emi, &txps_name).expect("Failed to write probs output");
     let (counts, num_discarded_reads_em)  = em(&emi, args.short_quant, txps_name);
 
     //write the stat output
     let num_reads = store.num_aligned_reads();
     common_functions::write_out_stat(args.stat_output, &header, &num_alignments, &num_discarded_alignments, &num_reads, &num_discarded_reads_decision_rule, &num_discarded_reads_em, &counts).expect("Failed to write stat output");
-
     common_functions::write_out_count(args.count_output, &header, &txps, &counts).expect("Failed to write count output");
 
     Ok(())
