@@ -1,5 +1,5 @@
 
-use crate::variables::{TranscriptInfo, Record};
+use crate::variables::{TranscriptInfo, Record, EMInfo};
 use std::{
     fs::OpenOptions,
     fs::File,
@@ -7,7 +7,8 @@ use std::{
 };
 use csv::ReaderBuilder;
 use ndarray::Array2;
-use noodles_sam::record::ReadName;
+use noodles_sam as sam;
+use sam::record::data::field::tag;
 
 pub fn bin_transcript_decision_rule(t: &TranscriptInfo, num_bins: &u32) -> (Vec<u32>, Vec<f32>, usize, Vec<f64>) {
 
@@ -145,10 +146,116 @@ pub fn factorial_ln(n: u32) -> f64 {
     }
 }
 
+//this part is taken from dev branch
+pub fn write_out_count(
+    output: String,
+    header: &noodles_sam::header::Header,
+    txps: &Vec<TranscriptInfo>,
+    counts: &[f64],
+) -> io::Result<()> {
+    let write = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(output)
+        .expect("Couldn't create output file");
+    let mut writer = BufWriter::new(write);
+
+    writeln!(writer, "tname\tcoverage\tlen\tnum_reads").expect("Couldn't write to output file.");
+    // loop over the transcripts in the header and fill in the relevant
+    // information here.
+            
+    for (i, (rseq, rmap)) in header.reference_sequences().iter().enumerate() {
+        writeln!(
+            writer,
+            "{}\t{}\t{}\t{}",
+            rseq,
+            txps[i].coverage,
+            rmap.length(),
+            counts[i]
+        )
+        .expect("Couldn't write to output file.");
+    }
+
+    Ok(())
+}
+
+
+pub fn write_out_probs(
+    cdf_output: String, 
+    cov_prob_output: String,
+    emi: &EMInfo,
+    txps_name: &Vec<String>,
+) -> io::Result<()> {
+    let write_cdf = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(cdf_output)
+        .expect("Couldn't create output file");
+    let mut writer_cdf = BufWriter::new(write_cdf);
+
+    writeln!(writer_cdf, "Txps_Name\tCDF_Values").expect("Couldn't write to output file.");
+    for (i, txp) in txps_name.iter().enumerate() {
+        let cdf_values: String = emi.txp_info[i].coverage_prob.iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<String>>()
+            .join("\t");
+
+        writeln!(
+            writer_cdf,
+            "{}\t{}",
+            *txp,
+            cdf_values,
+        )
+        .expect("Couldn't write to output file.");
+    }
+
+
+
+    let write_coverage_prob = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(cov_prob_output)
+        .expect("Couldn't create output file");
+    let mut writer_coverage_prob = BufWriter::new(write_coverage_prob);
+
+    writeln!(writer_coverage_prob, "Read\tTxp\tread_start\tread_end\tAS\tAS_prob\tcoverage_prob").expect("Couldn't write to output file.");
+    for (alns, probs, cov_probs) in emi.eq_map.iter() {
+        for (a, (p, cov_p)) in alns.iter().zip(probs.iter().zip(cov_probs.iter())) {
+            let target_id = a.reference_sequence_id().unwrap();
+            let txp_n: String = txps_name[target_id].clone();
+            let mut rstring: String = "None".to_string();
+            if let Some(rname) = a.read_name() {
+                rstring = <noodles_sam::record::read_name::ReadName as AsRef<str>>::as_ref(rname).to_owned();
+            }
+            let read_start = a.alignment_start().unwrap().get() as u32;
+            let read_end = a.alignment_end().unwrap().get() as u32;
+            let as_value: &sam::record::data::field::Value = a.data().get(&tag::ALIGNMENT_SCORE).expect("could not get value");
+            let as_val = as_value.as_int().unwrap() as i32;
+            let as_prob = *p;
+
+            writeln!(
+                writer_coverage_prob,
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                rstring,
+                txp_n,
+                read_start,
+                read_end,
+                as_val,
+                as_prob,
+                *cov_p
+            )
+            .expect("Couldn't write to output file.");
+        }
+    }
+    Ok(())
+}
 
 
 //this part is taken from dev branch
-pub fn write_output(
+pub fn write_out_stat(
     output: String,
     header: &noodles_sam::header::Header,
     num_alignments: &[usize],
@@ -198,45 +305,7 @@ pub fn write_output(
     Ok(())
 }
 
-pub fn write_read_coverage(
-    output: String, 
-    output_txp_names: &Vec<String>,
-    output_read_names: &Vec<ReadName>,
-    output_read_probs: &Vec<f64>,
-) -> io::Result<()> {
-    let write = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .open(output)
-        .expect("Couldn't create output file");
-    let mut writer = BufWriter::new(write);
-    writeln!(writer, "Read_Name\tTxps_Name\tRead_Prob").expect("Couldn't write to output file.");
 
-    for (read, (txp, prob)) in output_read_names.iter().zip(output_txp_names.iter().zip(output_read_probs.iter())) {
-        writeln!(
-            writer,
-            "{}\t{}\t{}",
-            read,
-            txp,
-            prob
-        )
-        .expect("Couldn't write to output file.");
-    }
-
-    //for prob in read_coverage_probs.iter() {
-    //    for (i, p) in prob.iter().enumerate(){
-    //        write!(
-    //            writer,
-    //            "{}\t",
-    //            p,
-    //        ).expect("Couldn't write to output file.");
-    //    }
-    //    writeln!(writer).expect("Couldn't write to output file.");
-    //}
-
-    Ok(())
-}
 
 
 pub fn short_quant_vec(short_read_path: String, txps_name: Vec<String>) -> Vec<f64> {

@@ -33,7 +33,8 @@ impl TranscriptInfo {
 #[derive(Debug)]
 pub struct InMemoryAlignmentStore {
     pub alignments: Vec<sam::alignment::record::Record>,
-    pub probabilities: Vec<f32>,
+    pub as_probabilities: Vec<f32>,
+    pub coverage_probabilities: Vec<f64>,
     // holds the boundaries between records for different reads
     pub boundaries: Vec<usize>,
 }
@@ -44,7 +45,7 @@ pub struct InMemoryAlignmentStoreIter<'a> {
 }
 
 impl<'a> Iterator for InMemoryAlignmentStoreIter<'a> {
-    type Item = (&'a [sam::alignment::record::Record], &'a [f32]);
+    type Item = (&'a [sam::alignment::record::Record], &'a [f32], &'a [f64]);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx + 1 >= self.store.boundaries.len() {
@@ -55,7 +56,8 @@ impl<'a> Iterator for InMemoryAlignmentStoreIter<'a> {
             self.idx += 1;
             Some((
                 &self.store.alignments[start..end],
-                &self.store.probabilities[start..end],
+                &self.store.as_probabilities[start..end],
+                &self.store.coverage_probabilities[start..end],
             ))
         }
     }
@@ -65,7 +67,8 @@ impl InMemoryAlignmentStore {
     pub fn new() -> Self {
         InMemoryAlignmentStore {
             alignments: vec![],
-            probabilities: vec![],
+            as_probabilities: vec![],
+            coverage_probabilities: vec![],
             boundaries: vec![0],
         }
     }
@@ -95,7 +98,7 @@ impl InMemoryAlignmentStore {
     }
 
     pub fn normalize_scores(&mut self) {
-        self.probabilities = vec![0.0_f32; self.alignments.len()];
+        self.as_probabilities = vec![0.0_f32; self.alignments.len()];
         for w in self.boundaries.windows(2) {
             let s: usize = w[0];
             let e: usize = w[1];
@@ -115,10 +118,10 @@ impl InMemoryAlignmentStore {
                 }
                 for (i, score) in scores.iter().enumerate() {
                     let f = ((*score as f32) - (max_score as f32)) / 10.0_f32;
-                    self.probabilities[s + i] = f.exp();
+                    self.as_probabilities[s + i] = f.exp();
                 }
             } else {
-                self.probabilities[s] = 1.0
+                self.as_probabilities[s] = 1.0
             }
         }
     }

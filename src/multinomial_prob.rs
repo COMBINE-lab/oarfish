@@ -8,6 +8,7 @@ pub fn multinomial_probability(interval_count: Vec<u32>, interval_length: Vec<f3
 
     let mut interval_counts = interval_count;
     let interval_lengths = interval_length;
+
     if interval_counts.iter().sum::<u32>() == 0 {
         return vec![0.0; tlen + 1];
     }
@@ -15,7 +16,6 @@ pub fn multinomial_probability(interval_count: Vec<u32>, interval_length: Vec<f3
     if distinct_rate == 0.0 {
         return vec![0.0; tlen + 1];
     }
-
     
     let mut probabilities: Vec<f64> = interval_counts
                                   .iter()
@@ -24,10 +24,11 @@ pub fn multinomial_probability(interval_count: Vec<u32>, interval_length: Vec<f3
                                   if count ==0 || length == 0.0 {
                                       0.0 
                                   } else {
+                                      //eprintln!("count: {:?}, length: {:?}, rate:{:?}", count, length, distinct_rate);
                                       (count as f64) / (length as f64 * distinct_rate)
                                   }
                                   }).collect();
-
+    
     let sum_vec = interval_counts.iter().sum::<u32>();
     let log_numerator1: f64 = factorial_ln(sum_vec);
     let log_denominator: Vec<f64> =  interval_counts.iter().map(|&count| factorial_ln(count) + factorial_ln(sum_vec - count)).collect();
@@ -109,6 +110,7 @@ pub fn multinomial_prob(txps: &mut Vec<TranscriptInfo>, rate: &str, bins: &u32, 
         let mut temp_prob: Vec<f32>;
 
         if *bins != 0 {
+            //eprintln!("in multinomial prob");
             let bin_counts: Vec<u32>;
             let bin_lengths: Vec<f32>;
             let mut num_discarded_read_temp: usize = 0;
@@ -132,6 +134,8 @@ pub fn multinomial_prob(txps: &mut Vec<TranscriptInfo>, rate: &str, bins: &u32, 
                 "dr" => {
                     let tlen = t.len.get(); //transcript length
                     let distinct_rate: f64 =  bin_counts.iter().zip(bin_lengths.iter()).map(|(&count, &length)| (count as f64)/ (length as f64)).sum();
+                    //if bin_counts.iter().sum::<u32>() > 0 {eprintln!("greater than 0")};
+                    //eprintln!("bin_counts: {:?}", bin_counts);
                     let prob_dr: Vec<f64> = multinomial_probability(bin_counts, bin_lengths, distinct_rate, tlen);
                     temp_prob = prob_dr.iter().map(|&x| x as f32).collect();
                 }

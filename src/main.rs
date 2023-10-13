@@ -7,12 +7,12 @@ mod uniform_prob;
 mod poisson_prob;
 mod lander_waterman_prob;
 mod multinomial_prob;
-mod kde_prob;
+mod binomial_continuous;
+//mod kde_prob;
 
 use clap::Parser;
-use noodles_sam::record::ReadName;
 
-
+use core::panic;
 use std::{
     fs::File,
     io::{self, BufReader},
@@ -36,7 +36,11 @@ struct Args {
     #[clap(short, long, value_parser, required = true)]
     stat_output: String,
     #[clap(short, long, value_parser, required = true)]
-    out_cov_prob: String,
+    cdf_output: String,
+    #[clap(short, long, value_parser, required = true)]
+    cov_prob_output: String,
+    #[clap(short, long, value_parser, required = true)]
+    count_output: String,
     #[clap(short, long, value_parser, default_value_t = String::from("yes"))]
     coverage: String,
     #[clap(short, long, value_parser, default_value_t = String::from("multinomial"))]
@@ -57,12 +61,11 @@ struct Args {
 fn m_step(
     eq_map: &variables::InMemoryAlignmentStore,
     tinfo: &[variables::TranscriptInfo],
-    read_coverage_prob: &Vec<Vec<f64>>,
     prev_count: &mut [f64],
     curr_counts: &mut [f64],
 ) -> usize {
     let mut dropped: usize=0;
-    for ((alns, probs), coverage_probs) in eq_map.iter().zip(read_coverage_prob.iter()) {
+    for (alns, probs, coverage_probs) in eq_map.iter() {
         let mut denom = 0.0_f64;
         for (a, (p, cp)) in alns.iter().zip(probs.iter().zip(coverage_probs.iter())) {
             let target_id: usize = a.reference_sequence_id().unwrap();
@@ -92,7 +95,7 @@ fn m_step(
     //eprintln!("dropped:{:?}", dropped);
 }
 
-fn em(em_info: &variables::EMInfo, read_coverage_prob: &Vec<Vec<f64>>, short_read_path: String, txps_name: Vec<String>) -> (Vec<f64>, usize) {
+fn em(em_info: &variables::EMInfo, short_read_path: String, txps_name: Vec<String>) -> (Vec<f64>, usize) {
     let eq_map = em_info.eq_map;
     let tinfo = em_info.txp_info;
     let max_iter = em_info.max_iter;
@@ -114,7 +117,7 @@ fn em(em_info: &variables::EMInfo, read_coverage_prob: &Vec<Vec<f64>>, short_rea
     let mut niter = 0_u32;
 
     while niter < max_iter {
-        m_step(eq_map, tinfo, read_coverage_prob, &mut prev_counts, &mut curr_counts);
+        m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
 
         //std::mem::swap(&)
         for i in 0..curr_counts.len() {
@@ -142,7 +145,7 @@ fn em(em_info: &variables::EMInfo, read_coverage_prob: &Vec<Vec<f64>>, short_rea
             *x = 0.0
         }
     });
-    num_dropped_reads = m_step(eq_map, tinfo, read_coverage_prob, &mut prev_counts, &mut curr_counts);
+    num_dropped_reads = m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
 
     (curr_counts, num_dropped_reads)
 }
@@ -150,74 +153,61 @@ fn em(em_info: &variables::EMInfo, read_coverage_prob: &Vec<Vec<f64>>, short_rea
 
 
 
-fn normalize_read_probs(em_info: &variables::EMInfo, coverage: bool, prob: &str, rate: &str, txps_name: &Vec<String>) -> (Vec<Vec<f64>>, Vec<String>, Vec<ReadName>, Vec<f64>){
+fn normalize_read_probs(eq_map: &mut variables::InMemoryAlignmentStore, txp_info: &Vec<variables::TranscriptInfo>, coverage: bool, prob: &str, rate: &str) {
 
-    let eq_map: &variables::InMemoryAlignmentStore = em_info.eq_map;
-    let tinfo: &Vec<variables::TranscriptInfo> = em_info.txp_info;
-    let mut normalize_probs_vec: Vec<Vec<f64>> = Vec::new();
     let mut normalize_probs_temp: Vec<f64> = vec![];
-    let mut kde_c_tinfo: Vec<usize> = vec![0 ; tinfo.len()];
-
-    let mut output_txp_names: Vec<String> = vec![];
-    let mut output_read_names: Vec<ReadName> = vec![];
-    let mut output_read_probs: Vec<f64> = vec![];
+    let mut kde_c_tinfo: Vec<usize> = vec![0 ; txp_info.len()];
+    let mut normalized_coverage_prob: Vec<f64> = vec![];
 
 
-    for (alns, _probs) in eq_map.iter() {
+    for (alns, _as_probs, _coverage_prob) in eq_map.iter() {
         let mut normalized_prob_section: Vec<f64> = vec![];
-        
+
         if coverage {
             for a in alns.iter() {
                 let target_id = a.reference_sequence_id().unwrap();
                 let cov_prob: f64;
 
-                output_txp_names.push(txps_name[target_id].clone());
-                a.read_name().map(|read_name| output_read_names.push(read_name.clone()));
-
                 if prob == "kde" || (prob == "kde_c" && rate == "1D") {
                     let start_aln = a.alignment_start().unwrap().get() as usize;
                     let end_aln = a.alignment_end().unwrap().get() as usize;
-                    let coverage_prob: &Vec<f32> = &tinfo[target_id].coverage_prob;
+                    let coverage_prob: &Vec<f32> = &txp_info[target_id].coverage_prob;
                     //cov_prob = (tinfo[target_id].coverage_prob[end_aln] - tinfo[target_id].coverage_prob[start_aln]) as f64;
                     cov_prob = (get_coverag_prob(coverage_prob, end_aln) - get_coverag_prob(coverage_prob, start_aln)) as f64;
 
-                } else if prob == "multinomial" || prob == "LW" || prob == "DisPoisson" || prob == "ConPoisson" {
+                } else if prob == "multinomial" || prob == "LW" || prob == "DisPoisson" || prob == "ConPoisson" || prob == "binomial" {
                     //eprintln!("it is here");
                     let start_aln = a.alignment_start().unwrap().get() as usize;
                     let end_aln = a.alignment_end().unwrap().get() as usize;
                     //eprintln!("1: {:?}, 2: {:?}", tinfo[target_id].coverage_prob[end_aln], tinfo[target_id].coverage_prob[start_aln]);
-                    cov_prob = (tinfo[target_id].coverage_prob[end_aln] - tinfo[target_id].coverage_prob[start_aln]) as f64;
+                    cov_prob = (txp_info[target_id].coverage_prob[end_aln] - txp_info[target_id].coverage_prob[start_aln]) as f64;
                     
                 } else if prob == "kde_c" && rate == "2D" {
-                    let coverage_prob: &Vec<f32> = &tinfo[target_id].coverage_prob;
+                    let coverage_prob: &Vec<f32> = &txp_info[target_id].coverage_prob;
                     cov_prob = coverage_prob[kde_c_tinfo[target_id]] as f64;
                     kde_c_tinfo[target_id] += 1;
                     
                 }else {
-                    cov_prob = tinfo[target_id].coverage;
+                    cov_prob = txp_info[target_id].coverage;
                 } 
                 
                 if cov_prob.is_nan() || cov_prob.is_infinite() {
-                    //eprintln!("prob is: {:?}", prob);
-                    //eprintln!("cov_prob is: {:?}", cov_prob);
+
                     panic!("Error: Invalid result. normalize_read_probs function.");
                 }
                 normalize_probs_temp.push(cov_prob);
             }
             let sum_normalize_probs_temp: f64 = if normalize_probs_temp.iter().sum::<f64>() > 0.0 {normalize_probs_temp.iter().sum()} else {1.0};    
             normalized_prob_section = normalize_probs_temp.iter().map(|&prob| prob/sum_normalize_probs_temp).collect();
-            //normalized_prob_section = normalize_probs_temp.clone();
+
         } else {
             normalized_prob_section = vec![1.0 as f64; alns.len()];
         }
         
-        output_read_probs.extend(normalized_prob_section.clone());
-        normalize_probs_vec.push(normalized_prob_section);
+        normalized_coverage_prob.extend(normalized_prob_section);
         normalize_probs_temp.clear();
     }
-
-    //panic!("end of normalize function");
-    (normalize_probs_vec, output_txp_names, output_read_names, output_read_probs)
+    eq_map.coverage_probabilities = normalized_coverage_prob;
 }
 
 
@@ -243,7 +233,7 @@ fn num_discarded_reads_fun(store: &variables::InMemoryAlignmentStore, t: &Vec<va
     let mut num_discarded_reads: usize = 0;
 
 
-    for (alns, _probs) in store.iter() {
+    for (alns, _probs, _coverage_prob) in store.iter() {
         //eprintln!("in the for loop");
         let mut num_discarded_alignment: usize = 0;
 
@@ -438,26 +428,30 @@ fn main() -> io::Result<()> {
                 (num_alignments, num_discarded_alignments) = lander_waterman_prob::lander_waterman_prob(&mut txps, rate, &bins, args.threads);
                 num_discarded_reads_decision_rule = if rate == "dr" {num_discarded_reads_fun(&store, &txps, &bins)} else {0};
             }
-            "kde" => {
-                let start_time = Instant::now();
-                num_alignments = kde_prob::kde_prob(&mut txps, rate, args.threads);
-                let end_time = Instant::now();
-                let elapsed_time = end_time.duration_since(start_time);
-                eprintln!("Time taken for kde: {:?}", elapsed_time);
-
-                num_discarded_alignments = vec![0; txps.len()]; 
-                num_discarded_reads_decision_rule = 0;
+            "binomial" => {
+                (num_alignments, num_discarded_alignments) = binomial_continuous::binomial_continuous_prob(&mut txps, rate, &bins, args.threads);
+                num_discarded_reads_decision_rule = num_discarded_reads_fun(&store, &txps, &bins);
             }
-            "kde_c" => {
-                let start_time = Instant::now();
-                num_alignments = kde_prob::kde_c_prob(&mut txps, rate, args.threads);
-                let end_time = Instant::now();
-                let elapsed_time = end_time.duration_since(start_time);
-                eprintln!("Time taken for kde: {:?}", elapsed_time);
-
-                num_discarded_alignments = vec![0; txps.len()]; 
-                num_discarded_reads_decision_rule = 0;
-            }
+            //"kde" => {
+            //    let start_time = Instant::now();
+            //    num_alignments = kde_prob::kde_prob(&mut txps, rate, args.threads);
+            //    let end_time = Instant::now();
+            //    let elapsed_time = end_time.duration_since(start_time);
+            //    eprintln!("Time taken for kde: {:?}", elapsed_time);
+//
+            //    num_discarded_alignments = vec![0; txps.len()]; 
+            //    num_discarded_reads_decision_rule = 0;
+            //}
+            //"kde_c" => {
+            //    let start_time = Instant::now();
+            //    num_alignments = kde_prob::kde_c_prob(&mut txps, rate, args.threads);
+            //    let end_time = Instant::now();
+            //    let elapsed_time = end_time.duration_since(start_time);
+            //    eprintln!("Time taken for kde: {:?}", elapsed_time);
+//
+            //    num_discarded_alignments = vec![0; txps.len()]; 
+            //    num_discarded_reads_decision_rule = 0;
+            //}
             _ => {
                 panic!("{:?} probability function is not defined here!", prob);
             }
@@ -467,32 +461,24 @@ fn main() -> io::Result<()> {
 
     //["multinomial", "LW"]
     eprintln!("done");
-     
+
+
+    normalize_read_probs(&mut store, &mut txps, coverage, &prob, &rate);
+
     let emi = variables::EMInfo {
         eq_map: &store,
         txp_info: &txps,
         max_iter: 1000,
     };
-
-    let read_coverage_probs: Vec<Vec<f64>>;
-    let output_txp_names: Vec<String>;
-    let output_read_names: Vec<ReadName>;
-    let output_read_probs: Vec<f64>;
-    (read_coverage_probs, output_txp_names, output_read_names, output_read_probs) = normalize_read_probs(&emi, coverage, &prob, &rate, &txps_name);
     
-    common_functions::write_read_coverage(args.out_cov_prob, &output_txp_names, &output_read_names, &output_read_probs).expect("Failed to write output");
-    let (counts, num_discarded_reads_em)  = em(&emi, &read_coverage_probs, args.short_quant, txps_name);
+    common_functions::write_out_probs(args.cdf_output, args.cov_prob_output, &emi, &txps_name).expect("Failed to write probs output");
+    let (counts, num_discarded_reads_em)  = em(&emi, args.short_quant, txps_name);
 
     //write the stat output
     let num_reads = store.num_aligned_reads();
-    common_functions::write_output(args.stat_output, &header, &num_alignments, &num_discarded_alignments, &num_reads, &num_discarded_reads_decision_rule, &num_discarded_reads_em, &counts).expect("Failed to write output");
+    common_functions::write_out_stat(args.stat_output, &header, &num_alignments, &num_discarded_alignments, &num_reads, &num_discarded_reads_decision_rule, &num_discarded_reads_em, &counts).expect("Failed to write stat output");
 
-    println!("tname\tcoverage\tlen\tnum_reads"); 
-    // loop over the transcripts in the header and fill in the relevant
-    // information here.
-    for (i, (_rseq, rmap)) in header.reference_sequences().iter().enumerate() {
-        println!("{}\t{}\t{}\t{}", _rseq, txps[i].coverage, rmap.length(), counts[i]);
-    }
+    common_functions::write_out_count(args.count_output, &header, &txps, &counts).expect("Failed to write count output");
 
     Ok(())
 }
