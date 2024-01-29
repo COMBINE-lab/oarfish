@@ -6,7 +6,7 @@ use std::sync::{RwLock, Arc};
 
 pub fn multinomial_probability(interval_count: Vec<u32>, interval_length: Vec<f32>, distinct_rate: f64, tlen:usize) -> Vec<f64>{
 
-    let mut interval_counts = interval_count;
+    let interval_counts = interval_count;
     let interval_lengths = interval_length;
 
     if interval_counts.iter().sum::<u32>() == 0 {
@@ -16,7 +16,8 @@ pub fn multinomial_probability(interval_count: Vec<u32>, interval_length: Vec<f3
     if distinct_rate == 0.0 {
         return vec![0.0; tlen + 1];
     }
-    
+    //eprintln!("counts: {:?}", interval_counts);
+    //eprintln!("length: {:?}", interval_lengths);
     let mut probabilities: Vec<f64> = interval_counts
                                   .iter()
                                   .zip(interval_lengths.iter())
@@ -28,7 +29,7 @@ pub fn multinomial_probability(interval_count: Vec<u32>, interval_length: Vec<f3
                                       (count as f64) / (length as f64 * distinct_rate)
                                   }
                                   }).collect();
-    
+    //eprintln!("prob: {:?}", probabilities);
     let sum_vec = interval_counts.iter().sum::<u32>();
     let log_numerator1: f64 = factorial_ln(sum_vec);
     let log_denominator: Vec<f64> =  interval_counts.iter().map(|&count| factorial_ln(count) + factorial_ln(sum_vec - count)).collect();
@@ -51,6 +52,8 @@ pub fn multinomial_probability(interval_count: Vec<u32>, interval_length: Vec<f3
         }
         num3
     }).collect();
+
+
     let mut result: Vec<f64> = log_denominator.iter().zip(log_numerator2.iter().zip(log_numerator3.iter()))
                                                     .map(|(denom,(num2, num3))| {
                                                         let res = (log_numerator1 - denom + num2 +num3).exp();
@@ -59,7 +62,7 @@ pub fn multinomial_probability(interval_count: Vec<u32>, interval_length: Vec<f3
                                                         }
                                                         res
                                                     }).collect();
-    
+    //eprintln!("result: {:?}", result);
     //eprintln!("result is: {:?}", result);
     let bin_length = interval_lengths[0];
     let num_bins = interval_lengths.len() as u32;      
@@ -67,6 +70,7 @@ pub fn multinomial_probability(interval_count: Vec<u32>, interval_length: Vec<f3
     let sum: f64 = result.iter().sum();
     // Normalize the probabilities by dividing each element by the sum
     let normalized_prob: Vec<f64> = result.iter().map(|&prob| prob / (bin_length as f64 * sum)).collect();
+    //eprintln!("normalized_prob: {:?}", normalized_prob);
 
     let mut prob_vec = vec![0.0; tlen + 1];
     let mut bin_start = 0;
@@ -89,6 +93,8 @@ pub fn multinomial_probability(interval_count: Vec<u32>, interval_length: Vec<f3
     *acc += prob;
     Some(*acc)
     }).collect();
+
+    //eprintln!("cdf: {:?}", cdf);
     
     cdf    
     

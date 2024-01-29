@@ -8,9 +8,11 @@ mod poisson_prob;
 mod lander_waterman_prob;
 mod multinomial_prob;
 mod binomial_continuous;
+mod entropy_distribution;
 //mod kde_prob;
 
 use clap::Parser;
+use statrs::function::beta;
 
 use core::panic;
 use std::{
@@ -22,6 +24,7 @@ use std::{
 use noodles_bam as bam;
 
 use std::time::Instant;
+use rand::Rng;
 
 
 
@@ -34,13 +37,7 @@ struct Args {
     #[clap(short, long, value_parser, required = true)]
     alignments: String,
     #[clap(short, long, value_parser, required = true)]
-    stat_output: String,
-    #[clap(short, long, value_parser, required = true)]
-    cdf_output: String,
-    #[clap(short, long, value_parser, required = true)]
-    cov_prob_output: String,
-    #[clap(short, long, value_parser, required = true)]
-    count_output: String,
+    output_path: String,
     #[clap(short, long, value_parser, default_value_t = String::from("yes"))]
     coverage: String,
     #[clap(short, long, value_parser, default_value_t = String::from("multinomial"))]
@@ -53,6 +50,31 @@ struct Args {
     threads: usize,
     #[clap(short, long, value_parser, default_value_t = String::from("none"))]
     short_quant: String,
+    #[clap(short, long, value_parser, default_value_t = 0.3)]
+    alpha: f64,
+    #[clap(short, long, value_parser, default_value_t = 20.0)]
+    beta: f64,
+
+    // Maximum allowable distance of the right-most end of an alignment from the 3' transcript end
+    #[clap(short, long, value_parser, default_value_t = u32::MAX as i64)]
+    three_prime_clip: i64,
+    // Maximum allowable distance of the left-most end of an alignment from the 5' transcript end
+    #[clap(short, long, value_parser, default_value_t = u32::MAX)]
+    five_prime_clip: u32,
+    // Fraction of the best possible alignment score that a secondary alignment must have for
+    // consideration
+    #[clap(short, long, value_parser, default_value_t = 0.95)]
+    score_threshold: f32,
+    // Fraction of a query that must be mapped within an alignemnt to consider the alignemnt
+    // valid
+    #[clap(short, long, value_parser, default_value_t = 0.5)]
+    min_aligned_fraction: f32,
+    // Minimum number of nucleotides in the aligned portion of a read
+    #[clap(short = 'l', long, value_parser, default_value_t = 50)]
+    min_aligned_len: u32,
+    // Allow both forward-strand and reverse-complement alignments
+    #[clap(short = 'n', long, value_parser, default_value_t = true)]
+    allow_negative_strand: bool,
 }
 
 
@@ -63,10 +85,14 @@ fn m_step(
     tinfo: &[variables::TranscriptInfo],
     prev_count: &mut [f64],
     curr_counts: &mut [f64],
-) -> usize {
+) -> (usize, f64) {
     let mut dropped: usize=0;
+    let mut likelihood: f64 =0.0;
+    let count_summation: f64 = prev_count.iter().sum();
+
     for (alns, probs, coverage_probs) in eq_map.iter() {
         let mut denom = 0.0_f64;
+        let mut prob_summation = 0.0_f64;
         for (a, (p, cp)) in alns.iter().zip(probs.iter().zip(coverage_probs.iter())) {
             let target_id: usize = a.reference_sequence_id().unwrap();
             let prob = *p as f64;
@@ -75,9 +101,12 @@ fn m_step(
             let cov_prob = *cp;
             //let cov_prob = 1.0;
             denom += prev_count[target_id] * prob * cov_prob;
+            prob_summation += prob * cov_prob;
         }
 
+
         if denom > 1e-30_f64 {
+            likelihood += (denom / (prob_summation * count_summation)).ln();
             for (a, (p,cp)) in alns.iter().zip(probs.iter().zip(coverage_probs.iter())) {
                 let target_id = a.reference_sequence_id().unwrap();
                 let prob = *p as f64;
@@ -91,14 +120,125 @@ fn m_step(
             dropped +=1;
         }
     }
-    dropped
+    (dropped, likelihood)
     //eprintln!("dropped:{:?}", dropped);
 }
 
-fn em(em_info: &variables::EMInfo, short_read_path: String, txps_name: Vec<String>) -> (Vec<f64>, usize) {
+//fn em(em_info: &variables::EMInfo, short_read_path: String, txps_name: &Vec<String>) -> (Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<f64>) {
+//    let eq_map = em_info.eq_map;
+//    let tinfo = em_info.txp_info;
+//    let max_iter = em_info.max_iter;
+//    let total_weight: f64 = eq_map.num_aligned_reads() as f64;
+//    let mut num_dropped_reads: usize = 0;
+//
+//    let mut current_vec: Vec<Vec<f64>> = Vec::new();
+//    let mut initial_vec: Vec<Vec<f64>> = Vec::new();
+//    let mut likelihood_vec: Vec<f64> = Vec::new();
+//
+//    for num_initial in 0..30 {
+//        // init
+//        let mut prev_counts: Vec<f64> = Vec::new();
+//        if num_initial == 0 {
+//            prev_counts = common_functions::short_quant_vec(short_read_path.clone(), txps_name);
+//
+//        } else if num_initial == 1 {
+//            prev_counts = common_functions::short_quant_vec(short_read_path.clone(), txps_name);
+//            // Replace zero values with 1e-8 using map
+//            let modified_values: Vec<f64> = prev_counts
+//            .iter_mut()
+//            .map(| value| if *value == 0.0 { 1e-8 } else { *value })
+//            .collect();
+//            // Update the original vector with modified values
+//            prev_counts.copy_from_slice(&modified_values);
+//
+//        } else if num_initial == 2 {
+//            prev_counts = common_functions::short_quant_vec(short_read_path.clone(), txps_name);
+//            // Replace zero values with 1e-8 using map
+//            let modified_values: Vec<f64> = prev_counts
+//            .iter_mut()
+//            .map(| value| if *value == 0.0 { 1e-20 } else { *value })
+//            .collect();
+//            // Update the original vector with modified values
+//            prev_counts.copy_from_slice(&modified_values);
+//
+//        } else if num_initial == 3 {
+//            prev_counts = common_functions::short_quant_vec(short_read_path.clone(), txps_name);
+//            // Replace zero values with 1e-8 using map
+//            let modified_values: Vec<f64> = prev_counts
+//            .iter_mut()
+//            .map(| value| if *value == 0.0 { 1e-30 } else { *value })
+//            .collect();
+//            // Update the original vector with modified values
+//            prev_counts.copy_from_slice(&modified_values);
+//
+//        } else if num_initial == 4 {
+//            let avg = total_weight / (tinfo.len() as f64);
+//            prev_counts = vec![avg; tinfo.len()];
+//
+//        } else {
+//            let mut rng = rand::thread_rng();
+//            for _ in 0..tinfo.len() {
+//                let mut value: f64 = rng.gen_range(0.1..1.0);
+//                while value.abs() < 1e-8 {
+//                    value = rng.gen_range(0.1..1.0);
+//                }
+//                prev_counts.push(value);
+//            }
+//            let sum: f64 = prev_counts.iter().sum();
+//            let scale_factor = total_weight / sum;
+//            prev_counts.iter_mut().for_each(|value| *value *= scale_factor);
+//        }
+//
+//        initial_vec.push(prev_counts.clone());
+//
+//        let mut curr_counts = vec![0.0f64; tinfo.len()];
+//
+//        let mut rel_diff = 0.0_f64;
+//        let mut niter = 0_u32;
+//
+//        while niter < max_iter {
+//            m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
+//
+//            //std::mem::swap(&)
+//            for i in 0..curr_counts.len() {
+//                if prev_counts[i] > 1e-8 {
+//                    let rd = (curr_counts[i] - prev_counts[i]) / prev_counts[i];
+//                    rel_diff = if rel_diff > rd { rel_diff } else { rd };
+//                }
+//            }
+//
+//            std::mem::swap(&mut prev_counts, &mut curr_counts);
+//            curr_counts.fill(0.0_f64);
+//
+//            if (rel_diff < 1e-3) && (niter > 50) {
+//                break;
+//            }
+//            niter += 1;
+//            if niter % 10 == 0 {
+//                eprintln!("iteration {}; rel diff {}", niter, rel_diff);
+//            }
+//            rel_diff = 0.0_f64;
+//        }
+//
+//        prev_counts.iter_mut().for_each(|x| {
+//            if *x < 1e-8 {
+//                *x = 0.0
+//            }
+//        });
+//        let mut likelihood = 0.0_f64;
+//        (num_dropped_reads, likelihood) = m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
+//        current_vec.push(curr_counts);
+//        likelihood_vec.push(likelihood);
+//    }
+//
+//    (current_vec, initial_vec, likelihood_vec)
+//}
+
+
+fn em(em_info: &variables::EMInfo, short_read_path: String, txps_name: &Vec<String>) -> (Vec<f64>, usize, f64) {
     let eq_map = em_info.eq_map;
     let tinfo = em_info.txp_info;
-    let max_iter = em_info.max_iter;
+    let mut max_iter = em_info.max_iter;
     let total_weight: f64 = eq_map.num_aligned_reads() as f64;
     let mut num_dropped_reads: usize = 0;
 
@@ -109,6 +249,17 @@ fn em(em_info: &variables::EMInfo, short_read_path: String, txps_name: Vec<Strin
         prev_counts = vec![avg; tinfo.len()];
     } else {
         prev_counts = common_functions::short_quant_vec(short_read_path, txps_name);
+
+        //// Replace zero values with 1e-8 using map
+        //let modified_values: Vec<f64> = prev_counts
+        //.iter_mut()
+        //.map(| value| if *value == 0.0 { 1e-8 } else { *value })
+        //.collect();
+//
+        //// Update the original vector with modified values
+        //prev_counts.copy_from_slice(&modified_values);
+
+        //max_iter = 1;
     }
 
     let mut curr_counts = vec![0.0f64; tinfo.len()];
@@ -145,12 +296,11 @@ fn em(em_info: &variables::EMInfo, short_read_path: String, txps_name: Vec<Strin
             *x = 0.0
         }
     });
-    num_dropped_reads = m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
+    let mut likelihood = 0.0_f64;
+    (num_dropped_reads, likelihood) = m_step(eq_map, tinfo, &mut prev_counts, &mut curr_counts);
 
-    (curr_counts, num_dropped_reads)
+    (curr_counts, num_dropped_reads, likelihood)
 }
-
-
 
 
 fn normalize_read_probs(eq_map: &mut variables::InMemoryAlignmentStore, txp_info: &Vec<variables::TranscriptInfo>, coverage: bool, prob: &str, rate: &str) {
@@ -163,34 +313,46 @@ fn normalize_read_probs(eq_map: &mut variables::InMemoryAlignmentStore, txp_info
     for (alns, _as_probs, _coverage_prob) in eq_map.iter() {
         //eprintln!("before if");
         let mut normalized_prob_section: Vec<f64> = vec![];
-        
         if coverage {
             for a in alns.iter() {
                 let target_id = a.reference_sequence_id().unwrap();
-                let cov_prob: f64;
-
+                let mut cov_prob: f64;
                 if prob == "kde" || (prob == "kde_c" && rate == "1D") {
                     let start_aln = a.alignment_start().unwrap().get() as usize;
                     let end_aln = a.alignment_end().unwrap().get() as usize;
                     let coverage_prob: &Vec<f32> = &txp_info[target_id].coverage_prob;
                     //cov_prob = (tinfo[target_id].coverage_prob[end_aln] - tinfo[target_id].coverage_prob[start_aln]) as f64;
                     cov_prob = (get_coverag_prob(coverage_prob, end_aln) - get_coverag_prob(coverage_prob, start_aln)) as f64;
-
-                } else if prob == "multinomial" || prob == "LW" || prob == "DisPoisson" || prob == "ConPoisson" || prob == "binomial" {
+                
+                } else if prob == "multinomial" || prob == "LW" || prob == "DisPoisson" || prob == "ConPoisson" || prob == "binomial" || prob == "entropy" {
                     //eprintln!("it is here");
                     let start_aln = a.alignment_start().unwrap().get() as usize;
                     let end_aln = a.alignment_end().unwrap().get() as usize;
                     //eprintln!("1: {:?}, 2: {:?}", tinfo[target_id].coverage_prob[end_aln], tinfo[target_id].coverage_prob[start_aln]);
                     cov_prob = (txp_info[target_id].coverage_prob[end_aln] - txp_info[target_id].coverage_prob[start_aln]) as f64;
+                    //cov_prob = cov_prob * (end_aln - start_aln) as f64 / txp_info[target_id].len.get() as f64;
+                    if cov_prob.is_nan() || cov_prob.is_infinite() {
+                        eprintln!("cov_prob: {:?}", cov_prob);
+                        eprintln!("end: {:?}", txp_info[target_id].coverage_prob[end_aln]);
+                        eprintln!("start: {:?}", txp_info[target_id].coverage_prob[end_aln]);
+                    }
                     
                 } else if prob == "kde_c" && rate == "2D" {
                     let coverage_prob: &Vec<f32> = &txp_info[target_id].coverage_prob;
                     cov_prob = coverage_prob[kde_c_tinfo[target_id]] as f64;
                     kde_c_tinfo[target_id] += 1;
                     
-                }else {
+                } else {
+                    let start_aln = a.alignment_start().unwrap().get() as usize;
+                    let end_aln = a.alignment_end().unwrap().get() as usize;
                     cov_prob = txp_info[target_id].coverage;
-                } 
+                    //cov_prob = cov_prob * (end_aln - start_aln) as f64 / txp_info[target_id].len.get() as f64;
+                }
+                //} else {
+                //    let start_aln = a.alignment_start().unwrap().get() as usize;
+                //    let end_aln = a.alignment_end().unwrap().get() as usize;
+                //    cov_prob = (end_aln - start_aln) as f64 / txp_info[target_id].len.get() as f64;
+                //}
                 
                 if cov_prob.is_nan() || cov_prob.is_infinite() {
 
@@ -198,18 +360,17 @@ fn normalize_read_probs(eq_map: &mut variables::InMemoryAlignmentStore, txp_info
                 }
                 normalize_probs_temp.push(cov_prob);
             }
-            let sum_normalize_probs_temp: f64 = if normalize_probs_temp.iter().sum::<f64>() > 0.0 {normalize_probs_temp.iter().sum()} else {1.0};    
+            let sum_normalize_probs_temp: f64 = if normalize_probs_temp.iter().sum::<f64>() > 0.0 {normalize_probs_temp.iter().sum()} else {1.0};
             normalized_prob_section = normalize_probs_temp.iter().map(|&prob| prob/sum_normalize_probs_temp).collect();
 
         } else {
             normalized_prob_section = vec![1.0 as f64; alns.len()];
         }
-        
         normalized_coverage_prob.extend(normalized_prob_section);
         normalize_probs_temp.clear();
     }
-    //eprintln!("after for loop");
     eq_map.coverage_probabilities = normalized_coverage_prob;
+    //eprintln!("after for loop");
 }
 
 
@@ -389,7 +550,6 @@ fn main() -> io::Result<()> {
     store.normalize_scores();
     eprintln!("Total number of alignment records : {}", store.total_len());
     eprintln!("number of aligned reads : {}", store.num_aligned_reads());
-
     eprintln!("computing coverages");
 
     //defining the global threading
@@ -435,6 +595,10 @@ fn main() -> io::Result<()> {
                 (num_alignments, num_discarded_alignments) = binomial_continuous::binomial_continuous_prob(&mut txps, rate, &bins, args.threads);
                 num_discarded_reads_decision_rule = 0;
             }
+            "entropy" => {
+                (num_alignments, num_discarded_alignments) = entropy_distribution::entropy_prob(&mut txps, rate, &bins, args.threads, args.alpha, args.beta, &args.output_path, &txps_name);
+                num_discarded_reads_decision_rule = 0;
+            }
             //"kde" => {
             //    let start_time = Instant::now();
             //    num_alignments = kde_prob::kde_prob(&mut txps, rate, args.threads);
@@ -464,9 +628,10 @@ fn main() -> io::Result<()> {
 
     //["multinomial", "LW"]
     eprintln!("done");
-
+    eprintln!("normalizing read probabilities");
 
     normalize_read_probs(&mut store, &mut txps, coverage, &prob, &rate);
+    eprintln!("done");
 
     let emi = variables::EMInfo {
         eq_map: &store,
@@ -474,13 +639,20 @@ fn main() -> io::Result<()> {
         max_iter: 1000,
     };
 
-    common_functions::write_out_probs(args.cdf_output, args.cov_prob_output, &emi, &txps_name).expect("Failed to write probs output");
-    let (counts, num_discarded_reads_em)  = em(&emi, args.short_quant, txps_name);
+    eprintln!("computing estimated counts in the EM");
+    let (counts, num_discarded_reads_em, likelihood)  = em(&emi, args.short_quant, &txps_name);
+    //let (current_vec, initial_vec, likelihood_vec) = em(&emi, args.short_quant, &txps_name);
+    eprintln!("done");
 
     //write the stat output
+    eprintln!("write output");
     let num_reads = store.num_aligned_reads();
-    common_functions::write_out_stat(args.stat_output, &header, &num_alignments, &num_discarded_alignments, &num_reads, &num_discarded_reads_decision_rule, &num_discarded_reads_em, &counts).expect("Failed to write stat output");
-    common_functions::write_out_count(args.count_output, &header, &txps, &counts).expect("Failed to write count output");
+    //common_functions::write_out_probs(&args.output_path, prob, rate, &bins, args.alpha, args.beta, &emi, &txps_name).expect("Failed to write probs output");
+    //common_functions::write_out_cdf(&args.output_path, prob, rate, &bins, args.alpha, args.beta, &emi, &txps_name).expect("Failed to write probs output");
+    //common_functions::write_out_stat(&args.output_path, prob, rate, &bins, args.alpha, args.beta, &header, &num_alignments, &num_discarded_alignments, &num_reads, &num_discarded_reads_decision_rule, &num_discarded_reads_em, &counts).expect("Failed to write stat output");
+    common_functions::write_out_count(&args.output_path, prob, rate, &bins, args.alpha, args.beta, &header, &txps, &counts).expect("Failed to write count output");
+    //common_functions::write_out_initial_count_likelihood(&args.output_path,  &bins, &header, &current_vec, &initial_vec, &likelihood_vec).expect("Failed to write count output");
+    //eprintln!("likelihood is: {:?}", likelihood);
 
     Ok(())
 }

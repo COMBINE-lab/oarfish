@@ -8,8 +8,14 @@ use std::sync::{RwLock, Arc};
 //https://en.wikipedia.org/wiki/DNA_sequencing_theory#Early_uses_derived_from_elementary_probability_theory
 pub fn lander_waterman(n: f64, coverage: f64) -> f64{
 
-    1.0 - (-(n * coverage)).exp()
+    let result = 1.0 - (-(n * coverage)).exp();
+    //result = if result < 10e-8_f64 {10e8_f64} else {1.0 / result};
 
+    if result.is_nan() || result.is_infinite() {
+        //eprintln!("result is: {:?}", result);
+        panic!("Error: Invalid result. Poisson Probability value is NaN or infinity.");
+    }
+    result
 }
 
 pub fn lander_waterman_prob(txps: &mut Vec<TranscriptInfo>, rate: &str, bins: &u32, threads: usize) -> (Vec<usize>, Vec<usize>) {

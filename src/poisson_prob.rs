@@ -24,7 +24,9 @@ pub fn continuous_poisson_probability(k: f32, t: f64, r: f64) -> f64{
     let log_numerator = (k as f64 * rate.ln()) - rate;
     let log_denominator = ((k as f64 + 1.0).gamma()).ln();
 
-    let result = (log_numerator - log_denominator).exp();
+    let mut result = (log_numerator - log_denominator).exp();
+
+    //result = if result < 10e-8_f64 {10e8_f64} else {1.0 / result};
 
     if result.is_nan() || result.is_infinite() {
         
@@ -53,7 +55,10 @@ pub fn poisson_probability(k: u32, t: f64, r: f64) -> f64{
     let log_numerator = (k as f64 * rate.ln()) - rate;
     let log_denominator = ((k as f64 + 1.0).gamma()).ln();
 
-    let result = (log_numerator - log_denominator).exp();
+    let mut result = (log_numerator - log_denominator).exp();
+
+    //let max_f64 = f64::MAX;
+    //result = if result < 10e-8_f64 {10e8_f64} else {1.0 / result};
 
     if result.is_nan() || result.is_infinite() {
         panic!("Error: Invalid result. Poisson Probability value is NaN or infinity.");
@@ -165,6 +170,11 @@ pub fn discrete_poisson_prob(txps: &mut Vec<TranscriptInfo>, rate: &str, bins: &
             }
         }
 
+        // Compute the sum of probabilities
+        let sum: f64 = temp_prob.iter().sum();
+        // Normalize the probabilities by dividing each element by the sum
+        let normalized_prob: Vec<f64> = temp_prob.iter().zip(start_elemtns.iter()).map(|(&prob, &bin_length)| if prob == 0.0 || sum == 0.0 {0.0} else {(prob.ln() - (bin_length as f64).ln() - sum.ln()).exp()}).collect();
+
         let tlen = t.len.get();
         let mut prob_vec = vec![0.0; tlen + 1];
         let mut bin_start = 0;
@@ -176,7 +186,7 @@ pub fn discrete_poisson_prob(txps: &mut Vec<TranscriptInfo>, rate: &str, bins: &
 
             prob_vec[start_index as usize..end_index as usize]
                 .iter_mut()
-                .for_each(|v| *v = temp_prob[i as usize]);
+                .for_each(|v| *v = normalized_prob[i as usize]);
 
             bin_start = bin_end;
         }
@@ -304,6 +314,11 @@ pub fn continuous_poisson_prob(txps: &mut Vec<TranscriptInfo>, rate: &str, bins:
             }
         }
 
+        // Compute the sum of probabilities
+        let sum: f64 = temp_prob.iter().sum();
+        // Normalize the probabilities by dividing each element by the sum
+        let normalized_prob: Vec<f64> = temp_prob.iter().zip(start_elemtns.iter()).map(|(&prob, &bin_length)| if prob == 0.0 || sum == 0.0 {0.0} else {(prob.ln() - (bin_length as f64).ln() - sum.ln()).exp()}).collect();
+
         let tlen = t.len.get();
         let mut prob_vec = vec![0.0; tlen + 1];
         let mut bin_start = 0;
@@ -311,11 +326,11 @@ pub fn continuous_poisson_prob(txps: &mut Vec<TranscriptInfo>, rate: &str, bins:
             let bin_end = bin_start + (*bin_length).floor() as usize;
         
             let start_index = bin_start;
-            let end_index = if i != start_elemtns.len() {bin_end} else {tlen + 1};
+            let end_index = if i != (start_elemtns.len() - 1) {bin_end} else {tlen + 1};
 
             prob_vec[start_index as usize..end_index as usize]
                 .iter_mut()
-                .for_each(|v| *v = temp_prob[i as usize]);
+                .for_each(|v| *v = normalized_prob[i as usize]);
 
             bin_start = bin_end;
         }

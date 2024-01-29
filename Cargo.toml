@@ -23,6 +23,7 @@ rayon = "1.5"
 serde = { version = "1", features = ["derive"] }
 csv = "1.0"
 ndarray = "0.15"
+rand = "0.8"
 
 [[bin]]
 name = "oarfish"

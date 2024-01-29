@@ -48,5 +48,6 @@
         "streambuf": "cpp",
         "cinttypes": "cpp",
         "typeinfo": "cpp"
-    }
+    },
+    "rust-analyzer.showUnlinkedFileNotification": false
 }

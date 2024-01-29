@@ -9,6 +9,7 @@ pub struct TranscriptInfo {
     pub ranges: Vec<std::ops::Range<u32>>,
     pub coverage: f64,
     pub coverage_prob: Vec<f32>,
+    pub entropy: f64,
 }
 
 impl TranscriptInfo {
@@ -18,6 +19,7 @@ impl TranscriptInfo {
             ranges: Vec::new(),
             coverage: 0.0,
             coverage_prob: Vec::new(),
+            entropy: 0.0,
         }
     }
     pub fn with_len(len: NonZeroUsize) -> Self {
@@ -26,6 +28,7 @@ impl TranscriptInfo {
             ranges: Vec::new(),
             coverage: 0.0,
             coverage_prob: Vec::new(),
+            entropy: 0.0,
         }
     }
 }
