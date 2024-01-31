@@ -24,6 +24,7 @@ serde = { version = "1", features = ["derive"] }
 csv = "1.0"
 ndarray = "0.15"
 rand = "0.8"
+typed-builder = "0.18.1"
 
 [[bin]]
 name = "oarfish"

@@ -457,6 +457,15 @@ fn main() -> io::Result<()> {
 
     let args = Args::parse();
 
+    let filter_opts = variables::AlignmentFilters::builder()
+        .five_prime_clip(args.five_prime_clip)
+        .three_prime_clip(args.three_prime_clip)
+        .score_threshold(args.score_threshold)
+        .min_aligned_fraction(args.min_aligned_fraction)
+        .min_aligned_len(args.min_aligned_len)
+        .allow_rc(args.allow_negative_strand)
+        .build();
+
     //check if the "no_coverage", "prob", "bin" argumnets exist or not and if they do not exist provide the intial values for them
     let mut coverage = true; 
     if args.coverage == "no"{
@@ -494,9 +503,10 @@ fn main() -> io::Result<()> {
     let mut prev_read = String::new();
     let mut num_mapped = 0_u64;
     let mut records_for_read = vec![];
-    let mut store: variables::InMemoryAlignmentStore = variables::InMemoryAlignmentStore::new();
+    let mut store: variables::InMemoryAlignmentStore = variables::InMemoryAlignmentStore::new(filter_opts);
 
     for result in reader.records(&header) {
+        //eprintln!("in the first for loop");
         let record = result?;
         if record.flags().is_unmapped() {
             continue;
@@ -505,6 +515,7 @@ fn main() -> io::Result<()> {
         if let Some(rname) = record.read_name() {
             let rstring: String =
                 <noodles_sam::record::read_name::ReadName as AsRef<str>>::as_ref(rname).to_owned();
+            //eprintln!("rstring: {:?}", rstring);
             // if this is an alignment for the same read, then 
             // push it onto our temporary vector.
             if prev_read == rstring {
@@ -513,15 +524,15 @@ fn main() -> io::Result<()> {
                     record.flags().is_supplementary(),
                 ) {
                     records_for_read.push(record_copy);
-                    txps[ref_id].ranges.push(
-                        (record.alignment_start().unwrap().get() as u32)
-                            ..(record.alignment_end().unwrap().get() as u32),
-                    );
+                    //txps[ref_id].ranges.push(
+                    //    (record.alignment_start().unwrap().get() as u32)
+                    //        ..(record.alignment_end().unwrap().get() as u32),
+                    //);
                 }
             } else {
                 if !prev_read.is_empty() {
                     //println!("the previous read had {} mappings", records_for_read.len());
-                    store.add_group(&records_for_read);
+                    store.add_group(&mut txps,&mut records_for_read);
                     records_for_read.clear();
                     num_mapped += 1;
                 }
@@ -531,16 +542,16 @@ fn main() -> io::Result<()> {
                     record.flags().is_supplementary(),
                 ) {
                     records_for_read.push(record_copy);
-                    txps[ref_id].ranges.push(
-                        (record.alignment_start().unwrap().get() as u32)
-                            ..(record.alignment_end().unwrap().get() as u32),
-                    );
+                    //txps[ref_id].ranges.push(
+                    //    (record.alignment_start().unwrap().get() as u32)
+                    //        ..(record.alignment_end().unwrap().get() as u32),
+                    //);
                 }
             }
         }
     }
     if !records_for_read.is_empty() {
-        store.add_group(&records_for_read);
+        store.add_group(&mut txps,&mut records_for_read);
         records_for_read.clear();
         num_mapped += 1;
     }
