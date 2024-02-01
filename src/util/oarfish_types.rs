@@ -1,5 +1,6 @@
 use std::fmt;
 use std::num::NonZeroUsize;
+use serde::Deserialize;
 
 use std::iter::FromIterator;
 use tabled::builder::Builder;
@@ -43,24 +44,53 @@ impl From<&sam::alignment::record::Record> for AlnInfo {
     }
 }
 
+/// Holds the info relevant for reading the short read quants
+#[derive(Debug, Deserialize, Clone)]
+pub struct Record {
+    pub Name: String,
+    pub Length: i32,
+    pub EffectiveLength: f64,
+    pub TPM: f64,
+    pub NumReads: f64,
+}
+
+/// Holds the info relevant for running the EM algorithm
+pub struct EMInfo<'eqm, 'tinfo> {
+    // the read alignment infomation we'll need to
+    // perform the EM
+    pub eq_map: &'eqm InMemoryAlignmentStore,
+    // relevant information about each target transcript
+    pub txp_info: &'tinfo mut Vec<TranscriptInfo>,
+    // maximum number of iterations the EM will run
+    // before returning an estimate.
+    pub max_iter: u32,
+    // the EM will terminate early if *all* parameters
+    // have converged within this threshold of relative
+    // change between two subsequent iterations.
+    pub convergence_thresh: f64,
+}
+
+
+
 #[derive(Debug, PartialEq)]
 pub struct TranscriptInfo {
-    len: NonZeroUsize,
-    total_weight: f64,
+    pub len: NonZeroUsize,
+    pub total_weight: f64,
     coverage_bins: Vec<f64>,
-    pub coverage_prob: f64,
+    pub ranges: Vec<std::ops::Range<u32>>,
+    pub coverage_prob: Vec<f32>,
     pub lenf: f64,
 }
 
 impl TranscriptInfo {
     #[allow(dead_code)]
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             len: NonZeroUsize::new(0).unwrap(),
             total_weight: 0.0_f64,
             coverage_bins: vec![0.0_f64; 10],
-            //ranges: Vec::new(),
-            coverage_prob: 1.0,
+            ranges: Vec::new(),
+            coverage_prob: Vec::new(),
             lenf: 0_f64,
         }
     }
@@ -70,8 +100,8 @@ impl TranscriptInfo {
             len,
             total_weight: 0.0_f64,
             coverage_bins: vec![0.0_f64; 10],
-            //ranges: Vec::new(),
-            coverage_prob: 1.0,
+            ranges: Vec::new(),
+            coverage_prob: Vec::new(),
             lenf: len.get() as f64,
         }
     }
@@ -90,21 +120,6 @@ impl TranscriptInfo {
         self.total_weight += weight;
     }
 
-    pub fn compute_coverage_prob(&mut self) {
-        // first normalize
-        const EVEN_COV: f64 = 0.1_f64;
-        let sum: f64 = self.coverage_bins.iter().sum();
-        let deviation: f64 = if sum > 0.0 {
-            self.coverage_bins
-                .iter()
-                .copied()
-                .fold(0.0_f64, |a, e| a + ((e / sum) - EVEN_COV).abs())
-        } else {
-            2.0_f64
-        };
-        let coverage_prob = (-deviation * 4.0).exp();
-        self.coverage_prob = coverage_prob;
-    }
 
     pub fn clear_coverage_dist(&mut self) {
         self.coverage_bins.fill(0.0_f64);
@@ -115,20 +130,21 @@ impl TranscriptInfo {
 #[derive(Debug)]
 pub struct InMemoryAlignmentStore {
     pub filter_opts: AlignmentFilters,
-    alignments: Vec<AlnInfo>,
-    probabilities: Vec<f32>,
+    pub alignments: Vec<AlnInfo>,
+    pub as_probabilities: Vec<f32>,
+    pub coverage_probabilities: Vec<f64>,
     // holds the boundaries between records for different reads
     boundaries: Vec<usize>,
     pub discard_table: DiscardTable,
 }
 
 pub struct InMemoryAlignmentStoreIter<'a> {
-    store: &'a InMemoryAlignmentStore,
-    idx: usize,
+    pub store: &'a InMemoryAlignmentStore,
+    pub idx: usize,
 }
 
 impl<'a> Iterator for InMemoryAlignmentStoreIter<'a> {
-    type Item = (&'a [AlnInfo], &'a [f32]);
+    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx + 1 >= self.store.boundaries.len() {
@@ -139,7 +155,8 @@ impl<'a> Iterator for InMemoryAlignmentStoreIter<'a> {
             self.idx += 1;
             Some((
                 &self.store.alignments[start..end],
-                &self.store.probabilities[start..end],
+                &self.store.as_probabilities[start..end],
+                &self.store.coverage_probabilities[start..end],
             ))
         }
     }
@@ -150,7 +167,8 @@ impl InMemoryAlignmentStore {
         InMemoryAlignmentStore {
             filter_opts: fo,
             alignments: vec![],
-            probabilities: vec![],
+            as_probabilities: vec![],
+            coverage_probabilities: vec![],
             boundaries: vec![0],
             discard_table: DiscardTable::new(),
         }
@@ -168,11 +186,17 @@ impl InMemoryAlignmentStore {
         txps: &mut [TranscriptInfo],
         ag: &mut Vec<sam::alignment::record::Record>,
     ) {
-        let (alns, probs) = self.filter_opts.filter(&mut self.discard_table, txps, ag);
+        let (alns, as_probs) = self.filter_opts.filter(&mut self.discard_table, txps, ag);
         if !alns.is_empty() {
             self.alignments.extend_from_slice(&alns);
-            self.probabilities.extend_from_slice(&probs);
+            self.as_probabilities.extend_from_slice(&as_probs);
+            self.coverage_probabilities.extend(vec![0.0_f64; self.alignments.len()]);
             self.boundaries.push(self.alignments.len());
+            for a in alns {
+                txps[a.ref_id as usize].ranges.push(
+                    a.start..a.end,
+                    );
+            }
         }
     }
 
@@ -458,5 +482,93 @@ impl AlignmentFilters {
         });
 
         (ag.iter().map(|x| x.into()).collect(), probabilities)
+    }
+}
+
+
+struct FullLengthProbs {
+    length_bins: Vec<usize>,
+    probs: Vec<Vec<f64>>,
+    new_probs: Vec<Vec<f64>>,
+}
+
+impl FullLengthProbs {
+    const NUM_BINS: usize = 10;
+
+    fn get_bin(span: u32, len: f64) -> usize {
+        let len_frac = (len - span as f64) / len;
+        (len_frac * FullLengthProbs::NUM_BINS as f64)
+            .round()
+            .min((FullLengthProbs::NUM_BINS - 1) as f64) as usize
+    }
+
+    fn from_data(
+        eq_map: &InMemoryAlignmentStore,
+        tinfo: &[TranscriptInfo],
+        len_bins: &[usize],
+    ) -> Self {
+        let mut len_probs: Vec<Vec<f64>> =
+            vec![vec![0.0f64; FullLengthProbs::NUM_BINS]; len_bins.len()];
+        let new_probs: Vec<Vec<f64>> =
+            vec![vec![0.0f64; FullLengthProbs::NUM_BINS]; len_bins.len()];
+
+        for (alns, probs, coverage_probs) in eq_map.iter() {
+            let inc = 1f64 / probs.len() as f64;
+            for a in alns {
+                let target_id = a.ref_id as usize;
+                let tlenf = tinfo[target_id].lenf;
+                let tlen = tlenf as usize;
+                let lindex = match len_bins.binary_search(&tlen) {
+                    Ok(i) => i,
+                    Err(i) => i,
+                };
+                let bin_num = FullLengthProbs::get_bin(a.alignment_span(), tlenf);
+                len_probs[lindex][bin_num] += inc;
+            }
+        }
+
+        for lb in len_probs.iter_mut() {
+            let tot: f64 = (*lb).iter().sum();
+            if tot > 0.0 {
+                lb.iter_mut().for_each(|v| *v /= tot);
+            }
+        }
+
+        FullLengthProbs {
+            length_bins: len_bins.to_vec(),
+            probs: len_probs,
+            new_probs,
+        }
+    }
+
+    fn get_prob_for(&self, a: &AlnInfo, len: usize) -> f64 {
+        let lindex = match self.length_bins.binary_search(&len) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+        let lenf = len as f64;
+        let bindex = FullLengthProbs::get_bin(a.alignment_span(), lenf);
+        self.probs[lindex][bindex]
+    }
+
+    fn update_probs(&mut self, a: &AlnInfo, len: usize, inc: f64) {
+        let lindex = match self.length_bins.binary_search(&len) {
+            Ok(i) => i,
+            Err(i) => i,
+        };
+        let lenf = len as f64;
+        let bindex = FullLengthProbs::get_bin(a.alignment_span(), lenf);
+        self.new_probs[lindex][bindex] += inc;
+    }
+
+    fn swap_probs(&mut self) {
+        std::mem::swap(&mut self.probs, &mut self.new_probs);
+        for lb in self.probs.iter_mut() {
+            let tot: f64 = (*lb).iter().sum();
+            if tot > 0.0 {
+                lb.iter_mut().for_each(|v| *v /= tot);
+            }
+        }
+        self.new_probs.fill(vec![0.0f64; FullLengthProbs::NUM_BINS]);
     }
 }

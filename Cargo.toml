@@ -19,6 +19,11 @@ tabled = "0.12.2"
 tracing = "0.1.37"
 tracing-subscriber = {version="0.3.17", features=["env-filter"]}
 typed-builder = "0.14.0"
+rayon = "1.5"
+statrs = "0.16"
+csv = "1.0"
+ndarray = "0.15"
+serde = { version = "1", features = ["derive"] }
 
 [[bin]]
 name = "oarfish"
