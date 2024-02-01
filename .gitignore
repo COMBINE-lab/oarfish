@@ -13,8 +13,8 @@ Cargo.lock
 # Added by cargo
 
 /target
-/scripts
+/scripts_test_branch
 /snakemake_folder
 /overhang
 /uniq-ambig-count
-/src
+/oarfish_integration
