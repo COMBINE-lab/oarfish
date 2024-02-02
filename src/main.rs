@@ -606,10 +606,10 @@ fn main() -> io::Result<()> {
                 (num_alignments, num_discarded_alignments) = binomial_continuous::binomial_continuous_prob(&mut txps, rate, &bins, args.threads);
                 num_discarded_reads_decision_rule = 0;
             }
-            //"entropy" => {
-            //    (num_alignments, num_discarded_alignments) = entropy_distribution::entropy_prob(&mut txps, rate, &bins, args.threads, args.alpha, args.beta, &args.output_path, &txps_name);
-            //    num_discarded_reads_decision_rule = 0;
-            //}
+            "entropy" => {
+                (num_alignments, num_discarded_alignments) = entropy_distribution::entropy_prob(&mut txps, rate, &bins, args.threads, args.alpha, args.beta); //, &args.output_path, &txps_name);
+                num_discarded_reads_decision_rule = 0;
+            }
             //"kde" => {
             //    let start_time = Instant::now();
             //    num_alignments = kde_prob::kde_prob(&mut txps, rate, args.threads);
