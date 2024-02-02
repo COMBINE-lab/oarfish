@@ -64,9 +64,9 @@ struct Args {
     #[clap(short, long, value_parser, default_value_t = 1)]
     threads: usize,
     //Location of short read counts
-    #[clap(short, long, value_parser, default_value_t = String::from("none"))]
+    #[clap(short = 'q', long, value_parser, default_value_t = String::from("none"))]
     short_quant: String,
-    #[clap(short, long, value_parser, default_value_t = 1)]
+    #[clap(short, long, value_parser, default_value_t = 10)]
     bins: u32,
 }
 
