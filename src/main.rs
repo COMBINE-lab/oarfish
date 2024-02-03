@@ -322,15 +322,23 @@ fn main() -> io::Result<()> {
 
     let header = reader.read_header()?;
 
+    let mut saw_minimap2 = false;
+    let mut progs = vec![];
     // explicitly check that alignment was done with a supported
     // aligner (right now, just minimap2).
     for (prog, _pmap) in header.programs().iter() {
-        assert_eq!(
-            prog, "minimap2",
-            "Currently, only minimap2 is supported as an aligner. The bam file listed {}.",
-            prog
-        );
+        if prog == "minimap2" {
+            saw_minimap2 = true;
+            break;
+        } else {
+            progs.push(prog);
+        }
     }
+    assert!(
+        saw_minimap2,
+        "Currently, only minimap2 is supported as an aligner. The bam file listed {:?}.",
+        progs
+    );
 
     // where we'll write down the per-transcript information we need
     // to track.
