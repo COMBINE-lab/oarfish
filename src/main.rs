@@ -24,52 +24,54 @@ use crate::util::write_function::{
 /// transcript quantification from long-read RNA-seq data
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
+
 struct Args {
     /// Name of the person to greet
-    #[clap(short, long, value_parser, required = true)]
+    #[arg(short, long,  required = true)]
     alignments: String,
     /// Location where output quantification file should be written
-    #[clap(short, long, value_parser, required = true)]
+    #[arg(short, long,  required = true)]
     output: String,
     /// Maximum allowable distance of the right-most end of an alignment from the 3' transcript end
-    #[clap(short, long, value_parser, default_value_t = u32::MAX as i64)]
+    #[arg(short, long,  default_value_t = u32::MAX as i64)]
     three_prime_clip: i64,
     /// Maximum allowable distance of the left-most end of an alignment from the 5' transcript end
-    #[clap(short, long, value_parser, default_value_t = u32::MAX)]
+    #[arg(short, long,  default_value_t = u32::MAX)]
     five_prime_clip: u32,
     /// Fraction of the best possible alignment score that a secondary alignment must have for
     /// consideration
-    #[clap(short, long, value_parser, default_value_t = 0.95)]
+    #[arg(short, long,  default_value_t = 0.95)]
     score_threshold: f32,
     /// Fraction of a query that must be mapped within an alignemnt to consider the alignemnt
     /// valid
-    #[clap(short, long, value_parser, default_value_t = 0.5)]
+    #[arg(short, long,  default_value_t = 0.5)]
     min_aligned_fraction: f32,
     /// Minimum number of nucleotides in the aligned portion of a read
-    #[clap(short = 'l', long, value_parser, default_value_t = 50)]
+    #[arg(short = 'l', long,  default_value_t = 50)]
     min_aligned_len: u32,
     /// Allow both forward-strand and reverse-complement alignments
-    #[clap(short = 'n', long, value_parser)]
+    #[arg(short = 'n', long, value_parser)]
     allow_negative_strand: bool,
     /// Apply the coverage model
-    #[clap(long, value_parser)]
+    #[arg(long, value_parser)]
     model_coverage: bool,
     /// Maximum number of iterations for which to run the EM algorithm
-    #[clap(long, value_parser, default_value_t = 1000)]
+    #[arg(long,  default_value_t = 1000)]
     max_em_iter: u32,
     /// Maximum number of iterations for which to run the EM algorithm
-    #[clap(long, value_parser, default_value_t = 1e-3)]
+    #[arg(long,  default_value_t = 1e-3)]
     convergence_thresh: f64,
-    //maximum number of cores that the oarfish can use to obtain binomial probability
-    #[clap(short, long, value_parser, default_value_t = 1)]
+    /// maximum number of cores that the oarfish can use to obtain binomial probability
+    #[arg(short, long,  default_value_t = 1)]
     threads: usize,
-    //Location of short read counts
-    #[clap(short = 'q', long, value_parser, default_value_t = String::from("none"))]
-    short_quant: String,
-    #[clap(short, long, value_parser, default_value_t = 10)]
+    /// Location of short read quantification (if provided)
+    #[arg(short = 'q', long)]
+    short_quant: Option<String>,
+
+    /// Number of bins to use in coverage model
+    #[arg(short, long,  default_value_t = 10)]
     bins: u32,
 }
-
 
 /// Performs one iteration of the EM algorithm by looping over all
 /// alignments and computing their estimated probability of being
@@ -126,7 +128,7 @@ fn m_step(
 /// target sequences.  The return value is a `Vec` of f64 values,
 /// each of which is the estimated number of fragments arising from
 /// each target.
-fn em(em_info: &mut EMInfo, short_read_path: String, txps_name: &Vec<String>) -> Vec<f64> {
+fn em(em_info: &mut EMInfo, short_read_path: Option<String>, txps_name: &Vec<String>) -> Vec<f64> {
     let eq_map = em_info.eq_map;
     let fops = &eq_map.filter_opts;
     let tinfo: &mut Vec<TranscriptInfo> = em_info.txp_info;
@@ -136,12 +138,14 @@ fn em(em_info: &mut EMInfo, short_read_path: String, txps_name: &Vec<String>) ->
 
     // init
     let mut prev_counts: Vec<f64>;
-    if short_read_path == "none" {
+
+    if let Some(sr_path) = short_read_path {
+        prev_counts = short_quant_vec(sr_path, txps_name);
+    } else {
         let avg = total_weight / (tinfo.len() as f64);
         prev_counts = vec![avg; tinfo.len()];
-    } else {
-        prev_counts = short_quant_vec(short_read_path, txps_name);
     }
+
     let mut curr_counts = vec![0.0f64; tinfo.len()];
 
     let mut rel_diff = 0.0_f64;
