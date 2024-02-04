@@ -1,6 +1,4 @@
 use crate::util::oarfish_types::{TranscriptInfo, InMemoryAlignmentStore};
-use noodles_sam as sam;
-use noodles_bam as bam;
 
 pub fn normalize_read_probs(store: &mut InMemoryAlignmentStore, txp_info: &Vec<TranscriptInfo>) {
 

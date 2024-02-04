@@ -18,7 +18,7 @@ pub fn binomial_probability(interval_count: Vec<f32>, interval_length: Vec<f32>,
     }
     //eprintln!("counts: {:?}", interval_counts);
     //eprintln!("length: {:?}", interval_lengths);
-    let mut probabilities: Vec<f64> = interval_counts
+    let probabilities: Vec<f64> = interval_counts
                                   .iter()
                                   .zip(interval_lengths.iter())
                                   .map(|(&count, &length)| {
@@ -54,7 +54,7 @@ pub fn binomial_probability(interval_count: Vec<f32>, interval_length: Vec<f32>,
     }).collect();
 
 
-    let mut result: Vec<f64> = log_denominator.iter().zip(log_numerator2.iter().zip(log_numerator3.iter()))
+    let result: Vec<f64> = log_denominator.iter().zip(log_numerator2.iter().zip(log_numerator3.iter()))
                                                     .map(|(denom,(num2, num3))| {
                                                         let res = (log_numerator1 - denom + num2 +num3).exp();
                                                         if res.is_nan() || res.is_infinite() {
@@ -109,17 +109,17 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
     .unwrap();
 
 
-    txps.par_iter_mut().enumerate().for_each(|(i, t)| {
+    txps.par_iter_mut().enumerate().for_each(|(_i, t)| {
         
-        let mut temp_prob: Vec<f32>;
+        let temp_prob: Vec<f32>;
 
         if *bins != 0 {
             //eprintln!("in multinomial prob");
             let bin_counts: Vec<f32>;
             let bin_lengths: Vec<f32>;
-            let mut num_discarded_read_temp: usize = 0;
-            let bin_coverage: Vec<f64>;
-            (bin_counts, bin_lengths, num_discarded_read_temp, bin_coverage) = bin_transcript_normalize_counts(t, bins); //binning the transcript length and obtain the counts and length vectors
+            let _num_discarded_read_temp: usize;
+            let _bin_coverage: Vec<f64>;
+            (bin_counts, bin_lengths, _num_discarded_read_temp, _bin_coverage) = bin_transcript_normalize_counts(t, bins); //binning the transcript length and obtain the counts and length vectors
             //==============================================================================================
             
             let tlen = t.len.get(); //transcript length

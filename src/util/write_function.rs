@@ -1,11 +1,10 @@
-use crate::util::oarfish_types::{TranscriptInfo, EMInfo};
+use crate::util::oarfish_types::EMInfo;
 use std::{
     fs,
     fs::OpenOptions,
     fs::File,
     io::{self, BufWriter, Write},
 };
-use noodles_sam as sam;
 
 //this part is taken from dev branch
 pub fn write_out_count(
@@ -50,7 +49,7 @@ pub fn write_out_count(
     Ok(())
 }
 
-
+#[allow(dead_code)]
 pub fn write_out_cdf(
     output: &String,
     prob: &str, 

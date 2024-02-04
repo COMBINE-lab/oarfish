@@ -11,6 +11,7 @@ use typed_builder::TypedBuilder;
 use bio_types::strand::Strand;
 use noodles_sam as sam;
 use sam::{alignment::record::data::field::tag::Tag as AlnTag, Header};
+#[allow(unused_imports)]
 use tracing::{info, warn};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -23,6 +24,7 @@ pub struct AlnInfo {
 }
 
 impl AlnInfo {
+    #[allow(dead_code)]
     pub fn alignment_span(&self) -> u32 {
         self.end - self.start
     }
@@ -139,7 +141,7 @@ impl TranscriptInfo {
         self.total_weight += weight;
     }
 
-
+    #[allow(dead_code)]
     pub fn clear_coverage_dist(&mut self) {
         self.coverage_bins.fill(0.0_f64);
         self.total_weight = 0.0_f64;
@@ -522,7 +524,7 @@ impl AlignmentFilters {
     }
 }
 
-
+/*
 struct FullLengthProbs {
     length_bins: Vec<usize>,
     probs: Vec<Vec<f64>>,
@@ -549,7 +551,7 @@ impl FullLengthProbs {
         let new_probs: Vec<Vec<f64>> =
             vec![vec![0.0f64; FullLengthProbs::NUM_BINS]; len_bins.len()];
 
-        for (alns, probs, coverage_probs) in eq_map.iter() {
+        for (alns, probs, _coverage_probs) in eq_map.iter() {
             let inc = 1f64 / probs.len() as f64;
             for a in alns {
                 let target_id = a.ref_id as usize;
@@ -607,5 +609,25 @@ impl FullLengthProbs {
             }
         }
         self.new_probs.fill(vec![0.0f64; FullLengthProbs::NUM_BINS]);
+    }
+}
+*/
+
+
+
+#[cfg(test)]
+mod tests {
+    use crate::util::oarfish_types::AlnInfo;
+    use bio_types::strand::Strand;
+
+    #[test]
+    fn aln_span_is_correct() {
+        let ainf = AlnInfo {
+            ref_id: 0,
+            start: 0,
+            end: 100,
+            prob: 0.5,
+            strand: Strand::Forward };
+        assert_eq!(ainf.alignment_span(), 100);
     }
 }

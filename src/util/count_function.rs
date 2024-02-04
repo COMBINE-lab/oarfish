@@ -18,7 +18,7 @@ pub fn bin_transcript_normalize_counts(t: &TranscriptInfo, num_bins: &u32) -> (V
     for read in t.ranges.iter(){
 
         let mut discarded_read_flag: bool = true;
-        let mut coverage_temp = 0.0;
+        let mut coverage_temp;
 
         for (i, bin) in bins.iter().enumerate(){
             if (read.start as f32) <= bin.start && (read.end as f32) >= bin.end{

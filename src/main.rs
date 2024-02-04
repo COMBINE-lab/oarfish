@@ -1,8 +1,8 @@
 use clap::Parser;
 
 use std::{
-    fs::{File, OpenOptions},
-    io::{self, BufReader, BufWriter, Write},
+    fs::File,
+    io::{self, BufReader},
 };
 
 use num_format::{Locale, ToFormattedString};
@@ -10,16 +10,14 @@ use tracing::info;
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 
 use noodles_bam as bam;
-use noodles_sam;
 
 mod util;
 use crate::util::oarfish_types::{
-    AlignmentFilters, AlnInfo, InMemoryAlignmentStore, TranscriptInfo, EMInfo};
+    AlignmentFilters, InMemoryAlignmentStore, TranscriptInfo, EMInfo};
 use crate::util::binomial_probability::binomial_continuous_prob;
 use crate::util::normalize_probability::normalize_read_probs;
 use crate::util::read_function::short_quant_vec;
-use crate::util::write_function::{
-    write_out_count, write_out_cdf};
+use crate::util::write_function::write_out_count;
 
 /// transcript quantification from long-read RNA-seq data
 #[derive(Parser, Debug)]
@@ -81,7 +79,7 @@ struct Args {
 #[inline]
 fn m_step(
     eq_map: &InMemoryAlignmentStore,
-    tinfo: &mut [TranscriptInfo],
+    _tinfo: &mut [TranscriptInfo],
     model_coverage: bool,
     prev_count: &mut [f64],
     curr_counts: &mut [f64],
