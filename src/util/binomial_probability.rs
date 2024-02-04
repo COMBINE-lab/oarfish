@@ -116,6 +116,12 @@ pub fn binomial_probability(
 }
 
 pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, threads: usize) {
+    use tracing::info_span;
+    use tracing::info;
+
+    let _log_span = info_span!("binomial_continuous_prob").entered();
+    info!("computing coverage probabilities");
+
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .build()

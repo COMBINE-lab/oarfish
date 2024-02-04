@@ -290,7 +290,7 @@ fn main() -> io::Result<()> {
     // we'll need these to keep track of which alignments belong
     // to which reads.
     let mut prev_read = String::new();
-    let mut _num_mapped = 0_u64;
+    let mut num_unmapped = 0_u64;
     let mut records_for_read = vec![];
     let mut store = InMemoryAlignmentStore::new(filter_opts, &header);
 
@@ -304,12 +304,14 @@ fn main() -> io::Result<()> {
     // to see if it's clear why this is the case
     for result in reader.record_bufs(&header) {
         let record = result?;
+        // unmapped reads don't contribute to quantification
+        // but we track them.
         if record.flags().is_unmapped() {
+            num_unmapped += 1;
             continue;
         }
         let record_copy = record.clone();
         if let Some(rname) = record.name() {
-            //read_name() {
             let rstring: String = String::from_utf8_lossy(rname.as_ref()).into_owned();
             // if this is an alignment for the same read, then
             // push it onto our temporary vector.
@@ -318,12 +320,15 @@ fn main() -> io::Result<()> {
                     records_for_read.push(record_copy);
                 }
             } else {
+                // otherwise, record the alignment range for the 
+                // previous read record.
                 if !prev_read.is_empty() {
-                    //println!("the previous read had {} mappings", records_for_read.len());
                     store.add_group(&mut txps, &mut records_for_read);
                     records_for_read.clear();
-                    _num_mapped += 1;
                 }
+                // the new "prev_read" name is the current read name
+                // so it becomes the first on the new alignment range 
+                // vector.
                 prev_read = rstring;
                 if let Some(_ref_id) = record.reference_sequence_id() {
                     records_for_read.push(record_copy);
@@ -331,12 +336,14 @@ fn main() -> io::Result<()> {
             }
         }
     }
+    // if we end with a non-empty alignment range vector, then 
+    // add that group.
     if !records_for_read.is_empty() {
         store.add_group(&mut txps, &mut records_for_read);
         records_for_read.clear();
-        _num_mapped += 1;
     }
 
+    info!("alignment file contained {} unmapped read records.", num_unmapped.to_formatted_string(&Locale::en));
     info!("discard_table: \n{}\n", store.discard_table.to_table());
 
     if store.filter_opts.model_coverage {
@@ -345,9 +352,9 @@ fn main() -> io::Result<()> {
         binomial_continuous_prob(&mut txps, &args.bins, args.threads);
         //Normalize the probabilities for the records of each read
         normalize_read_probs(&mut store, &txps);
+        info!("done");
     }
 
-    info!("done");
 
     info!(
         "Total number of alignment records : {}",
