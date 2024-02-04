@@ -3,6 +3,7 @@ use clap::Parser;
 use std::{
     fs::File,
     io::{self, BufReader},
+    path::PathBuf
 };
 
 use num_format::{Locale, ToFormattedString};
@@ -20,54 +21,53 @@ use crate::util::oarfish_types::{
 use crate::util::read_function::short_quant_vec;
 use crate::util::write_function::write_out_count;
 
-/// transcript quantification from long-read RNA-seq data
+/// accurate transcript quantification from long-read RNA-seq data
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 
 struct Args {
-    /// Name of the person to greet
+    /// path to the file containing the input alignments
     #[arg(short, long, required = true)]
-    alignments: String,
-    /// Location where output quantification file should be written
+    alignments: PathBuf,
+    /// location where output quantification file should be written
     #[arg(short, long, required = true)]
     output: String,
-    /// Maximum allowable distance of the right-most end of an alignment from the 3' transcript end
+    /// maximum allowable distance of the right-most end of an alignment from the 3' transcript end
     #[arg(short, long,  default_value_t = u32::MAX as i64)]
     three_prime_clip: i64,
-    /// Maximum allowable distance of the left-most end of an alignment from the 5' transcript end
+    /// maximum allowable distance of the left-most end of an alignment from the 5' transcript end
     #[arg(short, long,  default_value_t = u32::MAX)]
     five_prime_clip: u32,
-    /// Fraction of the best possible alignment score that a secondary alignment must have for
+    /// fraction of the best possible alignment score that a secondary alignment must have for
     /// consideration
     #[arg(short, long, default_value_t = 0.95)]
     score_threshold: f32,
-    /// Fraction of a query that must be mapped within an alignemnt to consider the alignemnt
+    /// fraction of a query that must be mapped within an alignemnt to consider the alignemnt
     /// valid
     #[arg(short, long, default_value_t = 0.5)]
     min_aligned_fraction: f32,
-    /// Minimum number of nucleotides in the aligned portion of a read
+    /// minimum number of nucleotides in the aligned portion of a read
     #[arg(short = 'l', long, default_value_t = 50)]
     min_aligned_len: u32,
-    /// Allow both forward-strand and reverse-complement alignments
+    /// allow both forward-strand and reverse-complement alignments
     #[arg(short = 'n', long, value_parser)]
     allow_negative_strand: bool,
-    /// Apply the coverage model
+    /// apply the coverage model
     #[arg(long, value_parser)]
     model_coverage: bool,
-    /// Maximum number of iterations for which to run the EM algorithm
+    /// maximum number of iterations for which to run the EM algorithm
     #[arg(long, default_value_t = 1000)]
     max_em_iter: u32,
-    /// Maximum number of iterations for which to run the EM algorithm
+    /// maximum number of iterations for which to run the EM algorithm
     #[arg(long, default_value_t = 1e-3)]
     convergence_thresh: f64,
     /// maximum number of cores that the oarfish can use to obtain binomial probability
     #[arg(short, long, default_value_t = 1)]
     threads: usize,
-    /// Location of short read quantification (if provided)
+    /// location of short read quantification (if provided)
     #[arg(short = 'q', long)]
     short_quant: Option<String>,
-
-    /// Number of bins to use in coverage model
+    /// number of bins to use in coverage model
     #[arg(short, long, default_value_t = 10)]
     bins: u32,
 }
