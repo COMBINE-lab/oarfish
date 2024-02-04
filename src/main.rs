@@ -3,7 +3,7 @@ use clap::Parser;
 use std::{
     fs::File,
     io::{self, BufReader},
-    path::PathBuf
+    path::PathBuf,
 };
 
 use num_format::{Locale, ToFormattedString};
@@ -234,11 +234,20 @@ fn main() -> io::Result<()> {
         .model_coverage(args.model_coverage)
         .build();
 
-    let mut reader = File::open(args.alignments)
+    let mut reader = File::open(&args.alignments)
         .map(BufReader::new)
         .map(bam::io::Reader::new)?;
 
+    // read the bam file header, print out some basic info
     let header = reader.read_header()?;
+    info!(
+        "read header from BAM file {}, contains {} reference sequences.",
+        args.alignments.display(),
+        header
+            .reference_sequences()
+            .len()
+            .to_formatted_string(&Locale::en)
+    );
 
     let mut saw_minimap2 = false;
     let mut progs = vec![];
@@ -262,6 +271,7 @@ fn main() -> io::Result<()> {
         "Currently, only minimap2 is supported as an aligner. The bam file listed {:?}.",
         progs
     );
+    info!("saw minimap2 as a program in the header; proceeding.");
 
     // where we'll write down the per-transcript information we need
     // to track.

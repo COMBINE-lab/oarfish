@@ -244,6 +244,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
         }
     }
 }
+
 #[derive(TypedBuilder, Debug)]
 pub struct AlignmentFilters {
     five_prime_clip: u32,
