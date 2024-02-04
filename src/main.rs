@@ -162,13 +162,6 @@ fn em(em_info: &mut EMInfo, short_read_path: Option<String>, txps_name: &Vec<Str
             }
         }
 
-        //if fops.model_coverage {
-        //    // during the previous round we re-estimated the length
-        //    // probabilities, so now swap those with the old ones
-        //    // so that the next iteration uses the current model.
-        //    len_probs.swap_probs();
-        //}
-
         // swap the current and previous abundances
         std::mem::swap(&mut prev_counts, &mut curr_counts);
         // clear out the new abundances
