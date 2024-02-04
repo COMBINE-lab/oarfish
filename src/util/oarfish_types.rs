@@ -1,6 +1,6 @@
+use serde::Deserialize;
 use std::fmt;
 use std::num::NonZeroUsize;
-use serde::Deserialize;
 
 use std::iter::FromIterator;
 use tabled::builder::Builder;
@@ -31,10 +31,20 @@ impl AlnInfo {
 }
 
 impl AlnInfo {
-    fn from_noodles_record<T: sam::alignment::record::Record>(aln: &T, aln_header: &Header) -> Self {
+    fn from_noodles_record<T: sam::alignment::record::Record>(
+        aln: &T,
+        aln_header: &Header,
+    ) -> Self {
         Self {
-            ref_id: aln.reference_sequence_id(aln_header).unwrap().expect("valid reference id") as u32,
-            start: aln.alignment_start().unwrap().expect("valid aln start").get() as u32,
+            ref_id: aln
+                .reference_sequence_id(aln_header)
+                .unwrap()
+                .expect("valid reference id") as u32,
+            start: aln
+                .alignment_start()
+                .unwrap()
+                .expect("valid aln start")
+                .get() as u32,
             end: aln.alignment_end().unwrap().expect("valid aln end").get() as u32,
             prob: 0.0_f64,
             strand: if aln.flags().expect("valid flags").is_reverse_complemented() {
@@ -90,8 +100,6 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     // change between two subsequent iterations.
     pub convergence_thresh: f64,
 }
-
-
 
 #[derive(Debug, PartialEq)]
 pub struct TranscriptInfo {
@@ -204,21 +212,22 @@ impl<'h> InMemoryAlignmentStore<'h> {
         }
     }
 
-    pub fn add_group<T: sam::alignment::record::Record + std::fmt::Debug> (
+    pub fn add_group<T: sam::alignment::record::Record + std::fmt::Debug>(
         &mut self,
         txps: &mut [TranscriptInfo],
         ag: &mut Vec<T>,
     ) {
-        let (alns, as_probs) = self.filter_opts.filter(&mut self.discard_table, &self.aln_header, txps, ag);
+        let (alns, as_probs) =
+            self.filter_opts
+                .filter(&mut self.discard_table, self.aln_header, txps, ag);
         if !alns.is_empty() {
             self.alignments.extend_from_slice(&alns);
             self.as_probabilities.extend_from_slice(&as_probs);
-            self.coverage_probabilities.extend(vec![0.0_f64; self.alignments.len()]);
+            self.coverage_probabilities
+                .extend(vec![0.0_f64; self.alignments.len()]);
             self.boundaries.push(self.alignments.len());
             for a in alns {
-                txps[a.ref_id as usize].ranges.push(
-                    a.start..a.end,
-                    );
+                txps[a.ref_id as usize].ranges.push(a.start..a.end);
             }
         }
     }
@@ -303,45 +312,45 @@ impl DiscardTable {
 
 impl fmt::Display for DiscardTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
+        writeln!(
             f,
-            "discarded because of distance from 5' {}\n",
+            "discarded because of distance from 5' {}",
             self.discard_5p
         )
         .expect("couldn't format discard table.");
-        write!(
+        writeln!(
             f,
-            "discarded because of distance from 3' {}\n",
+            "discarded because of distance from 3' {}",
             self.discard_3p
         )
         .expect("couldn't format discard table.");
-        write!(
+        writeln!(
             f,
-            "discarded because of score fraction {}\n",
+            "discarded because of score fraction {}",
             self.discard_score
         )
         .expect("couldn't format discard table.");
-        write!(
+        writeln!(
             f,
-            "discarded because of aligned fraction {}\n",
+            "discarded because of aligned fraction {}",
             self.discard_aln_frac
         )
         .expect("couldn't format discard table.");
-        write!(
+        writeln!(
             f,
-            "discarded because of aligned length {}\n",
+            "discarded because of aligned length {}",
             self.discard_aln_len
         )
         .expect("couldn't format discard table.");
-        write!(
+        writeln!(
             f,
-            "discarded because of aligned orientation {}\n",
+            "discarded because of aligned orientation {}",
             self.discard_ori
         )
         .expect("couldn't format discard table.");
-        write!(
+        writeln!(
             f,
-            "discarded because alignment is supplemental {}\n",
+            "discarded because alignment is supplemental {}",
             self.discard_supp
         )
     }
@@ -382,8 +391,15 @@ impl AlignmentFilters {
             .unwrap_or(0_u32);
 
         ag.retain(|x| {
-            if !x.flags().expect("alignment record should have flags").is_unmapped() {
-                let tid = x.reference_sequence_id(aln_header).unwrap().expect("valid tid");
+            if !x
+                .flags()
+                .expect("alignment record should have flags")
+                .is_unmapped()
+            {
+                let tid = x
+                    .reference_sequence_id(aln_header)
+                    .unwrap()
+                    .expect("valid tid");
                 let aln_span = x.alignment_span().expect("valid span").unwrap() as u32;
 
                 /*let astart = x.alignment_start().expect("should have valid alignment start").unwrap();
@@ -407,7 +423,10 @@ impl AlignmentFilters {
                     .unwrap_or(i32::MIN as i64) as i32;
 
                 // the alignment is to the - strand
-                let is_rc = x.flags().expect("alignment record should have flags").is_reverse_complemented();
+                let is_rc = x
+                    .flags()
+                    .expect("alignment record should have flags")
+                    .is_reverse_complemented();
                 if is_rc && !self.allow_rc {
                     discard_table.discard_ori += 1;
                     return false;
@@ -416,21 +435,28 @@ impl AlignmentFilters {
                 // the alignment is supplementary
                 // *NOTE*: this removes "supplementary" alignments, *not*
                 // "secondary" alignments.
-                let is_supp = x.flags().expect("alignment record should have flags").is_supplementary();
+                let is_supp = x
+                    .flags()
+                    .expect("alignment record should have flags")
+                    .is_supplementary();
                 if is_supp {
                     discard_table.discard_supp += 1;
                     return false;
                 }
 
                 // enough absolute sequence (# of bases) is aligned
-                let filt_aln_len = (aln_span as u32) < self.min_aligned_len;
+                let filt_aln_len = aln_span < self.min_aligned_len;
                 if filt_aln_len {
                     discard_table.discard_aln_len += 1;
                     return false;
                 }
 
                 // not too far from the 3' end
-                let filt_3p = (x.alignment_end().unwrap().expect("alignment record should have end position").get() as i64)
+                let filt_3p = (x
+                    .alignment_end()
+                    .unwrap()
+                    .expect("alignment record should have end position")
+                    .get() as i64)
                     <= (txps[tid].len.get() as i64 - self.three_prime_clip);
                 if filt_3p {
                     discard_table.discard_3p += 1;
@@ -438,7 +464,12 @@ impl AlignmentFilters {
                 }
 
                 // not too far from the 5' end
-                let filt_5p = (x.alignment_start().unwrap().expect("alignment record should have a start position").get() as u32) >= self.five_prime_clip;
+                let filt_5p = (x
+                    .alignment_start()
+                    .unwrap()
+                    .expect("alignment record should have a start position")
+                    .get() as u32)
+                    >= self.five_prime_clip;
                 if filt_5p {
                     discard_table.discard_5p += 1;
                     return false;
@@ -502,10 +533,21 @@ impl AlignmentFilters {
                 let f = 10_f32 * ((fscore - mscore) / mscore);
                 probabilities.push(f.exp());
 
-                let tid = ag[i].reference_sequence_id(aln_header).unwrap().expect("valid transcript id");
+                let tid = ag[i]
+                    .reference_sequence_id(aln_header)
+                    .unwrap()
+                    .expect("valid transcript id");
                 txps[tid].add_interval(
-                    ag[i].alignment_start().unwrap().expect("valid alignment start").get() as u32,
-                    ag[i].alignment_end().unwrap().expect("valid alignment end").get() as u32,
+                    ag[i]
+                        .alignment_start()
+                        .unwrap()
+                        .expect("valid alignment start")
+                        .get() as u32,
+                    ag[i]
+                        .alignment_end()
+                        .unwrap()
+                        .expect("valid alignment end")
+                        .get() as u32,
                     1.0_f64,
                 );
             } else {
@@ -520,7 +562,12 @@ impl AlignmentFilters {
             scores[index - 1] > i32::MIN
         });
 
-        (ag.iter().map(|x| AlnInfo::from_noodles_record(x, aln_header)).collect(), probabilities)
+        (
+            ag.iter()
+                .map(|x| AlnInfo::from_noodles_record(x, aln_header))
+                .collect(),
+            probabilities,
+        )
     }
 }
 
@@ -613,8 +660,6 @@ impl FullLengthProbs {
 }
 */
 
-
-
 #[cfg(test)]
 mod tests {
     use crate::util::oarfish_types::AlnInfo;
@@ -627,7 +672,8 @@ mod tests {
             start: 0,
             end: 100,
             prob: 0.5,
-            strand: Strand::Forward };
+            strand: Strand::Forward,
+        };
         assert_eq!(ainf.alignment_span(), 100);
     }
 }

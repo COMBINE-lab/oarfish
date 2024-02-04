@@ -1,11 +1,14 @@
-use crate::util::oarfish_types::TranscriptInfo;
 use crate::util::count_function::bin_transcript_normalize_counts;
-use statrs::function::gamma::ln_gamma;
+use crate::util::oarfish_types::TranscriptInfo;
 use rayon::prelude::*;
+use statrs::function::gamma::ln_gamma;
 
-
-pub fn binomial_probability(interval_count: Vec<f32>, interval_length: Vec<f32>, distinct_rate: f64, tlen:usize) -> Vec<f64>{
-
+pub fn binomial_probability(
+    interval_count: Vec<f32>,
+    interval_length: Vec<f32>,
+    distinct_rate: f64,
+    tlen: usize,
+) -> Vec<f64> {
     let interval_counts = interval_count;
     let interval_lengths = interval_length;
 
@@ -19,20 +22,24 @@ pub fn binomial_probability(interval_count: Vec<f32>, interval_length: Vec<f32>,
     //eprintln!("counts: {:?}", interval_counts);
     //eprintln!("length: {:?}", interval_lengths);
     let probabilities: Vec<f64> = interval_counts
-                                  .iter()
-                                  .zip(interval_lengths.iter())
-                                  .map(|(&count, &length)| {
-                                  if count ==0.0 || length == 0.0 {
-                                      0.0 
-                                  } else {
-                                      //eprintln!("count: {:?}, length: {:?}, rate:{:?}", count, length, distinct_rate);
-                                      (count as f64) / (length as f64 * distinct_rate)
-                                  }
-                                  }).collect();
+        .iter()
+        .zip(interval_lengths.iter())
+        .map(|(&count, &length)| {
+            if count == 0.0 || length == 0.0 {
+                0.0
+            } else {
+                //eprintln!("count: {:?}, length: {:?}, rate:{:?}", count, length, distinct_rate);
+                (count as f64) / (length as f64 * distinct_rate)
+            }
+        })
+        .collect();
     //eprintln!("prob: {:?}", probabilities);
     let sum_vec = interval_counts.iter().sum::<f32>();
     let log_numerator1: f64 = ln_gamma(sum_vec as f64 + 1.0);
-    let log_denominator: Vec<f64> =  interval_counts.iter().map(|&count| ln_gamma(count as f64 + 1.0) + ln_gamma((sum_vec - count) as f64 + 1.0)).collect();
+    let log_denominator: Vec<f64> = interval_counts
+        .iter()
+        .map(|&count| ln_gamma(count as f64 + 1.0) + ln_gamma((sum_vec - count) as f64 + 1.0))
+        .collect();
     let log_numerator2: Vec<f64> = probabilities.iter().zip(interval_counts.iter()).map(|(&prob, &count)| {
         let num2 = if prob > 10e-8_f64 {prob.ln() * (count as f64)} else {(10e-8_f64).ln() * (count as f64)};
         if num2.is_nan() || num2.is_infinite() {
@@ -42,7 +49,7 @@ pub fn binomial_probability(interval_count: Vec<f32>, interval_length: Vec<f32>,
         }
         num2
     }).collect();
-    
+
     let log_numerator3: Vec<f64> = probabilities.iter().zip(interval_counts.iter()).map(|(&prob, &count)| {
         let num3 = if (1.0 - prob) > 10e-8_f64 {(1.0 - prob).ln() * (sum_vec - count) as f64} else {(10e-8_f64).ln() * (sum_vec - count) as f64};
         if num3.is_nan() || num3.is_infinite() {
@@ -52,7 +59,6 @@ pub fn binomial_probability(interval_count: Vec<f32>, interval_length: Vec<f32>,
         }
         num3
     }).collect();
-
 
     let result: Vec<f64> = log_denominator.iter().zip(log_numerator2.iter().zip(log_numerator3.iter()))
                                                     .map(|(denom,(num2, num3))| {
@@ -65,11 +71,14 @@ pub fn binomial_probability(interval_count: Vec<f32>, interval_length: Vec<f32>,
     //eprintln!("result: {:?}", result);
     //eprintln!("result is: {:?}", result);
     let bin_length = interval_lengths[0];
-    let num_bins = interval_lengths.len() as u32;      
+    let num_bins = interval_lengths.len() as u32;
     // Compute the sum of probabilities
     let sum: f64 = result.iter().sum();
     // Normalize the probabilities by dividing each element by the sum
-    let normalized_prob: Vec<f64> = result.iter().map(|&prob| prob / (bin_length as f64 * sum)).collect();
+    let normalized_prob: Vec<f64> = result
+        .iter()
+        .map(|&prob| prob / (bin_length as f64 * sum))
+        .collect();
     //eprintln!("normalized_prob: {:?}", normalized_prob);
 
     let mut prob_vec = vec![0.0; tlen + 1];
@@ -78,10 +87,14 @@ pub fn binomial_probability(interval_count: Vec<f32>, interval_length: Vec<f32>,
         //let bin_start = i * interval_lengths[i as usize];
         let start_index = bin_start;
         let bin_end = (i + 1) as f32 * interval_lengths[i as usize];
-    
+
         //let start_index = if i == 0 { bin_start } else { bin_start + 1 };
-        let end_index = if i + 1 == num_bins { (tlen + 1) as u32 } else { bin_end.floor() as u32 };
-    
+        let end_index = if i + 1 == num_bins {
+            (tlen + 1) as u32
+        } else {
+            bin_end.floor() as u32
+        };
+
         prob_vec[start_index as usize..end_index as usize]
             .iter_mut()
             .for_each(|v| *v = normalized_prob[i as usize]);
@@ -89,28 +102,26 @@ pub fn binomial_probability(interval_count: Vec<f32>, interval_length: Vec<f32>,
         bin_start = end_index;
     }
 
-    let cdf: Vec<f64> = prob_vec.iter().scan(0.0, |acc, &prob| {
-    *acc += prob;
-    Some(*acc)
-    }).collect();
+    let cdf: Vec<f64> = prob_vec
+        .iter()
+        .scan(0.0, |acc, &prob| {
+            *acc += prob;
+            Some(*acc)
+        })
+        .collect();
 
     //eprintln!("cdf: {:?}", cdf);
-    
-    cdf    
-    
+
+    cdf
 }
 
-
 pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, threads: usize) {
-
     rayon::ThreadPoolBuilder::new()
-    .num_threads(threads)
-    .build()
-    .unwrap();
-
+        .num_threads(threads)
+        .build()
+        .unwrap();
 
     txps.par_iter_mut().enumerate().for_each(|(_i, t)| {
-        
         let temp_prob: Vec<f32>;
 
         if *bins != 0 {
@@ -119,43 +130,72 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
             let bin_lengths: Vec<f32>;
             let _num_discarded_read_temp: usize;
             let _bin_coverage: Vec<f64>;
-            (bin_counts, bin_lengths, _num_discarded_read_temp, _bin_coverage) = bin_transcript_normalize_counts(t, bins); //binning the transcript length and obtain the counts and length vectors
-            //==============================================================================================
-            
-            let tlen = t.len.get(); //transcript length
-            let distinct_rate: f64 =  bin_counts.iter().zip(bin_lengths.iter()).map(|(&count, &length)| (count as f64)/ (length as f64)).sum();
-            let prob_dr: Vec<f64> = binomial_probability(bin_counts, bin_lengths, distinct_rate, tlen);
-            temp_prob = prob_dr.iter().map(|&x| x as f32).collect();
+            (
+                bin_counts,
+                bin_lengths,
+                _num_discarded_read_temp,
+                _bin_coverage,
+            ) = bin_transcript_normalize_counts(t, bins); //binning the transcript length and obtain the counts and length vectors
+                                                          //==============================================================================================
 
+            let tlen = t.len.get(); //transcript length
+            let distinct_rate: f64 = bin_counts
+                .iter()
+                .zip(bin_lengths.iter())
+                .map(|(&count, &length)| (count as f64) / (length as f64))
+                .sum();
+            let prob_dr: Vec<f64> =
+                binomial_probability(bin_counts, bin_lengths, distinct_rate, tlen);
+            temp_prob = prob_dr.iter().map(|&x| x as f32).collect();
         } else {
             //not binning the transcript length
             let len = t.len.get() as u32; //transcript length
 
             //obtain the start and end of reads aligned to these transcripts
-            let mut start_end_ranges: Vec<u32> = t.ranges.iter().map(|range| vec![range.start, range.end]).flatten().collect();
+            let mut start_end_ranges: Vec<u32> = t
+                .ranges
+                .iter()
+                .flat_map(|range| vec![range.start, range.end])
+                .collect();
             start_end_ranges.push(0); // push the first position of the transcript
             start_end_ranges.push(len); // push the last position of the transcript
             start_end_ranges.sort(); // Sort the vector in ascending order
             start_end_ranges.dedup(); // Remove consecutive duplicates
-            //convert the sorted vector of starts and ends into a vector of consecutive ranges
-            let distinct_interval: Vec<std::ops::Range<u32>> = start_end_ranges.windows(2).map(|window| window[0]..window[1]).collect(); 
-            let interval_length : Vec<u32> = start_end_ranges.windows(2).map(|window| window[1] - window[0]).collect(); 
+                                      //convert the sorted vector of starts and ends into a vector of consecutive ranges
+            let distinct_interval: Vec<std::ops::Range<u32>> = start_end_ranges
+                .windows(2)
+                .map(|window| window[0]..window[1])
+                .collect();
+            let interval_length: Vec<u32> = start_end_ranges
+                .windows(2)
+                .map(|window| window[1] - window[0])
+                .collect();
             //obtain the number of reads aligned in each distinct intervals
             let mut interval_counts: Vec<f32> = Vec::new();
-            for interval in distinct_interval
-            {
-                interval_counts.push(t.ranges.iter().filter(|range| range.start <= interval.start && range.end >= interval.end).count() as f32);
+            for interval in distinct_interval {
+                interval_counts.push(
+                    t.ranges
+                        .iter()
+                        .filter(|range| range.start <= interval.start && range.end >= interval.end)
+                        .count() as f32,
+                );
             }
 
-
             let tlen = t.len.get(); //transcript length
-            let distinct_rate: f64 =  interval_counts.iter().zip(interval_length.iter()).map(|(&count, &length)| (count as f64)/ (length as f64)).sum();
-            let prob_dr: Vec<f64> = binomial_probability(interval_counts, interval_length.iter().map(|&len| len as f32).collect(), distinct_rate, tlen);
+            let distinct_rate: f64 = interval_counts
+                .iter()
+                .zip(interval_length.iter())
+                .map(|(&count, &length)| (count as f64) / (length as f64))
+                .sum();
+            let prob_dr: Vec<f64> = binomial_probability(
+                interval_counts,
+                interval_length.iter().map(|&len| len as f32).collect(),
+                distinct_rate,
+                tlen,
+            );
             temp_prob = prob_dr.iter().map(|&x| x as f32).collect();
         }
 
         t.coverage_prob = temp_prob;
     });
-
-
 }

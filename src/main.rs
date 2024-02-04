@@ -12,10 +12,11 @@ use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 use noodles_bam as bam;
 
 mod util;
-use crate::util::oarfish_types::{
-    AlignmentFilters, InMemoryAlignmentStore, TranscriptInfo, EMInfo};
 use crate::util::binomial_probability::binomial_continuous_prob;
 use crate::util::normalize_probability::normalize_read_probs;
+use crate::util::oarfish_types::{
+    AlignmentFilters, EMInfo, InMemoryAlignmentStore, TranscriptInfo,
+};
 use crate::util::read_function::short_quant_vec;
 use crate::util::write_function::write_out_count;
 
@@ -25,10 +26,10 @@ use crate::util::write_function::write_out_count;
 
 struct Args {
     /// Name of the person to greet
-    #[arg(short, long,  required = true)]
+    #[arg(short, long, required = true)]
     alignments: String,
     /// Location where output quantification file should be written
-    #[arg(short, long,  required = true)]
+    #[arg(short, long, required = true)]
     output: String,
     /// Maximum allowable distance of the right-most end of an alignment from the 3' transcript end
     #[arg(short, long,  default_value_t = u32::MAX as i64)]
@@ -38,14 +39,14 @@ struct Args {
     five_prime_clip: u32,
     /// Fraction of the best possible alignment score that a secondary alignment must have for
     /// consideration
-    #[arg(short, long,  default_value_t = 0.95)]
+    #[arg(short, long, default_value_t = 0.95)]
     score_threshold: f32,
     /// Fraction of a query that must be mapped within an alignemnt to consider the alignemnt
     /// valid
-    #[arg(short, long,  default_value_t = 0.5)]
+    #[arg(short, long, default_value_t = 0.5)]
     min_aligned_fraction: f32,
     /// Minimum number of nucleotides in the aligned portion of a read
-    #[arg(short = 'l', long,  default_value_t = 50)]
+    #[arg(short = 'l', long, default_value_t = 50)]
     min_aligned_len: u32,
     /// Allow both forward-strand and reverse-complement alignments
     #[arg(short = 'n', long, value_parser)]
@@ -54,20 +55,20 @@ struct Args {
     #[arg(long, value_parser)]
     model_coverage: bool,
     /// Maximum number of iterations for which to run the EM algorithm
-    #[arg(long,  default_value_t = 1000)]
+    #[arg(long, default_value_t = 1000)]
     max_em_iter: u32,
     /// Maximum number of iterations for which to run the EM algorithm
-    #[arg(long,  default_value_t = 1e-3)]
+    #[arg(long, default_value_t = 1e-3)]
     convergence_thresh: f64,
     /// maximum number of cores that the oarfish can use to obtain binomial probability
-    #[arg(short, long,  default_value_t = 1)]
+    #[arg(short, long, default_value_t = 1)]
     threads: usize,
     /// Location of short read quantification (if provided)
     #[arg(short = 'q', long)]
     short_quant: Option<String>,
 
     /// Number of bins to use in coverage model
-    #[arg(short, long,  default_value_t = 10)]
+    #[arg(short, long, default_value_t = 10)]
     bins: u32,
 }
 
@@ -92,13 +93,9 @@ fn m_step(
             // target's estimated abundance.
             let target_id = a.ref_id as usize;
             let prob = *p as f64;
-            let cov_prob = if model_coverage {
-                *cp as f64
-            } else {
-                1.0
-            };
+            let cov_prob = if model_coverage { *cp } else { 1.0 };
 
-            denom += prev_count[target_id] * prob * cov_prob; 
+            denom += prev_count[target_id] * prob * cov_prob;
         }
 
         // If this read can be assigned
@@ -109,14 +106,9 @@ fn m_step(
             for (a, (p, cp)) in alns.iter().zip(probs.iter().zip(coverage_probs.iter())) {
                 let target_id = a.ref_id as usize;
                 let prob = *p as f64;
-                let cov_prob = if model_coverage {
-                    *cp as f64
-                 } else {
-                     1.0
-                 };
+                let cov_prob = if model_coverage { *cp } else { 1.0 };
                 let inc = (prev_count[target_id] * prob * cov_prob) / denom;
                 curr_counts[target_id] += inc;
-
             }
         }
     }
@@ -221,9 +213,6 @@ fn em(em_info: &mut EMInfo, short_read_path: Option<String>, txps_name: &Vec<Str
     curr_counts
 }
 
-
-
-
 fn main() -> io::Result<()> {
     // set up the logging.  Here we will take the
     // logging level from the environment variable if
@@ -304,8 +293,8 @@ fn main() -> io::Result<()> {
     // by their source read. **Note**: this requires that we have a
     // name-sorted input bam file (currently, aligned against the transcriptome).
     //
-    // *NOTE*: this had to be changed from `records` to `record_bufs` or 
-    // critical information was missing from the records. This happened when 
+    // *NOTE*: this had to be changed from `records` to `record_bufs` or
+    // critical information was missing from the records. This happened when
     // moving to the new version of noodles. Track `https://github.com/zaeleus/noodles/issues/230`
     // to see if it's clear why this is the case
     for result in reader.record_bufs(&header) {
@@ -314,7 +303,8 @@ fn main() -> io::Result<()> {
             continue;
         }
         let record_copy = record.clone();
-        if let Some(rname) = record.name() { //read_name() {
+        if let Some(rname) = record.name() {
+            //read_name() {
             let rstring: String = String::from_utf8_lossy(rname.as_ref()).into_owned();
             // if this is an alignment for the same read, then
             // push it onto our temporary vector.
@@ -349,7 +339,7 @@ fn main() -> io::Result<()> {
         //obtaining the Cumulative Distribution Function (CDF) for each transcript
         binomial_continuous_prob(&mut txps, &args.bins, args.threads);
         //Normalize the probabilities for the records of each read
-        normalize_read_probs(&mut store, &mut txps);
+        normalize_read_probs(&mut store, &txps);
     }
 
     info!("done");
@@ -375,7 +365,13 @@ fn main() -> io::Result<()> {
     let counts = em(&mut emi, args.short_quant, &txps_name);
 
     // write the output
-    write_out_count(&args.output, &args.model_coverage, &args.bins, &header, &counts)?;
+    write_out_count(
+        &args.output,
+        &args.model_coverage,
+        &args.bins,
+        &header,
+        &counts,
+    )?;
 
     Ok(())
 }
