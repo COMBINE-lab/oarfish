@@ -377,7 +377,7 @@ fn main() -> io::Result<()> {
     let counts = em(&mut emi, args.short_quant, &txps_name);
 
     // write the output
-    write_out_count(&args.output, &args.model_coverage, &args.bins, &header, &counts);
+    write_out_count(&args.output, &args.model_coverage, &args.bins, &header, &counts)?;
 
     Ok(())
 }

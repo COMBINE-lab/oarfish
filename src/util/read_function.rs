@@ -20,7 +20,8 @@ pub fn short_quant_vec(short_read_path: String, txps_name: &Vec<String>) -> Vec<
                                .collect();
 
     // Convert the Vec of Records into an ndarray::Array2
-    let mut data_array = Array2::from_shape_vec((records.len(), 2), records.iter().flat_map(|r| vec![r.Name.clone(), r.NumReads.to_string()]).collect()).unwrap();
+    let mut data_array = Array2::from_shape_vec((records.len(), 2), 
+        records.iter().flat_map(|r| vec![r.name.clone(), r.num_reads.to_string()]).collect()).unwrap();
 
     //obtain the first column of the data_array and check if all the elements exist in txps_name
     let first_column: Vec<String> = data_array.column(0).to_owned().to_vec();
@@ -39,11 +40,11 @@ pub fn short_quant_vec(short_read_path: String, txps_name: &Vec<String>) -> Vec<
         let missing_records: Vec<Record> = txps_not_in_first_column
             .iter()
             .map(|name| Record {
-                Name: name.clone(),
-                Length: 0,
-                EffectiveLength: 0.0,
-                TPM: 0.0,
-                NumReads: 0.0,
+                name: name.clone(),
+                length: 0,
+                effective_length: 0.0,
+                tpm: 0.0,
+                num_reads: 0.0,
             })
             .collect();
 
@@ -51,7 +52,8 @@ pub fn short_quant_vec(short_read_path: String, txps_name: &Vec<String>) -> Vec<
         updated_records.extend(missing_records);
 
         // Update the data_array with the new records
-        data_array = Array2::from_shape_vec((updated_records.len(), 2), updated_records.iter().flat_map(|r| vec![r.Name.clone(), r.NumReads.to_string()]).collect()).unwrap();
+        data_array = Array2::from_shape_vec((updated_records.len(), 2), 
+            updated_records.iter().flat_map(|r| vec![r.name.clone(), r.num_reads.to_string()]).collect()).unwrap();
 
     } else if !all_elements_exist {
 
