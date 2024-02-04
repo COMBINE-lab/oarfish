@@ -6,7 +6,6 @@ use std::{
     io::{self, BufWriter, Write},
 };
 use noodles_sam as sam;
-use sam::record::data::field::tag;
 
 //this part is taken from dev branch
 pub fn write_out_count(

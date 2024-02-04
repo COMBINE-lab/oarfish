@@ -256,7 +256,7 @@ fn main() -> io::Result<()> {
 
     let mut reader = File::open(args.alignments)
         .map(BufReader::new)
-        .map(bam::Reader::new)?;
+        .map(bam::io::Reader::new)?;
 
     let header = reader.read_header()?;
 
@@ -300,20 +300,24 @@ fn main() -> io::Result<()> {
     let mut prev_read = String::new();
     let mut _num_mapped = 0_u64;
     let mut records_for_read = vec![];
-    let mut store = InMemoryAlignmentStore::new(filter_opts);
+    let mut store = InMemoryAlignmentStore::new(filter_opts, &header);
 
     // Parse the input alignemnt file, gathering the alignments aggregated
     // by their source read. **Note**: this requires that we have a
     // name-sorted input bam file (currently, aligned against the transcriptome).
-    for result in reader.records(&header) {
+    //
+    // *NOTE*: this had to be changed from `records` to `record_bufs` or 
+    // critical information was missing from the records. This happened when 
+    // moving to the new version of noodles. Track `https://github.com/zaeleus/noodles/issues/230`
+    // to see if it's clear why this is the case
+    for result in reader.record_bufs(&header) {
         let record = result?;
         if record.flags().is_unmapped() {
             continue;
         }
         let record_copy = record.clone();
-        if let Some(rname) = record.read_name() {
-            let rstring: String =
-                <noodles_sam::record::read_name::ReadName as AsRef<str>>::as_ref(rname).to_owned();
+        if let Some(rname) = record.name() { //read_name() {
+            let rstring: String = String::from_utf8_lossy(rname.as_ref()).into_owned();
             // if this is an alignment for the same read, then
             // push it onto our temporary vector.
             if prev_read == rstring {

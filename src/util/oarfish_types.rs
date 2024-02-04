@@ -10,7 +10,7 @@ use typed_builder::TypedBuilder;
 
 use bio_types::strand::Strand;
 use noodles_sam as sam;
-use sam::record::data::field::tag;
+use sam::{alignment::record::data::field::tag::Tag as AlnTag, Header};
 use tracing::{info, warn};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -28,14 +28,14 @@ impl AlnInfo {
     }
 }
 
-impl From<&sam::alignment::record::Record> for AlnInfo {
-    fn from(aln: &sam::alignment::record::Record) -> Self {
+impl AlnInfo {
+    fn from_noodles_record<T: sam::alignment::record::Record>(aln: &T, aln_header: &Header) -> Self {
         Self {
-            ref_id: aln.reference_sequence_id().unwrap() as u32,
-            start: aln.alignment_start().unwrap().get() as u32,
-            end: aln.alignment_end().unwrap().get() as u32,
+            ref_id: aln.reference_sequence_id(aln_header).unwrap().expect("valid reference id") as u32,
+            start: aln.alignment_start().unwrap().expect("valid aln start").get() as u32,
+            end: aln.alignment_end().unwrap().expect("valid aln end").get() as u32,
             prob: 0.0_f64,
-            strand: if aln.flags().is_reverse_complemented() {
+            strand: if aln.flags().expect("valid flags").is_reverse_complemented() {
                 Strand::Reverse
             } else {
                 Strand::Forward
@@ -43,6 +43,23 @@ impl From<&sam::alignment::record::Record> for AlnInfo {
         }
     }
 }
+/*
+impl<T: sam::alignment::record::Record> From<&T> for AlnInfo {
+    fn from(aln: &T) -> Self {
+        Self {
+            ref_id: aln.reference_sequence_id().unwrap() as u32,
+            start: aln.alignment_start().unwrap().expect("valid aln start").get() as u32,
+            end: aln.alignment_end().unwrap().expect("valid aln end").get() as u32,
+            prob: 0.0_f64,
+            strand: if aln.flags().expect("valid flags").is_reverse_complemented() {
+                Strand::Reverse
+            } else {
+                Strand::Forward
+            },
+        }
+    }
+}
+*/
 
 /// Holds the info relevant for reading the short read quants
 #[derive(Debug, Deserialize, Clone)]
@@ -55,10 +72,10 @@ pub struct Record {
 }
 
 /// Holds the info relevant for running the EM algorithm
-pub struct EMInfo<'eqm, 'tinfo> {
+pub struct EMInfo<'eqm, 'tinfo, 'h> {
     // the read alignment infomation we'll need to
     // perform the EM
-    pub eq_map: &'eqm InMemoryAlignmentStore,
+    pub eq_map: &'eqm InMemoryAlignmentStore<'h>,
     // relevant information about each target transcript
     pub txp_info: &'tinfo mut Vec<TranscriptInfo>,
     // maximum number of iterations the EM will run
@@ -128,8 +145,9 @@ impl TranscriptInfo {
 }
 
 #[derive(Debug)]
-pub struct InMemoryAlignmentStore {
+pub struct InMemoryAlignmentStore<'h> {
     pub filter_opts: AlignmentFilters,
+    pub aln_header: &'h Header,
     pub alignments: Vec<AlnInfo>,
     pub as_probabilities: Vec<f32>,
     pub coverage_probabilities: Vec<f64>,
@@ -138,12 +156,12 @@ pub struct InMemoryAlignmentStore {
     pub discard_table: DiscardTable,
 }
 
-pub struct InMemoryAlignmentStoreIter<'a> {
-    pub store: &'a InMemoryAlignmentStore,
+pub struct InMemoryAlignmentStoreIter<'a, 'h> {
+    pub store: &'a InMemoryAlignmentStore<'h>,
     pub idx: usize,
 }
 
-impl<'a> Iterator for InMemoryAlignmentStoreIter<'a> {
+impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
     type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -162,10 +180,11 @@ impl<'a> Iterator for InMemoryAlignmentStoreIter<'a> {
     }
 }
 
-impl InMemoryAlignmentStore {
-    pub fn new(fo: AlignmentFilters) -> Self {
+impl<'h> InMemoryAlignmentStore<'h> {
+    pub fn new(fo: AlignmentFilters, header: &'h Header) -> Self {
         InMemoryAlignmentStore {
             filter_opts: fo,
+            aln_header: header,
             alignments: vec![],
             as_probabilities: vec![],
             coverage_probabilities: vec![],
@@ -181,12 +200,12 @@ impl InMemoryAlignmentStore {
         }
     }
 
-    pub fn add_group(
+    pub fn add_group<T: sam::alignment::record::Record + std::fmt::Debug> (
         &mut self,
         txps: &mut [TranscriptInfo],
-        ag: &mut Vec<sam::alignment::record::Record>,
+        ag: &mut Vec<T>,
     ) {
-        let (alns, as_probs) = self.filter_opts.filter(&mut self.discard_table, txps, ag);
+        let (alns, as_probs) = self.filter_opts.filter(&mut self.discard_table, &self.aln_header, txps, ag);
         if !alns.is_empty() {
             self.alignments.extend_from_slice(&alns);
             self.as_probabilities.extend_from_slice(&as_probs);
@@ -325,11 +344,12 @@ impl fmt::Display for DiscardTable {
 }
 
 impl AlignmentFilters {
-    fn filter(
+    fn filter<T: sam::alignment::record::Record + std::fmt::Debug>(
         &mut self,
         discard_table: &mut DiscardTable,
+        aln_header: &Header,
         txps: &mut [TranscriptInfo],
-        ag: &mut Vec<sam::alignment::record::Record>,
+        ag: &mut Vec<T>,
     ) -> (Vec<AlnInfo>, Vec<f32>) {
         // track the best score of any alignment we've seen
         // so far for this read (this will designate the
@@ -358,18 +378,32 @@ impl AlignmentFilters {
             .unwrap_or(0_u32);
 
         ag.retain(|x| {
-            if !x.flags().is_unmapped() {
-                let tid = x.reference_sequence_id().unwrap();
-                let aln_span = x.alignment_span() as u32;
+            if !x.flags().expect("alignment record should have flags").is_unmapped() {
+                let tid = x.reference_sequence_id(aln_header).unwrap().expect("valid tid");
+                let aln_span = x.alignment_span().expect("valid span").unwrap() as u32;
+
+                /*let astart = x.alignment_start().expect("should have valid alignment start").unwrap();
+                let aend = x.alignment_end().expect("should have valid alignment end").unwrap();
+                let aspan = x.cigar().alignment_span();
+                */
+                //(aend.get() as u32) - (astart.get() as u32);
+                /*
+                use std::str;
+                let read_name = str::from_utf8(x.name().unwrap().as_bytes()).expect("ok").to_owned();
+                if  read_name == "SRR14286054.2187" {
+                    println!("read_name = {read_name}, astart = {}, aend = {}, aln_span = {}, FETCHED ALN SPAN  = {aspan:?}, rec = {:?}", astart, aend, aln_span, x);
+                }
+                */
                 let score = x
                     .data()
-                    .get(&tag::ALIGNMENT_SCORE)
+                    .get(&AlnTag::ALIGNMENT_SCORE)
+                    .unwrap()
                     .expect("could not get value")
                     .as_int()
                     .unwrap_or(i32::MIN as i64) as i32;
 
                 // the alignment is to the - strand
-                let is_rc = x.flags().is_reverse_complemented();
+                let is_rc = x.flags().expect("alignment record should have flags").is_reverse_complemented();
                 if is_rc && !self.allow_rc {
                     discard_table.discard_ori += 1;
                     return false;
@@ -378,7 +412,7 @@ impl AlignmentFilters {
                 // the alignment is supplementary
                 // *NOTE*: this removes "supplementary" alignments, *not*
                 // "secondary" alignments.
-                let is_supp = x.flags().is_supplementary();
+                let is_supp = x.flags().expect("alignment record should have flags").is_supplementary();
                 if is_supp {
                     discard_table.discard_supp += 1;
                     return false;
@@ -392,7 +426,7 @@ impl AlignmentFilters {
                 }
 
                 // not too far from the 3' end
-                let filt_3p = (x.alignment_end().unwrap().get() as i64)
+                let filt_3p = (x.alignment_end().unwrap().expect("alignment record should have end position").get() as i64)
                     <= (txps[tid].len.get() as i64 - self.three_prime_clip);
                 if filt_3p {
                     discard_table.discard_3p += 1;
@@ -400,7 +434,7 @@ impl AlignmentFilters {
                 }
 
                 // not too far from the 5' end
-                let filt_5p = (x.alignment_start().unwrap().get() as u32) >= self.five_prime_clip;
+                let filt_5p = (x.alignment_start().unwrap().expect("alignment record should have a start position").get() as u32) >= self.five_prime_clip;
                 if filt_5p {
                     discard_table.discard_5p += 1;
                     return false;
@@ -449,7 +483,8 @@ impl AlignmentFilters {
             .iter_mut()
             .map(|a| {
                 a.data()
-                    .get(&tag::ALIGNMENT_SCORE)
+                    .get(&AlnTag::ALIGNMENT_SCORE)
+                    .unwrap()
                     .expect("could not get value")
                     .as_int()
                     .unwrap_or(0) as i32
@@ -463,10 +498,10 @@ impl AlignmentFilters {
                 let f = 10_f32 * ((fscore - mscore) / mscore);
                 probabilities.push(f.exp());
 
-                let tid = ag[i].reference_sequence_id().unwrap();
+                let tid = ag[i].reference_sequence_id(aln_header).unwrap().expect("valid transcript id");
                 txps[tid].add_interval(
-                    ag[i].alignment_start().unwrap().get() as u32,
-                    ag[i].alignment_end().unwrap().get() as u32,
+                    ag[i].alignment_start().unwrap().expect("valid alignment start").get() as u32,
+                    ag[i].alignment_end().unwrap().expect("valid alignment end").get() as u32,
                     1.0_f64,
                 );
             } else {
@@ -481,7 +516,7 @@ impl AlignmentFilters {
             scores[index - 1] > i32::MIN
         });
 
-        (ag.iter().map(|x| x.into()).collect(), probabilities)
+        (ag.iter().map(|x| AlnInfo::from_noodles_record(x, aln_header)).collect(), probabilities)
     }
 }
 
