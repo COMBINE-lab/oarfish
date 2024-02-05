@@ -8,6 +8,9 @@ pub fn bin_transcript_normalize_counts(
     let transcript_len = t.len.get() as u32; //transcript length
     let nbins = *num_bins;
     let bin_size = transcript_len as f32 / nbins as f32;
+
+    // create a vector of bins, where each bin is an
+    // std::ops::Range<f32> struct
     let bins: Vec<std::ops::Range<f32>> = (0..nbins)
         .map(|i| {
             if i != (nbins - 1) {
@@ -19,53 +22,37 @@ pub fn bin_transcript_normalize_counts(
         .collect();
 
     let mut bin_counts: Vec<f32> = vec![0.0; bins.len()];
-    let bin_lengths: Vec<f32> = bins.iter().map(|range| range.end - range.start).collect();
     let mut bin_coverage: Vec<f64> = vec![0.0; bins.len()];
+    let bin_lengths: Vec<f32> = bins.iter().map(|range| range.end - range.start).collect();
 
     for read in t.ranges.iter() {
         let mut discarded_read_flag: bool = true;
-        let mut coverage_temp;
 
         for (i, bin) in bins.iter().enumerate() {
+            let mut bin_inc: f64 = 0.0;
             if (read.start as f32) <= bin.start && (read.end as f32) >= bin.end {
-                bin_counts[i] += 1.0;
+                // read contains the entire bin
+                bin_inc = 1.0;
                 discarded_read_flag = false;
-                bin_coverage[i] = 1.0;
             } else if (read.start as f32) >= bin.start
                 && (read.end as f32) >= bin.start
                 && (read.start as f32) < bin.end
                 && (read.end as f32) < bin.end
             {
-                bin_counts[i] += ((read.end - read.start) as f32) / (bin.end - bin.start);
+                // read is contained within the bin
+                bin_inc = (read.end - read.start) as f64 / (bin.end - bin.start) as f64;
                 discarded_read_flag = false;
-
-                coverage_temp = (read.end - read.start) as f64 / (bin.end - bin.start) as f64;
-                bin_coverage[i] = if bin_coverage[i] < coverage_temp {
-                    coverage_temp
-                } else {
-                    bin_coverage[i]
-                };
             } else if (read.start as f32) >= bin.start && (read.start as f32) < bin.end {
-                bin_counts[i] += (bin.end - read.start as f32) / (bin.end - bin.start);
+                // read starts in this bin, but doesn't end in it
+                bin_inc = (bin.end - read.start as f32) as f64 / (bin.end - bin.start) as f64;
                 discarded_read_flag = false;
-
-                coverage_temp = (bin.end - read.start as f32) as f64 / (bin.end - bin.start) as f64;
-                bin_coverage[i] = if bin_coverage[i] < coverage_temp {
-                    coverage_temp
-                } else {
-                    bin_coverage[i]
-                };
             } else if (read.end as f32) > bin.start && (read.end as f32) <= bin.end {
-                bin_counts[i] += (read.end as f32 - bin.start) / (bin.end - bin.start);
+                // read ends in this bin, but doesn't start in it
+                bin_inc = (read.end as f32 - bin.start) as f64 / (bin.end - bin.start) as f64;
                 discarded_read_flag = false;
-
-                coverage_temp = (read.end as f32 - bin.start) as f64 / (bin.end - bin.start) as f64;
-                bin_coverage[i] = if bin_coverage[i] < coverage_temp {
-                    coverage_temp
-                } else {
-                    bin_coverage[i]
-                };
             }
+            bin_counts[i] += bin_inc as f32;
+            bin_coverage[i] += bin_inc;
         }
 
         if discarded_read_flag {

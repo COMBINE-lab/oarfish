@@ -273,7 +273,6 @@ fn main() -> io::Result<()> {
     );
     info!("saw minimap2 as a program in the header; proceeding.");
 
-
     let num_ref_seqs = header.reference_sequences().len();
     // where we'll write down the per-transcript information we need
     // to track.
@@ -320,14 +319,14 @@ fn main() -> io::Result<()> {
                     records_for_read.push(record_copy);
                 }
             } else {
-                // otherwise, record the alignment range for the 
+                // otherwise, record the alignment range for the
                 // previous read record.
                 if !prev_read.is_empty() {
                     store.add_group(&mut txps, &mut records_for_read);
                     records_for_read.clear();
                 }
                 // the new "prev_read" name is the current read name
-                // so it becomes the first on the new alignment range 
+                // so it becomes the first on the new alignment range
                 // vector.
                 prev_read = rstring;
                 if let Some(_ref_id) = record.reference_sequence_id() {
@@ -336,14 +335,17 @@ fn main() -> io::Result<()> {
             }
         }
     }
-    // if we end with a non-empty alignment range vector, then 
+    // if we end with a non-empty alignment range vector, then
     // add that group.
     if !records_for_read.is_empty() {
         store.add_group(&mut txps, &mut records_for_read);
         records_for_read.clear();
     }
 
-    info!("alignment file contained {} unmapped read records.", num_unmapped.to_formatted_string(&Locale::en));
+    info!(
+        "alignment file contained {} unmapped read records.",
+        num_unmapped.to_formatted_string(&Locale::en)
+    );
     info!("discard_table: \n{}\n", store.discard_table.to_table());
 
     if store.filter_opts.model_coverage {
@@ -354,7 +356,6 @@ fn main() -> io::Result<()> {
         normalize_read_probs(&mut store, &txps);
         info!("done");
     }
-
 
     info!(
         "Total number of alignment records : {}",

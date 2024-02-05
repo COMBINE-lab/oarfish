@@ -1,24 +1,28 @@
 use crate::util::count_function::bin_transcript_normalize_counts;
 use crate::util::oarfish_types::TranscriptInfo;
+use itertools::izip;
 use rayon::prelude::*;
 use statrs::function::gamma::ln_gamma;
 
 pub fn binomial_probability(
-    interval_count: Vec<f32>,
-    interval_length: Vec<f32>,
+    interval_count: &[f32],
+    interval_length: &[f32],
     distinct_rate: f64,
     tlen: usize,
 ) -> Vec<f64> {
     let interval_counts = interval_count;
     let interval_lengths = interval_length;
+    let count_sum = interval_counts.iter().sum::<f32>();
+    const ZERO_THRESH: f64 = 1e-8;
 
-    if interval_counts.iter().sum::<f32>() == 0.0 {
+    if count_sum == 0.0 {
         return vec![0.0; tlen + 1];
     }
 
     if distinct_rate == 0.0 {
         return vec![0.0; tlen + 1];
     }
+
     //eprintln!("counts: {:?}", interval_counts);
     //eprintln!("length: {:?}", interval_lengths);
     let probabilities: Vec<f64> = interval_counts
@@ -33,53 +37,56 @@ pub fn binomial_probability(
             }
         })
         .collect();
+
     //eprintln!("prob: {:?}", probabilities);
-    let sum_vec = interval_counts.iter().sum::<f32>();
+
+    // compute the quantities (in the numerator and denominator) that we will
+    // use to compute the binomial probabilities.
+    let sum_vec = count_sum;
     let log_numerator1: f64 = ln_gamma(sum_vec as f64 + 1.0);
     let log_denominator: Vec<f64> = interval_counts
         .iter()
         .map(|&count| ln_gamma(count as f64 + 1.0) + ln_gamma((sum_vec - count) as f64 + 1.0))
         .collect();
-    let log_numerator2: Vec<f64> = probabilities.iter().zip(interval_counts.iter()).map(|(&prob, &count)| {
-        let num2 = if prob > 10e-8_f64 {prob.ln() * (count as f64)} else {(10e-8_f64).ln() * (count as f64)};
+
+    let (log_numerator2, log_numerator3) : (Vec<f64>, Vec<f64>) = probabilities.iter().zip(interval_counts.iter()).map(|(&prob, &count)| {
+        let num2 = if prob > ZERO_THRESH { prob.ln() * (count as f64) } else { ZERO_THRESH.ln() * (count as f64) };
         if num2.is_nan() || num2.is_infinite() {
             eprintln!("num2 is: {:?}", num2);
-            eprintln!("prob and count is: {:?}\t {:?}", prob, count);
-            panic!("Incorrect result. multinomial_probability function provides nan or infinite values for log_numerator2");
+            eprintln!("prob and sum_vec and count is: {:?}\t {:?}\t {:?}", prob, sum_vec, count);
+            panic!("Incorrect result. multinomial_probability function provides nan or infinite values for log_numerator3");
         }
-        num2
-    }).collect();
 
-    let log_numerator3: Vec<f64> = probabilities.iter().zip(interval_counts.iter()).map(|(&prob, &count)| {
-        let num3 = if (1.0 - prob) > 10e-8_f64 {(1.0 - prob).ln() * (sum_vec - count) as f64} else {(10e-8_f64).ln() * (sum_vec - count) as f64};
+        let num3 = if (1.0 - prob) > ZERO_THRESH {(1.0 - prob).ln() * (sum_vec - count) as f64} else { ZERO_THRESH.ln() * (sum_vec - count) as f64};
         if num3.is_nan() || num3.is_infinite() {
             eprintln!("num3 is: {:?}", num3);
             eprintln!("prob and sum_vec and count is: {:?}\t {:?}\t {:?}", prob, sum_vec, count);
             panic!("Incorrect result. multinomial_probability function provides nan or infinite values for log_numerator3");
         }
-        num3
-    }).collect();
 
-    let result: Vec<f64> = log_denominator.iter().zip(log_numerator2.iter().zip(log_numerator3.iter()))
-                                                    .map(|(denom,(num2, num3))| {
-                                                        let res = (log_numerator1 - denom + num2 +num3).exp();
-                                                        if res.is_nan() || res.is_infinite() {
-                                                            panic!("Incorrect result. multinomial_probability function provides nan or infinite values for result");
-                                                        }
-                                                        res
-                                                    }).collect();
-    //eprintln!("result: {:?}", result);
-    //eprintln!("result is: {:?}", result);
+        (num2, num3)
+    }).unzip();
+
+    let result: Vec<f64> = izip!(log_denominator, log_numerator2, log_numerator3).map(
+        |(denom, num2, num3)| {
+            let res = (log_numerator1 - denom + num2 +num3).exp();
+            if res.is_nan() || res.is_infinite() {
+                panic!("Incorrect result. multinomial_probability function provides nan or infinite values for result");
+            }
+            res
+        }).collect();
+
     let bin_length = interval_lengths[0];
     let num_bins = interval_lengths.len() as u32;
+
     // Compute the sum of probabilities
     let sum: f64 = result.iter().sum();
+   
     // Normalize the probabilities by dividing each element by the sum
     let normalized_prob: Vec<f64> = result
         .iter()
         .map(|&prob| prob / (bin_length as f64 * sum))
         .collect();
-    //eprintln!("normalized_prob: {:?}", normalized_prob);
 
     let mut prob_vec = vec![0.0; tlen + 1];
     let mut bin_start = 0;
@@ -110,14 +117,12 @@ pub fn binomial_probability(
         })
         .collect();
 
-    //eprintln!("cdf: {:?}", cdf);
-
     cdf
 }
 
 pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, threads: usize) {
-    use tracing::info_span;
     use tracing::info;
+    use tracing::info_span;
 
     let _log_span = info_span!("binomial_continuous_prob").entered();
     info!("computing coverage probabilities");
@@ -151,7 +156,7 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
                 .map(|(&count, &length)| (count as f64) / (length as f64))
                 .sum();
             let prob_dr: Vec<f64> =
-                binomial_probability(bin_counts, bin_lengths, distinct_rate, tlen);
+                binomial_probability(&bin_counts, &bin_lengths, distinct_rate, tlen);
             temp_prob = prob_dr.iter().map(|&x| x as f32).collect();
         } else {
             //not binning the transcript length
@@ -172,9 +177,9 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
                 .windows(2)
                 .map(|window| window[0]..window[1])
                 .collect();
-            let interval_length: Vec<u32> = start_end_ranges
+            let interval_length: Vec<f32> = start_end_ranges
                 .windows(2)
-                .map(|window| window[1] - window[0])
+                .map(|window| (window[1] - window[0]) as f32)
                 .collect();
             //obtain the number of reads aligned in each distinct intervals
             let mut interval_counts: Vec<f32> = Vec::new();
@@ -193,12 +198,8 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
                 .zip(interval_length.iter())
                 .map(|(&count, &length)| (count as f64) / (length as f64))
                 .sum();
-            let prob_dr: Vec<f64> = binomial_probability(
-                interval_counts,
-                interval_length.iter().map(|&len| len as f32).collect(),
-                distinct_rate,
-                tlen,
-            );
+            let prob_dr: Vec<f64> =
+                binomial_probability(&interval_counts, &interval_length, distinct_rate, tlen);
             temp_prob = prob_dr.iter().map(|&x| x as f32).collect();
         }
 

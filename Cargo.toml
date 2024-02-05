@@ -24,6 +24,7 @@ statrs = "0.16"
 csv = "1.3"
 ndarray = "0.15"
 serde = { version = "1", features = ["derive"] }
+itertools = "0.12.1"
 
 [[bin]]
 name = "oarfish"
