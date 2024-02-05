@@ -19,11 +19,10 @@ pub fn normalize_read_probs(store: &mut InMemoryAlignmentStore, txp_info: &[Tran
             }
             normalize_probs_temp.push(cov_prob);
         }
-        let sum_normalize_probs_temp: f64 = if normalize_probs_temp.iter().sum::<f64>() > 0.0 {
-            normalize_probs_temp.iter().sum()
-        } else {
-            1.0
-        };
+
+        let nprob_sum = normalize_probs_temp.iter().sum::<f64>();
+        let sum_normalize_probs_temp: f64 = if nprob_sum > 0.0 { nprob_sum } else { 1.0 };
+
         let normalized_prob_section: Vec<f64> = normalize_probs_temp
             .iter()
             .map(|&prob| prob / sum_normalize_probs_temp)

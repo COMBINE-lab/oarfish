@@ -81,7 +81,7 @@ pub fn binomial_probability(
 
     // Compute the sum of probabilities
     let sum: f64 = result.iter().sum();
-   
+
     // Normalize the probabilities by dividing each element by the sum
     let normalized_prob: Vec<f64> = result
         .iter()

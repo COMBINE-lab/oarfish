@@ -6,6 +6,7 @@ use std::{
     path::PathBuf,
 };
 
+use itertools::izip;
 use num_format::{Locale, ToFormattedString};
 use tracing::info;
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
@@ -87,7 +88,7 @@ fn m_step(
 ) {
     for (alns, probs, coverage_probs) in eq_map.iter() {
         let mut denom = 0.0_f64;
-        for (a, (p, cp)) in alns.iter().zip(probs.iter().zip(coverage_probs.iter())) {
+        for (a, p, cp) in izip!(alns, probs, coverage_probs) {
             // Compute the probability of assignment of the
             // current read based on this alignment and the
             // target's estimated abundance.
@@ -103,7 +104,7 @@ fn m_step(
             // Loop over all possible assignment locations and proportionally
             // allocate the read according to our model and current parameter
             // estimates.
-            for (a, (p, cp)) in alns.iter().zip(probs.iter().zip(coverage_probs.iter())) {
+            for (a, p, cp) in izip!(alns, probs, coverage_probs) {
                 let target_id = a.ref_id as usize;
                 let prob = *p as f64;
                 let cov_prob = if model_coverage { *cp } else { 1.0 };
