@@ -16,7 +16,7 @@ pub fn bin_transcript_normalize_counts(
             if i != (nbins - 1) {
                 i as f32 * bin_size..(i + 1) as f32 * bin_size
             } else {
-                i as f32 * bin_size..transcript_len as f32
+                i as f32 * bin_size..(transcript_len + 1) as f32
             }
         })
         .collect();
@@ -34,10 +34,10 @@ pub fn bin_transcript_normalize_counts(
                 // read contains the entire bin
                 bin_inc = 1.0;
                 discarded_read_flag = false;
-            } else if (read.start as f32) >= bin.start
-                && (read.end as f32) >= bin.start
-                && (read.start as f32) < bin.end
-                && (read.end as f32) < bin.end
+            } else if (read.start as f32) > bin.start
+                && (read.end as f32) > bin.start
+                && (read.start as f32) <= bin.end
+                && (read.end as f32) <= bin.end
             {
                 // read is contained within the bin
                 bin_inc = (read.end - read.start) as f64 / (bin.end - bin.start) as f64;

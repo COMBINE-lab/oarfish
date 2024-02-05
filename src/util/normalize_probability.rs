@@ -1,6 +1,6 @@
 use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
 
-pub fn normalize_read_probs(store: &mut InMemoryAlignmentStore, txp_info: &[TranscriptInfo]) {
+pub fn normalize_read_probs(store: &mut InMemoryAlignmentStore, txp_info: &[TranscriptInfo], num_bins: &u32) {
     let mut normalize_probs_temp: Vec<f64> = vec![];
     let mut normalized_coverage_prob: Vec<f64> = vec![];
 
@@ -8,11 +8,40 @@ pub fn normalize_read_probs(store: &mut InMemoryAlignmentStore, txp_info: &[Tran
     for (alns, _as_probs, _coverage_prob) in store.iter() {
         //iterate over the alignments of a read
         for a in alns.iter() {
-            let target_id = a.ref_id as usize;
-            let start_aln = a.start as usize;
-            let end_aln = a.end as usize;
-            let cov_prob = (txp_info[target_id].coverage_prob[end_aln]
-                - txp_info[target_id].coverage_prob[start_aln]) as f64;
+            let target_id: usize = a.ref_id as usize;
+            let start_aln: f32 = a.start as f32;
+            let end_aln: f32 = a.end as f32;
+            let tlen: f32 = txp_info[target_id].len.get() as f32;
+            let bin_length: f32 = tlen / *num_bins as f32;
+            let start_bin: usize = (start_aln as f32 / bin_length) as usize;
+            let end_bin: usize = (end_aln as f32/ bin_length) as usize;
+            let coverage_probability: &Vec<f64> = &txp_info[target_id].coverage_prob;
+
+            let cov_prob: f64 = (start_bin..=end_bin)
+                .map(|i| {
+                    match (i == start_bin, i == end_bin, end_bin == (*num_bins - 1) as usize) {
+                        (true, false, false) => {
+                            let coverage_prob = coverage_probability[i] / (((i + 1) as f32 * bin_length).floor() - (i as f32 * bin_length).floor()) as f64;
+                            ((start_aln as usize)..((i + 1) as usize * bin_length.ceil() as usize))
+                                .map(|_j| coverage_prob)
+                                .sum()
+                        }
+                        (false, true, true) => {
+                            let coverage_prob = coverage_probability[i] / (tlen + 1.0 - (i as f32 * bin_length).ceil()) as f64;
+                            ((i as usize * bin_length.ceil() as usize)..=(end_aln as usize))
+                                .map(|_j| coverage_prob)
+                                .sum()
+                        }
+                        (false, true, false) => {
+                            let coverage_prob = coverage_probability[i] / (((i + 1) as f32 * bin_length).floor() - (i as f32 * bin_length).floor()) as f64;
+                            ((i as usize * bin_length.ceil() as usize)..=(end_aln as usize))
+                                .map(|_j| coverage_prob)
+                                .sum()
+                        }
+                        _ => coverage_probability[i],
+                    }
+                })
+                .sum();
 
             if cov_prob.is_nan() || cov_prob.is_infinite() {
                 panic!("Error: Invalid result. normalize_read_probs function.");

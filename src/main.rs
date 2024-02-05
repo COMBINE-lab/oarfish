@@ -354,7 +354,7 @@ fn main() -> io::Result<()> {
         //obtaining the Cumulative Distribution Function (CDF) for each transcript
         binomial_continuous_prob(&mut txps, &args.bins, args.threads);
         //Normalize the probabilities for the records of each read
-        normalize_read_probs(&mut store, &txps);
+        normalize_read_probs(&mut store, &txps, &args.bins);
         info!("done");
     }
 

@@ -107,7 +107,7 @@ pub struct TranscriptInfo {
     pub total_weight: f64,
     coverage_bins: Vec<f64>,
     pub ranges: Vec<std::ops::Range<u32>>,
-    pub coverage_prob: Vec<f32>,
+    pub coverage_prob: Vec<f64>,
     pub lenf: f64,
 }
 

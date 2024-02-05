@@ -8,23 +8,20 @@ pub fn binomial_probability(
     interval_count: &[f32],
     interval_length: &[f32],
     distinct_rate: f64,
-    tlen: usize,
 ) -> Vec<f64> {
     let interval_counts = interval_count;
     let interval_lengths = interval_length;
     let count_sum = interval_counts.iter().sum::<f32>();
-    const ZERO_THRESH: f64 = 1e-8;
+    const ZERO_THRESH: f64 = 1e-20;
 
     if count_sum == 0.0 {
-        return vec![0.0; tlen + 1];
+        return vec![0.0; interval_counts.len()];
     }
 
     if distinct_rate == 0.0 {
-        return vec![0.0; tlen + 1];
+        return vec![0.0; interval_counts.len()];
     }
 
-    //eprintln!("counts: {:?}", interval_counts);
-    //eprintln!("length: {:?}", interval_lengths);
     let probabilities: Vec<f64> = interval_counts
         .iter()
         .zip(interval_lengths.iter())
@@ -37,8 +34,6 @@ pub fn binomial_probability(
             }
         })
         .collect();
-
-    //eprintln!("prob: {:?}", probabilities);
 
     // compute the quantities (in the numerator and denominator) that we will
     // use to compute the binomial probabilities.
@@ -76,8 +71,6 @@ pub fn binomial_probability(
             res
         }).collect();
 
-    let bin_length = interval_lengths[0];
-    let num_bins = interval_lengths.len() as u32;
 
     // Compute the sum of probabilities
     let sum: f64 = result.iter().sum();
@@ -85,39 +78,11 @@ pub fn binomial_probability(
     // Normalize the probabilities by dividing each element by the sum
     let normalized_prob: Vec<f64> = result
         .iter()
-        .map(|&prob| prob / (bin_length as f64 * sum))
+        .map(|&prob| prob / sum)
         .collect();
 
-    let mut prob_vec = vec![0.0; tlen + 1];
-    let mut bin_start = 0;
-    for i in 0..num_bins {
-        //let bin_start = i * interval_lengths[i as usize];
-        let start_index = bin_start;
-        let bin_end = (i + 1) as f32 * interval_lengths[i as usize];
 
-        //let start_index = if i == 0 { bin_start } else { bin_start + 1 };
-        let end_index = if i + 1 == num_bins {
-            (tlen + 1) as u32
-        } else {
-            bin_end.floor() as u32
-        };
-
-        prob_vec[start_index as usize..end_index as usize]
-            .iter_mut()
-            .for_each(|v| *v = normalized_prob[i as usize]);
-
-        bin_start = end_index;
-    }
-
-    let cdf: Vec<f64> = prob_vec
-        .iter()
-        .scan(0.0, |acc, &prob| {
-            *acc += prob;
-            Some(*acc)
-        })
-        .collect();
-
-    cdf
+    normalized_prob
 }
 
 pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, threads: usize) {
@@ -133,7 +98,7 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
         .unwrap();
 
     txps.par_iter_mut().enumerate().for_each(|(_i, t)| {
-        let temp_prob: Vec<f32>;
+        let temp_prob: Vec<f64>;
 
         if *bins != 0 {
             //eprintln!("in multinomial prob");
@@ -149,15 +114,13 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
             ) = bin_transcript_normalize_counts(t, bins); //binning the transcript length and obtain the counts and length vectors
                                                           //==============================================================================================
 
-            let tlen = t.len.get(); //transcript length
             let distinct_rate: f64 = bin_counts
                 .iter()
                 .zip(bin_lengths.iter())
                 .map(|(&count, &length)| (count as f64) / (length as f64))
                 .sum();
-            let prob_dr: Vec<f64> =
-                binomial_probability(&bin_counts, &bin_lengths, distinct_rate, tlen);
-            temp_prob = prob_dr.iter().map(|&x| x as f32).collect();
+            temp_prob =
+                binomial_probability(&bin_counts, &bin_lengths, distinct_rate);
         } else {
             //not binning the transcript length
             let len = t.len.get() as u32; //transcript length
@@ -192,15 +155,13 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
                 );
             }
 
-            let tlen = t.len.get(); //transcript length
             let distinct_rate: f64 = interval_counts
                 .iter()
                 .zip(interval_length.iter())
                 .map(|(&count, &length)| (count as f64) / (length as f64))
                 .sum();
-            let prob_dr: Vec<f64> =
-                binomial_probability(&interval_counts, &interval_length, distinct_rate, tlen);
-            temp_prob = prob_dr.iter().map(|&x| x as f32).collect();
+            temp_prob =
+                binomial_probability(&interval_counts, &interval_length, distinct_rate);
         }
 
         t.coverage_prob = temp_prob;
