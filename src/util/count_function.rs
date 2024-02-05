@@ -52,7 +52,7 @@ pub fn bin_transcript_normalize_counts(
                 discarded_read_flag = false;
             }
             bin_counts[i] += bin_inc as f32;
-            bin_coverage[i] += bin_inc;
+            bin_coverage[i] = bin_inc;
         }
 
         if discarded_read_flag {
