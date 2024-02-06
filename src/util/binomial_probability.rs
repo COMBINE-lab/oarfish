@@ -71,16 +71,11 @@ pub fn binomial_probability(
             res
         }).collect();
 
-
     // Compute the sum of probabilities
     let sum: f64 = result.iter().sum();
 
     // Normalize the probabilities by dividing each element by the sum
-    let normalized_prob: Vec<f64> = result
-        .iter()
-        .map(|&prob| prob / sum)
-        .collect();
-
+    let normalized_prob: Vec<f64> = result.iter().map(|&prob| prob / sum).collect();
 
     normalized_prob
 }
@@ -119,8 +114,7 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
                 .zip(bin_lengths.iter())
                 .map(|(&count, &length)| (count as f64) / (length as f64))
                 .sum();
-            temp_prob =
-                binomial_probability(&bin_counts, &bin_lengths, distinct_rate);
+            temp_prob = binomial_probability(&bin_counts, &bin_lengths, distinct_rate);
         } else {
             //not binning the transcript length
             let len = t.len.get() as u32; //transcript length
@@ -160,8 +154,7 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
                 .zip(interval_length.iter())
                 .map(|(&count, &length)| (count as f64) / (length as f64))
                 .sum();
-            temp_prob =
-                binomial_probability(&interval_counts, &interval_length, distinct_rate);
+            temp_prob = binomial_probability(&interval_counts, &interval_length, distinct_rate);
         }
 
         t.coverage_prob = temp_prob;
