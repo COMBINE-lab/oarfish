@@ -17,6 +17,7 @@ theme:
         name: Switch to light mode
 
 markdown_extensions:
+  - footnotes
   - pymdownx.arithmatex:
       generic: true
 
