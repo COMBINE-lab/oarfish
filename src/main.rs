@@ -25,7 +25,6 @@ use crate::util::write_function::write_out_count;
 /// accurate transcript quantification from long-read RNA-seq data
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
-
 struct Args {
     /// path to the file containing the input alignments
     #[arg(short, long, required = true)]
@@ -86,6 +85,7 @@ fn m_step(
     prev_count: &mut [f64],
     curr_counts: &mut [f64],
 ) {
+    const DENOM_THRESH: f64 = 1e-30_f64;
     for (alns, probs, coverage_probs) in eq_map.iter() {
         let mut denom = 0.0_f64;
         for (a, p, cp) in izip!(alns, probs, coverage_probs) {
@@ -100,7 +100,7 @@ fn m_step(
         }
 
         // If this read can be assigned
-        if denom > 1e-30_f64 {
+        if denom > DENOM_THRESH {
             // Loop over all possible assignment locations and proportionally
             // allocate the read according to our model and current parameter
             // estimates.
@@ -120,6 +120,7 @@ fn m_step(
 /// each of which is the estimated number of fragments arising from
 /// each target.
 fn em(em_info: &mut EMInfo, short_read_path: Option<String>, txps_name: &Vec<String>) -> Vec<f64> {
+
     let eq_map = em_info.eq_map;
     let fops = &eq_map.filter_opts;
     let tinfo: &mut Vec<TranscriptInfo> = em_info.txp_info;
@@ -127,12 +128,14 @@ fn em(em_info: &mut EMInfo, short_read_path: Option<String>, txps_name: &Vec<Str
     let convergence_thresh = em_info.convergence_thresh;
     let total_weight: f64 = eq_map.num_aligned_reads() as f64;
 
-    // init
+    // initialize the estimated counts for the EM procedure
     let mut prev_counts: Vec<f64>;
 
     if let Some(sr_path) = short_read_path {
+        // initalize with the short-read quantification
         prev_counts = short_quant_vec(sr_path, txps_name);
     } else {
+        // uniform, length normalized abundance
         let avg = total_weight / (tinfo.len() as f64);
         prev_counts = vec![avg; tinfo.len()];
     }

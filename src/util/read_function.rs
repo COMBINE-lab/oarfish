@@ -3,6 +3,8 @@ use csv::ReaderBuilder;
 use ndarray::Array2;
 use std::fs::File;
 
+
+/// Read the short read quantification from the file `short_read_path`
 pub fn short_quant_vec(short_read_path: String, txps_name: &Vec<String>) -> Vec<f64> {
     let file = File::open(short_read_path).expect("Failed to open file");
 
