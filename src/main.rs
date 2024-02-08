@@ -119,8 +119,7 @@ fn m_step(
 /// target sequences.  The return value is a `Vec` of f64 values,
 /// each of which is the estimated number of fragments arising from
 /// each target.
-fn em(em_info: &mut EMInfo, short_read_path: Option<String>, txps_name: &Vec<String>) -> Vec<f64> {
-
+fn em(em_info: &mut EMInfo, short_read_path: Option<String>, txps_name: &[String]) -> Vec<f64> {
     let eq_map = em_info.eq_map;
     let fops = &eq_map.filter_opts;
     let tinfo: &mut Vec<TranscriptInfo> = em_info.txp_info;
@@ -133,8 +132,7 @@ fn em(em_info: &mut EMInfo, short_read_path: Option<String>, txps_name: &Vec<Str
 
     if let Some(sr_path) = short_read_path {
         // initalize with the short-read quantification
-        prev_counts = read_short_quant_vec(&sr_path, txps_name)
-            .expect(&format!("could not read short read quantifications from file {}", sr_path));
+        prev_counts = read_short_quant_vec(&sr_path, txps_name).unwrap_or_else(|e| panic!("{}", e));
     } else {
         // uniform, length normalized abundance
         let avg = total_weight / (tinfo.len() as f64);

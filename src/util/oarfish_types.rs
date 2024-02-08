@@ -85,10 +85,11 @@ pub struct ShortReadRecord {
     pub num_reads: f64,
 }
 
+#[allow(dead_code)]
 impl ShortReadRecord {
-    pub fn empty(name: &String) -> Self {
+    pub fn empty(name: &str) -> Self {
         Self {
-            name: name.clone(),
+            name: name.to_owned(),
             length: 0,
             effective_length: 0.0,
             tpm: 0.0,

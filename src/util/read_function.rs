@@ -1,11 +1,15 @@
 use crate::util::oarfish_types::ShortReadRecord;
+use anyhow::bail;
 use csv::ReaderBuilder;
-use ndarray::Array2;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
-
+use tracing::warn;
 
 /// Read the short read quantification from the file `short_read_path`
-pub fn read_short_quant_vec(short_read_path: &str, txps_name: &[String]) -> anyhow::Result<Vec<f64>> {
+pub fn read_short_quant_vec(
+    short_read_path: &str,
+    txps_name: &[String],
+) -> anyhow::Result<Vec<f64>> {
     // try to open the short read file
     let file = File::open(short_read_path)?;
 
@@ -16,7 +20,7 @@ pub fn read_short_quant_vec(short_read_path: &str, txps_name: &[String]) -> anyh
         .from_reader(file);
 
     // deserialize CSV records into a Vec of ShortReadRecords
-    let records: Vec<ShortReadRecord> = rdr
+    let records: HashMap<String, ShortReadRecord> = rdr
         .deserialize()
         .collect::<Result<Vec<ShortReadRecord>, csv::Error>>()
         .unwrap_or_else(|err| {
@@ -24,68 +28,45 @@ pub fn read_short_quant_vec(short_read_path: &str, txps_name: &[String]) -> anyh
             std::process::exit(1);
         })
         .into_iter()
+        .map(|rec| (rec.name.clone(), rec))
         .collect();
 
-    // Convert the Vec of Records into an ndarray::Array2
-    let mut data_array = Array2::from_shape_vec(
-        (records.len(), 2),
-        records
+    // txps_name are the transcript names in the BAM header. We expect
+    // that all elements that we see in the short read file should
+    // exist in txps_name. If they don't then this is an error.
+    {
+        // create a scope here to free the HashSet as soon as we are done checking
+        let txps_name_set: HashSet<&str> = txps_name.iter().map(|x| x.as_str()).collect();
+        if !records
             .iter()
-            .flat_map(|r| vec![r.name.clone(), r.num_reads.to_string()])
-            .collect(),
-    )
-    .unwrap();
-
-    //obtain the first column of the data_array and check if all the elements exist in txps_name
-    let first_column: Vec<String> = data_array.column(0).to_owned().to_vec();
-    let all_elements_exist = first_column
-        .iter()
-        .all(|element| txps_name.contains(element));
-
-    if all_elements_exist && (first_column.len() != txps_name.len()) {
-        let txps_not_in_first_column: Vec<String> = txps_name
-            .iter()
-            .filter(|&x| !first_column.contains(x))
-            .cloned()
-            .collect();
-
-        // Create new records for the missing elements and append them to the records vector
-        let missing_records: Vec<ShortReadRecord> = txps_not_in_first_column
-            .iter()
-            .map(|name| ShortReadRecord::empty(&name))
-            .collect();
-
-        let mut updated_records = records.clone();
-        updated_records.extend(missing_records);
-
-        // Update the data_array with the new records
-        data_array = Array2::from_shape_vec(
-            (updated_records.len(), 2),
-            updated_records
-                .iter()
-                .flat_map(|r| vec![r.name.clone(), r.num_reads.to_string()])
-                .collect(),
-        )
-        .unwrap();
-    } else if !all_elements_exist {
-        panic!("All the transcripts in the short read quants do not exist in the header file of the BAM file.");
+            .all(|(k, _v)| txps_name_set.contains(k.as_str()))
+        {
+            bail!("There were transcripts in the short read quantification file that didn't appear in the BAM header; cannot proceed.");
+        }
     }
 
-    //define the indices vector
-    let first_column: Vec<String> = data_array.column(0).to_owned().to_vec();
-    let indices: Vec<usize> = txps_name
+    // project the short read records to a vector in the same order of
+    // txps_name, filling in records missing in the short read HashMap
+    // with default values
+    let mut num_missing = 0;
+    let ordered_rec: Vec<f64> = txps_name
         .iter()
-        .map(|x| first_column.iter().position(|y| y == x).unwrap_or_default())
+        .map(|name| {
+            records.get(name).map_or_else(
+                // we are missing this record, return 0 abundance
+                || {
+                    num_missing += 1;
+                    0_f64
+                },
+                // return the number of reads from the record
+                |rec| rec.num_reads,
+            )
+        })
         .collect();
 
-    // Rearrange rows based on an arbitrary indices vector
-    data_array = data_array.select(ndarray::Axis(0), &indices);
+    if num_missing > 0 {
+        warn!("There were {} transcripts appearing in the BAM header but missing from the short read quatifications; they have been assumed to have 0 abunance.", num_missing);
+    }
 
-    let second_column: ndarray::Array<_, _> = data_array.column(1).to_owned();
-    let second_column_vec: Vec<f64> = second_column
-        .iter()
-        .map(|count| count.parse::<f64>().expect("Failed to parse as f64"))
-        .collect();
-
-    Ok(second_column_vec)
+    Ok(ordered_rec)
 }
