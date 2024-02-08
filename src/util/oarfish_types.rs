@@ -236,12 +236,16 @@ impl<'h> InMemoryAlignmentStore<'h> {
         if !alns.is_empty() {
             self.alignments.extend_from_slice(&alns);
             self.as_probabilities.extend_from_slice(&as_probs);
-            self.coverage_probabilities
-                .extend(vec![0.0_f64; self.alignments.len()]);
+            //self.coverage_probabilities
+            //    .extend(vec![0.0_f64; self.alignments.len()]);
             self.boundaries.push(self.alignments.len());
-            for a in alns {
-                txps[a.ref_id as usize].ranges.push(a.start..a.end);
-            }
+            // @Susan-Zare : this is making things unreasonably slow. Perhaps 
+            // we should avoid pushing actual ranges, and just compute the 
+            // contribution of each range to the coverage online.
+            //for a in alns {
+            //    txps[a.ref_id as usize].ranges.push(a.start..a.end);
+            //}
+            //
         }
     }
 
@@ -371,6 +375,15 @@ impl fmt::Display for DiscardTable {
 }
 
 impl AlignmentFilters {
+    /// Applies the filters defined by this AlignmentFilters struct 
+    /// to the alignments provided in `ag`, a vector of alignments representing
+    /// a group of contiguous alignments for the same target.
+    ///
+    /// The details about what alignments have been filtered and why will
+    /// be added to the provided `discard_table`.  
+    ///
+    /// This function returns a vector of the `AlnInfo` structs for alignments
+    /// that pass the filter, and the associated probabilities for each.
     fn filter<T: sam::alignment::record::Record + std::fmt::Debug>(
         &mut self,
         discard_table: &mut DiscardTable,
@@ -404,7 +417,9 @@ impl AlignmentFilters {
             })
             .unwrap_or(0_u32);
 
+        // apply the filter criteria to determine what alignments to retain
         ag.retain(|x| {
+            // we ony want to retain mapped reads
             if !x
                 .flags()
                 .expect("alignment record should have flags")
@@ -414,20 +429,11 @@ impl AlignmentFilters {
                     .reference_sequence_id(aln_header)
                     .unwrap()
                     .expect("valid tid");
+
+                // get the alignment span
                 let aln_span = x.alignment_span().expect("valid span").unwrap() as u32;
 
-                /*let astart = x.alignment_start().expect("should have valid alignment start").unwrap();
-                let aend = x.alignment_end().expect("should have valid alignment end").unwrap();
-                let aspan = x.cigar().alignment_span();
-                */
-                //(aend.get() as u32) - (astart.get() as u32);
-                /*
-                use std::str;
-                let read_name = str::from_utf8(x.name().unwrap().as_bytes()).expect("ok").to_owned();
-                if  read_name == "SRR14286054.2187" {
-                    println!("read_name = {read_name}, astart = {}, aend = {}, aln_span = {}, FETCHED ALN SPAN  = {aspan:?}, rec = {:?}", astart, aend, aln_span, x);
-                }
-                */
+                // get the alignment score, as computed by the aligner 
                 let score = x
                     .data()
                     .get(&AlnTag::ALIGNMENT_SCORE)
@@ -441,6 +447,9 @@ impl AlignmentFilters {
                     .flags()
                     .expect("alignment record should have flags")
                     .is_reverse_complemented();
+
+                // filter this alignment out if we are not permitting 
+                // antisense alignments.
                 if is_rc && !self.allow_rc {
                     discard_table.discard_ori += 1;
                     return false;
@@ -584,95 +593,6 @@ impl AlignmentFilters {
         )
     }
 }
-
-/*
-struct FullLengthProbs {
-    length_bins: Vec<usize>,
-    probs: Vec<Vec<f64>>,
-    new_probs: Vec<Vec<f64>>,
-}
-
-impl FullLengthProbs {
-    const NUM_BINS: usize = 10;
-
-    fn get_bin(span: u32, len: f64) -> usize {
-        let len_frac = (len - span as f64) / len;
-        (len_frac * FullLengthProbs::NUM_BINS as f64)
-            .round()
-            .min((FullLengthProbs::NUM_BINS - 1) as f64) as usize
-    }
-
-    fn from_data(
-        eq_map: &InMemoryAlignmentStore,
-        tinfo: &[TranscriptInfo],
-        len_bins: &[usize],
-    ) -> Self {
-        let mut len_probs: Vec<Vec<f64>> =
-            vec![vec![0.0f64; FullLengthProbs::NUM_BINS]; len_bins.len()];
-        let new_probs: Vec<Vec<f64>> =
-            vec![vec![0.0f64; FullLengthProbs::NUM_BINS]; len_bins.len()];
-
-        for (alns, probs, _coverage_probs) in eq_map.iter() {
-            let inc = 1f64 / probs.len() as f64;
-            for a in alns {
-                let target_id = a.ref_id as usize;
-                let tlenf = tinfo[target_id].lenf;
-                let tlen = tlenf as usize;
-                let lindex = match len_bins.binary_search(&tlen) {
-                    Ok(i) => i,
-                    Err(i) => i,
-                };
-                let bin_num = FullLengthProbs::get_bin(a.alignment_span(), tlenf);
-                len_probs[lindex][bin_num] += inc;
-            }
-        }
-
-        for lb in len_probs.iter_mut() {
-            let tot: f64 = (*lb).iter().sum();
-            if tot > 0.0 {
-                lb.iter_mut().for_each(|v| *v /= tot);
-            }
-        }
-
-        FullLengthProbs {
-            length_bins: len_bins.to_vec(),
-            probs: len_probs,
-            new_probs,
-        }
-    }
-
-    fn get_prob_for(&self, a: &AlnInfo, len: usize) -> f64 {
-        let lindex = match self.length_bins.binary_search(&len) {
-            Ok(i) => i,
-            Err(i) => i,
-        };
-        let lenf = len as f64;
-        let bindex = FullLengthProbs::get_bin(a.alignment_span(), lenf);
-        self.probs[lindex][bindex]
-    }
-
-    fn update_probs(&mut self, a: &AlnInfo, len: usize, inc: f64) {
-        let lindex = match self.length_bins.binary_search(&len) {
-            Ok(i) => i,
-            Err(i) => i,
-        };
-        let lenf = len as f64;
-        let bindex = FullLengthProbs::get_bin(a.alignment_span(), lenf);
-        self.new_probs[lindex][bindex] += inc;
-    }
-
-    fn swap_probs(&mut self) {
-        std::mem::swap(&mut self.probs, &mut self.new_probs);
-        for lb in self.probs.iter_mut() {
-            let tot: f64 = (*lb).iter().sum();
-            if tot > 0.0 {
-                lb.iter_mut().for_each(|v| *v /= tot);
-            }
-        }
-        self.new_probs.fill(vec![0.0f64; FullLengthProbs::NUM_BINS]);
-    }
-}
-*/
 
 #[cfg(test)]
 mod tests {

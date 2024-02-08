@@ -22,6 +22,21 @@ use crate::util::oarfish_types::{
 use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::write_out_count;
 
+#[derive(Clone, Debug, clap::ValueEnum)]
+enum FilterGroup {
+    NoFilters,
+    NanocountFilters,
+}
+
+
+fn filter_type_parser(s: &str) -> Result<FilterGroup, String> {
+    match s {
+        "none" | "no" => Ok(FilterGroup::NoFilters),
+        "nanocount" | "Nanocount" | "NanoCount" => Ok(FilterGroup::NanocountFilters),
+        t => Err(format!("Do not recognize filter type {}", t)),
+    }
+}
+
 /// accurate transcript quantification from long-read RNA-seq data
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -32,43 +47,47 @@ struct Args {
     /// location where output quantification file should be written
     #[arg(short, long, required = true)]
     output: String,
+
+    #[arg(long, help_heading="filters", value_enum)]
+    filter_group: Option<FilterGroup>,
+
     /// maximum allowable distance of the right-most end of an alignment from the 3' transcript end
-    #[arg(short, long,  default_value_t = u32::MAX as i64)]
+    #[arg(short, long, conflicts_with = "filter-group", help_heading="filters", default_value_t = u32::MAX as i64)]
     three_prime_clip: i64,
     /// maximum allowable distance of the left-most end of an alignment from the 5' transcript end
-    #[arg(short, long,  default_value_t = u32::MAX)]
+    #[arg(short, long, conflicts_with = "filter-group", help_heading="filters", default_value_t = u32::MAX)]
     five_prime_clip: u32,
     /// fraction of the best possible alignment score that a secondary alignment must have for
     /// consideration
-    #[arg(short, long, default_value_t = 0.95)]
+    #[arg(short, long, conflicts_with = "filter-group", help_heading="filters", default_value_t = 0.95)]
     score_threshold: f32,
     /// fraction of a query that must be mapped within an alignemnt to consider the alignemnt
     /// valid
-    #[arg(short, long, default_value_t = 0.5)]
+    #[arg(short, long, conflicts_with = "filter-group", help_heading="filters", default_value_t = 0.5)]
     min_aligned_fraction: f32,
     /// minimum number of nucleotides in the aligned portion of a read
-    #[arg(short = 'l', long, default_value_t = 50)]
+    #[arg(short = 'l', long, conflicts_with = "filter-group", help_heading="filters", default_value_t = 50)]
     min_aligned_len: u32,
     /// allow both forward-strand and reverse-complement alignments
-    #[arg(short = 'n', long, value_parser)]
+    #[arg(short = 'n', long, conflicts_with = "filter-group", help_heading="filters", value_parser)]
     allow_negative_strand: bool,
     /// apply the coverage model
-    #[arg(long, value_parser)]
+    #[arg(long, help_heading="coverage model", value_parser)]
     model_coverage: bool,
     /// maximum number of iterations for which to run the EM algorithm
-    #[arg(long, default_value_t = 1000)]
+    #[arg(long, help_heading="EM", default_value_t = 1000)]
     max_em_iter: u32,
     /// maximum number of iterations for which to run the EM algorithm
-    #[arg(long, default_value_t = 1e-3)]
+    #[arg(long, help_heading="EM", default_value_t = 1e-3)]
     convergence_thresh: f64,
     /// maximum number of cores that the oarfish can use to obtain binomial probability
     #[arg(short, long, default_value_t = 1)]
     threads: usize,
     /// location of short read quantification (if provided)
-    #[arg(short = 'q', long)]
+    #[arg(short = 'q', long, help_heading="EM")]
     short_quant: Option<String>,
     /// number of bins to use in coverage model
-    #[arg(short, long, default_value_t = 10)]
+    #[arg(short, long, help_heading="coverage model", default_value_t = 10)]
     bins: u32,
 }
 
@@ -227,15 +246,44 @@ fn main() -> io::Result<()> {
 
     // set all of the filter options that the user
     // wants to apply.
-    let filter_opts = AlignmentFilters::builder()
-        .five_prime_clip(args.five_prime_clip)
-        .three_prime_clip(args.three_prime_clip)
-        .score_threshold(args.score_threshold)
-        .min_aligned_fraction(args.min_aligned_fraction)
-        .min_aligned_len(args.min_aligned_len)
-        .allow_rc(args.allow_negative_strand)
-        .model_coverage(args.model_coverage)
-        .build();
+    let filter_opts = match args.filter_group {
+        Some(FilterGroup::NoFilters) => {
+            info!("disabling alignment filters.");
+            AlignmentFilters::builder()
+                .five_prime_clip(u32::MAX)
+                .three_prime_clip(i64::MAX)
+                .score_threshold(0_f32)
+                .min_aligned_fraction(0_f32)
+                .min_aligned_len(1_u32)
+                .allow_rc(true)
+                .model_coverage(args.model_coverage)
+                .build()
+        },
+        Some(FilterGroup::NanocountFilters) => {
+            info!("setting filters to nanocount defaults.");
+            AlignmentFilters::builder()
+                .five_prime_clip(u32::MAX)
+                .three_prime_clip(50_i64)
+                .score_threshold(0.95_f32)
+                .min_aligned_fraction(0.5_f32)
+                .min_aligned_len(50_u32)
+                .allow_rc(false)
+                .model_coverage(args.model_coverage)
+                .build()
+        },
+        None => { 
+            info!("setting user-provided filter parameters.");
+            AlignmentFilters::builder()
+                .five_prime_clip(args.five_prime_clip)
+                .three_prime_clip(args.three_prime_clip)
+                .score_threshold(args.score_threshold)
+                .min_aligned_fraction(args.min_aligned_fraction)
+                .min_aligned_len(args.min_aligned_len)
+                .allow_rc(args.allow_negative_strand)
+                .model_coverage(args.model_coverage)
+                .build()
+        }
+    };
 
     let mut reader = File::open(&args.alignments)
         .map(BufReader::new)
@@ -304,8 +352,11 @@ fn main() -> io::Result<()> {
     // critical information was missing from the records. This happened when
     // moving to the new version of noodles. Track `https://github.com/zaeleus/noodles/issues/230`
     // to see if it's clear why this is the case
-    for result in reader.record_bufs(&header) {
+    for (i, result) in reader.record_bufs(&header).enumerate() {
         let record = result?;
+        if i % 10000 == 0 {
+            info!("processed {} records", i);
+        }
         // unmapped reads don't contribute to quantification
         // but we track them.
         if record.flags().is_unmapped() {
