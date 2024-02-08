@@ -19,7 +19,7 @@ use crate::util::normalize_probability::normalize_read_probs;
 use crate::util::oarfish_types::{
     AlignmentFilters, EMInfo, InMemoryAlignmentStore, TranscriptInfo,
 };
-use crate::util::read_function::short_quant_vec;
+use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::write_out_count;
 
 /// accurate transcript quantification from long-read RNA-seq data
@@ -133,7 +133,8 @@ fn em(em_info: &mut EMInfo, short_read_path: Option<String>, txps_name: &Vec<Str
 
     if let Some(sr_path) = short_read_path {
         // initalize with the short-read quantification
-        prev_counts = short_quant_vec(sr_path, txps_name);
+        prev_counts = read_short_quant_vec(&sr_path, txps_name)
+            .expect(&format!("could not read short read quantifications from file {}", sr_path));
     } else {
         // uniform, length normalized abundance
         let avg = total_weight / (tinfo.len() as f64);

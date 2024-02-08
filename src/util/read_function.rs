@@ -1,23 +1,24 @@
-use crate::util::oarfish_types::Record;
+use crate::util::oarfish_types::ShortReadRecord;
 use csv::ReaderBuilder;
 use ndarray::Array2;
 use std::fs::File;
 
 
 /// Read the short read quantification from the file `short_read_path`
-pub fn short_quant_vec(short_read_path: String, txps_name: &Vec<String>) -> Vec<f64> {
-    let file = File::open(short_read_path).expect("Failed to open file");
+pub fn read_short_quant_vec(short_read_path: &str, txps_name: &[String]) -> anyhow::Result<Vec<f64>> {
+    // try to open the short read file
+    let file = File::open(short_read_path)?;
 
-    // Read data from a CSV file (replace with your data source)
+    // read the data as a tab-delimited TSV file.
     let mut rdr = ReaderBuilder::new()
         .has_headers(true)
         .delimiter(b'\t')
         .from_reader(file);
 
-    // Deserialize CSV records into a Vec of Records
-    let records: Vec<Record> = rdr
+    // deserialize CSV records into a Vec of ShortReadRecords
+    let records: Vec<ShortReadRecord> = rdr
         .deserialize()
-        .collect::<Result<Vec<Record>, csv::Error>>()
+        .collect::<Result<Vec<ShortReadRecord>, csv::Error>>()
         .unwrap_or_else(|err| {
             eprintln!("Failed to deserialize CSV records: {}", err);
             std::process::exit(1);
@@ -49,15 +50,9 @@ pub fn short_quant_vec(short_read_path: String, txps_name: &Vec<String>) -> Vec<
             .collect();
 
         // Create new records for the missing elements and append them to the records vector
-        let missing_records: Vec<Record> = txps_not_in_first_column
+        let missing_records: Vec<ShortReadRecord> = txps_not_in_first_column
             .iter()
-            .map(|name| Record {
-                name: name.clone(),
-                length: 0,
-                effective_length: 0.0,
-                tpm: 0.0,
-                num_reads: 0.0,
-            })
+            .map(|name| ShortReadRecord::empty(&name))
             .collect();
 
         let mut updated_records = records.clone();
@@ -92,5 +87,5 @@ pub fn short_quant_vec(short_read_path: String, txps_name: &Vec<String>) -> Vec<
         .map(|count| count.parse::<f64>().expect("Failed to parse as f64"))
         .collect();
 
-    second_column_vec
+    Ok(second_column_vec)
 }

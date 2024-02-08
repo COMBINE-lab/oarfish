@@ -76,13 +76,25 @@ impl<T: sam::alignment::record::Record> From<&T> for AlnInfo {
 /// Holds the info relevant for reading the short read quants
 #[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
-pub struct Record {
+pub struct ShortReadRecord {
     pub name: String,
     pub length: i32,
     pub effective_length: f64,
     #[serde(rename = "TPM")]
     pub tpm: f64,
     pub num_reads: f64,
+}
+
+impl ShortReadRecord {
+    pub fn empty(name: &String) -> Self {
+        Self {
+            name: name.clone(),
+            length: 0,
+            effective_length: 0.0,
+            tpm: 0.0,
+            num_reads: 0.0,
+        }
+    }
 }
 
 /// Holds the info relevant for running the EM algorithm
