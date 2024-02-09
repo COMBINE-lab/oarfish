@@ -147,17 +147,64 @@ impl TranscriptInfo {
             lenf: len.get() as f64,
         }
     }
+    pub fn with_len_and_bins(len: NonZeroUsize, bins: u32) -> Self {
+        Self {
+            len,
+            total_weight: 0.0_f64,
+            coverage_bins: vec![0.0_f64; bins as usize],
+            ranges: Vec::new(),
+            coverage_prob: Vec::new(),
+            lenf: len.get() as f64,
+        }
+    }
 
+    #[inline(always)]
+    pub fn get_normalized_counts_and_lengths(&self) -> (Vec<f32>, Vec<f32>) {
+        let num_intervals = self.coverage_bins.len();
+        let num_intervals_f = num_intervals as f64;
+        let tlen_f = self.lenf;
+        let bin_width = (tlen_f /num_intervals_f).round() as f32;
+
+        let cov_f32 = self.coverage_bins.iter().map(|f| *f as f32).collect();
+        let mut widths_f32 = Vec::<f32>::with_capacity(num_intervals);
+        for bidx in 0..num_intervals {
+            let bidxf = bidx as f32;
+            let bin_start = (bidxf * bin_width) as f32;
+            let bin_end = ((bidxf + 1.0) * bin_width).min(self.lenf as f32) as f32;
+            widths_f32.push(bin_end - bin_start);
+        }
+        (cov_f32, widths_f32)
+    }
+
+    #[inline(always)]
     pub fn add_interval(&mut self, start: u32, stop: u32, weight: f64) {
-        const NUM_INTERVALS: usize = 10_usize;
-        const NUM_INTERVALS_F: f64 = 10.0_f64;
-        // find the starting bin
-        let start_bin = ((((start as f64) / self.lenf) * NUM_INTERVALS_F).floor() as usize)
-            .min(NUM_INTERVALS - 1);
-        let end_bin = ((((stop as f64) / self.lenf) * NUM_INTERVALS_F).floor() as usize)
-            .min(NUM_INTERVALS - 1);
-        for bin in &mut self.coverage_bins[start_bin..=end_bin] {
-            *bin += weight;
+        let num_intervals = self.coverage_bins.len();
+        let num_intervals_f = num_intervals as f64;
+        let tlen_f = self.lenf;
+        let bin_width = (tlen_f /num_intervals_f).round();
+        let start = start.min(stop);
+        let stop = start.max(stop);
+        let start_bin = (((start as f64) / tlen_f) * num_intervals_f).floor() as usize;
+        let end_bin = (((stop as f64) / tlen_f) * num_intervals_f).floor() as usize;
+
+        let get_overlap = |s1: u32, e1: u32, s2: u32, e2: u32| -> u32 {
+            if s1 <= e2 {
+                e1.min(e2) - s1.max(s2)
+            } else { 0_u32 }
+        };
+
+        for (bidx, bin) in self.coverage_bins[start_bin..end_bin].iter_mut().enumerate() {
+            let bidxf = (start_bin + bidx) as f64;
+            let curr_bin_start = (bidxf * bin_width) as u32;
+            let curr_bin_end = ((bidxf + 1.0) * bin_width).min(tlen_f) as u32;
+            
+            let olap = get_overlap(start, stop, curr_bin_start, curr_bin_end);
+            let olfrac = (olap as f64) / ((curr_bin_end - curr_bin_start) as f64);
+            *bin += olfrac;
+            if olfrac > 1.0_f64 { 
+                eprintln!("first_bin = {start_bin}, last_bin = {end_bin}");
+                eprintln!("bin = {}, olfrac = {}, olap = {}, curr_bin_start = {}, curr_bin_end = {}, start = {start}, stop = {stop}", *bin, olfrac, olap, curr_bin_start, curr_bin_end); 
+            }
         }
         self.total_weight += weight;
     }
@@ -236,8 +283,8 @@ impl<'h> InMemoryAlignmentStore<'h> {
         if !alns.is_empty() {
             self.alignments.extend_from_slice(&alns);
             self.as_probabilities.extend_from_slice(&as_probs);
-            //self.coverage_probabilities
-            //    .extend(vec![0.0_f64; self.alignments.len()]);
+            self.coverage_probabilities
+                .extend(vec![0.0_f64; alns.len()]);
             self.boundaries.push(self.alignments.len());
             // @Susan-Zare : this is making things unreasonably slow. Perhaps 
             // we should avoid pushing actual ranges, and just compute the 
@@ -560,6 +607,10 @@ impl AlignmentFilters {
                     .reference_sequence_id(aln_header)
                     .unwrap()
                     .expect("valid transcript id");
+
+                // since we are retaining this alignment, then 
+                // add it to the coverage of the the corresponding
+                // transcript.
                 txps[tid].add_interval(
                     ag[i]
                         .alignment_start()

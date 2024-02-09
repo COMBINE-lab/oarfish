@@ -333,7 +333,7 @@ fn main() -> io::Result<()> {
     // loop over the transcripts in the header and fill in the relevant
     // information here.
     for (rseq, rmap) in header.reference_sequences().iter() {
-        txps.push(TranscriptInfo::with_len(rmap.length()));
+        txps.push(TranscriptInfo::with_len_and_bins(rmap.length(), args.bins));
         txps_name.push(rseq.to_string());
     }
 
@@ -354,7 +354,7 @@ fn main() -> io::Result<()> {
     // to see if it's clear why this is the case
     for (i, result) in reader.record_bufs(&header).enumerate() {
         let record = result?;
-        if i % 10000 == 0 {
+        if i % 50000 == 0 {
             info!("processed {} records", i);
         }
         // unmapped reads don't contribute to quantification

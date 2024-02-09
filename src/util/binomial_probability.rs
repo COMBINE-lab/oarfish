@@ -66,6 +66,8 @@ pub fn binomial_probability(
         |(denom, num2, num3)| {
             let res = (log_numerator1 - denom + num2 +num3).exp();
             if res.is_nan() || res.is_infinite() {
+                eprintln!("{log_numerator1}, {denom}, {num2}, {num3}");
+                eprintln!("interval_counts = {:?}", &interval_counts);
                 panic!("Incorrect result. multinomial_probability function provides nan or infinite values for result");
             }
             res
@@ -88,7 +90,7 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
     info!("computing coverage probabilities");
 
     rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
+        .num_threads(1)//threads)
         .build()
         .unwrap();
 
@@ -96,7 +98,7 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
         let temp_prob: Vec<f64>;
 
         if *bins != 0 {
-            //eprintln!("in multinomial prob");
+            /*
             let bin_counts: Vec<f32>;
             let bin_lengths: Vec<f32>;
             let _num_discarded_read_temp: usize;
@@ -108,6 +110,8 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
                 _bin_coverage,
             ) = bin_transcript_normalize_counts(t, bins); //binning the transcript length and obtain the counts and length vectors
                                                           //==============================================================================================
+            */
+            let (bin_counts, bin_lengths) = t.get_normalized_counts_and_lengths();
 
             let distinct_rate: f64 = bin_counts
                 .iter()
@@ -116,45 +120,7 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
                 .sum();
             temp_prob = binomial_probability(&bin_counts, &bin_lengths, distinct_rate);
         } else {
-            //not binning the transcript length
-            let len = t.len.get() as u32; //transcript length
-
-            //obtain the start and end of reads aligned to these transcripts
-            let mut start_end_ranges: Vec<u32> = t
-                .ranges
-                .iter()
-                .flat_map(|range| vec![range.start, range.end])
-                .collect();
-            start_end_ranges.push(0); // push the first position of the transcript
-            start_end_ranges.push(len); // push the last position of the transcript
-            start_end_ranges.sort(); // Sort the vector in ascending order
-            start_end_ranges.dedup(); // Remove consecutive duplicates
-                                      //convert the sorted vector of starts and ends into a vector of consecutive ranges
-            let distinct_interval: Vec<std::ops::Range<u32>> = start_end_ranges
-                .windows(2)
-                .map(|window| window[0]..window[1])
-                .collect();
-            let interval_length: Vec<f32> = start_end_ranges
-                .windows(2)
-                .map(|window| (window[1] - window[0]) as f32)
-                .collect();
-            //obtain the number of reads aligned in each distinct intervals
-            let mut interval_counts: Vec<f32> = Vec::new();
-            for interval in distinct_interval {
-                interval_counts.push(
-                    t.ranges
-                        .iter()
-                        .filter(|range| range.start <= interval.start && range.end >= interval.end)
-                        .count() as f32,
-                );
-            }
-
-            let distinct_rate: f64 = interval_counts
-                .iter()
-                .zip(interval_length.iter())
-                .map(|(&count, &length)| (count as f64) / (length as f64))
-                .sum();
-            temp_prob = binomial_probability(&interval_counts, &interval_length, distinct_rate);
+            std::unimplemented!("coverage model with 0 bins is not currently implemented");
         }
 
         t.coverage_prob = temp_prob;
