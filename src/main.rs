@@ -220,6 +220,7 @@ fn main() -> io::Result<()> {
             txps_name.push(rseq.to_string());
         }
     }
+    info!("parsed reference information for {} transcripts.", txps.len());
 
     // we'll need these to keep track of which alignments belong
     // to which reads.
@@ -236,11 +237,8 @@ fn main() -> io::Result<()> {
     // critical information was missing from the records. This happened when
     // moving to the new version of noodles. Track `https://github.com/zaeleus/noodles/issues/230`
     // to see if it's clear why this is the case
-    for (i, result) in reader.record_bufs(&header).enumerate() {
+    for (_i, result) in reader.record_bufs(&header).enumerate() {
         let record = result?;
-        if i % 50000 == 0 {
-            info!("processed {} records", i);
-        }
         // unmapped reads don't contribute to quantification
         // but we track them.
         if record.flags().is_unmapped() {
@@ -281,18 +279,16 @@ fn main() -> io::Result<()> {
     }
 
     info!(
-        "alignment file contained {} unmapped read records.",
+        "the alignment file contained {} unmapped read records.",
         num_unmapped.to_formatted_string(&Locale::en)
     );
-    info!("discard_table: \n{}\n", store.discard_table.to_table());
+    info!("\ndiscard_table: \n{}\n", store.discard_table.to_table());
 
     if store.filter_opts.model_coverage {
-        info!("computing coverages");
         //obtaining the Cumulative Distribution Function (CDF) for each transcript
         binomial_continuous_prob(&mut txps, &args.bins, args.threads);
         //Normalize the probabilities for the records of each read
         normalize_read_probs(&mut store, &txps, &args.bins);
-        info!("done");
     }
 
     info!(

@@ -1,5 +1,7 @@
+use tracing::{info, instrument};
 use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
 
+#[instrument(skip(store, txp_info))]
 pub fn normalize_read_probs(
     store: &mut InMemoryAlignmentStore,
     txp_info: &[TranscriptInfo],
@@ -8,6 +10,7 @@ pub fn normalize_read_probs(
     let mut normalize_probs_temp: Vec<f64> = vec![];
     let mut normalized_coverage_prob: Vec<f64> = vec![];
 
+    info!("normalizing read probabilities");
     //iterate over all alignments in the bam file
     for (alns, _as_probs, _coverage_prob) in store.iter() {
         //iterate over the alignments of a read
@@ -76,4 +79,5 @@ pub fn normalize_read_probs(
         normalize_probs_temp.clear();
     }
     store.coverage_probabilities = normalized_coverage_prob;
+    info!("done");
 }

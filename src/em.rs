@@ -1,5 +1,5 @@
 use itertools::izip;
-use tracing::info;
+use tracing::{info, span};
 use num_format::{Locale, ToFormattedString};
 use crate::util::oarfish_types::{
     EMInfo, InMemoryAlignmentStore, TranscriptInfo,
@@ -53,6 +53,9 @@ fn m_step(
 /// each of which is the estimated number of fragments arising from
 /// each target.
 pub fn em(em_info: &mut EMInfo) -> Vec<f64> {
+    let span = span!(tracing::Level::INFO, "em");
+    let _guard = span.enter();
+
     let eq_map = em_info.eq_map;
     let fops = &eq_map.filter_opts;
     let tinfo: &mut Vec<TranscriptInfo> = em_info.txp_info;

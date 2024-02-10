@@ -87,7 +87,6 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
 
     let _log_span = info_span!("binomial_continuous_prob").entered();
     info!("computing coverage probabilities");
-
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .build()
@@ -122,4 +121,5 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
 
         t.coverage_prob = temp_prob;
     });
+    info!("done");
 }
