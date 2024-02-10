@@ -1,4 +1,5 @@
 use crate::util::oarfish_types::EMInfo;
+use serde_json::json;
 use std::{
     fs,
     fs::File,
@@ -7,20 +8,42 @@ use std::{
 };
 
 //this part is taken from dev branch
-pub fn write_out_count(
+pub fn write_output(
     output: &String,
     prob_flag: &bool,
     bins: &u32,
     header: &noodles_sam::header::Header,
     counts: &[f64],
 ) -> io::Result<()> {
-    let prob = if *prob_flag { "binomial" } else { "NoCoverage" };
+    let prob = if *prob_flag {
+        "binomial"
+    } else {
+        "no_coverage"
+    };
 
-    let output_directory = format!("{}/{}/QuantOutput", output, bins);
-    fs::create_dir_all(output_directory.clone())?;
+    let output_directory = output.to_string();
+    fs::create_dir_all(&output_directory)?;
 
-    let out_path: String = format!("{}/{}_quant.tsv", output_directory, prob);
-    File::create(out_path.clone())?;
+    {
+        let info = json!({
+            "prob_model" : prob,
+            "num_bins" : bins
+        });
+
+        let mut info_path = std::path::PathBuf::from(&output_directory);
+        info_path.push("info.json");
+        let write = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(info_path)
+            .expect("Couldn't create output file");
+
+        serde_json::ser::to_writer_pretty(write, &info)?;
+    }
+
+    let out_path: String = format!("{}/quant.tsv", output_directory);
+    File::create(&out_path)?;
 
     let write = OpenOptions::new()
         .write(true)

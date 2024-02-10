@@ -20,7 +20,7 @@ use crate::util::oarfish_types::{
     AlignmentFilters, EMInfo, InMemoryAlignmentStore, TranscriptInfo,
 };
 use crate::util::read_function::read_short_quant_vec;
-use crate::util::write_function::write_out_count;
+use crate::util::write_function::write_output;
 
 #[derive(Clone, Debug, clap::ValueEnum)]
 enum FilterGroup {
@@ -442,12 +442,9 @@ fn main() -> io::Result<()> {
         store.num_aligned_reads().to_formatted_string(&Locale::en)
     );
 
-
-    let init_abundances = if let Some(sr_path) = args.short_quant {
-        Some(read_short_quant_vec(&sr_path, &txps_name).unwrap_or_else(|e| panic!("{}", e)))
-    } else {
-        None
-    };
+    let init_abundances = args.short_quant.map(|sr_path| {
+        read_short_quant_vec(&sr_path, &txps_name).unwrap_or_else(|e| panic!("{}", e))
+    });
 
     // wrap up all of the relevant information we need for estimation
     // in an EMInfo struct and then call the EM algorithm.
@@ -456,13 +453,13 @@ fn main() -> io::Result<()> {
         txp_info: &mut txps,
         max_iter: args.max_em_iter,
         convergence_thresh: args.convergence_thresh,
-        init_abundances
+        init_abundances,
     };
 
     let counts = em(&mut emi);
 
     // write the output
-    write_out_count(
+    write_output(
         &args.output,
         &args.model_coverage,
         &args.bins,

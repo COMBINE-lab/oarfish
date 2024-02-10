@@ -5,7 +5,7 @@ pub fn bin_transcript_normalize_counts(
     t: &TranscriptInfo,
     num_bins: &u32,
 ) -> (Vec<f32>, Vec<f32>, usize, Vec<f64>) {
-    let mut num_discarded_read: usize = 0;
+    let num_discarded_read: usize = 0;
     let transcript_len = t.len.get() as u32; //transcript length
     let nbins = *num_bins;
     let bin_size = transcript_len as f32 / nbins as f32;
@@ -22,8 +22,8 @@ pub fn bin_transcript_normalize_counts(
         })
         .collect();
 
-    let mut bin_counts: Vec<f32> = vec![0.0; bins.len()];
-    let mut bin_coverage: Vec<f64> = vec![0.0; bins.len()];
+    let bin_counts: Vec<f32> = vec![0.0; bins.len()];
+    let bin_coverage: Vec<f64> = vec![0.0; bins.len()];
     let bin_lengths: Vec<f32> = bins.iter().map(|range| range.end - range.start).collect();
     /*
     for read in t.ranges.iter() {
