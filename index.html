@@ -269,6 +269,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      Output
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#references" class="md-nav__link">
     <span class="md-ellipsis">
       References
@@ -312,6 +321,15 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      Output
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#references" class="md-nav__link">
     <span class="md-ellipsis">
       References
@@ -336,42 +354,57 @@
 
 
 <h1 id="oarfish-transcript-quantification-from-long-read-rna-seq-data">oarfish: transcript quantification from long-read RNA-seq data</h1>
-<p><code>oarfish</code> is a program, written in <code>rust</code>, for quantifying transcript-level expression from long-read (i.e. Oxford nanopore cDNA and direct RNA and PacBio) sequencing technologies. <code>oarfish</code> requires a sample of sequencing reads aligned to the <em>transcriptome</em> (not the genome). It handles multi-mapping reads through the use of probabilistic allocation via an expectation-maximization (EM) algorithm.  Further, it employs many filters to help discard alignments that may reduce quantification accuracy.  Currently, the set of filters applied in <code>oarfish</code> are directly derived from the <a href="https://github.com/a-slide/NanoCount"><code>NanoCount</code></a><sup id="fnref:Gleeson"><a class="footnote-ref" href="#fn:Gleeson">1</a></sup> tool; both the filters that exist, and the way their values are set (with the exception of the <code>--three-prime-clip</code> filter, which is not set by default in <code>oarfish</code> but is in <code>NanoCount</code>).</p>
+<p><code>oarfish</code> is a program, written in <a href="https://www.rust-lang.org/"><code>rust</code></a>, for quantifying transcript-level expression from long-read (i.e. Oxford nanopore cDNA and direct RNA and PacBio) sequencing technologies. <code>oarfish</code> requires a sample of sequencing reads aligned to the <em>transcriptome</em> (currntly not to the genome). It handles multi-mapping reads through the use of probabilistic allocation via an expectation-maximization (EM) algorithm.  </p>
+<p>It optionally employs many filters to help discard alignments that may reduce quantification accuracy.  Currently, the set of filters applied in <code>oarfish</code> are directly derived from the <a href="https://github.com/a-slide/NanoCount"><code>NanoCount</code></a><sup id="fnref:Gleeson"><a class="footnote-ref" href="#fn:Gleeson">1</a></sup> tool; both the filters that exist, and the way their values are set (with the exception of the <code>--three-prime-clip</code> filter, which is not set by default in <code>oarfish</code> but is in <code>NanoCount</code>).</p>
+<p>Additionally, <code>oarfish</code> provides options to make use of coverage profiles derived from the aligned reads to improve quantification accuracy.  The use of this coverage model is enabled with the <code>--model-coverage</code> flag.</p>
 <p>The usage can be provided by passing <code>-h</code> at the command line.</p>
-<pre><code>Usage: oarfish [OPTIONS] --alignments &lt;ALIGNMENTS&gt; --output &lt;OUTPUT&gt;
+<pre><code>accurate transcript quantification from long-read RNA-seq data
+
+Usage: oarfish [OPTIONS] --alignments &lt;ALIGNMENTS&gt; --output &lt;OUTPUT&gt;
 
 Options:
-  -a, --alignments &lt;ALIGNMENTS&gt;
-          Name of the person to greet
-  -o, --output &lt;OUTPUT&gt;
-          Location where output quantification file should be written
+  -a, --alignments &lt;ALIGNMENTS&gt;  path to the file containing the input alignments
+  -o, --output &lt;OUTPUT&gt;          location where output quantification file should be written
+  -t, --threads &lt;THREADS&gt;        maximum number of cores that the oarfish can use to obtain binomial probability [default: 1]
+  -h, --help                     Print help
+  -V, --version                  Print version
+
+filters:
+      --filter-group &lt;FILTER_GROUP&gt;
+          [possible values: no-filters, nanocount-filters]
   -t, --three-prime-clip &lt;THREE_PRIME_CLIP&gt;
-          [default: 4294967295]
+          maximum allowable distance of the right-most end of an alignment from the 3' transcript end [default: 4294967295]
   -f, --five-prime-clip &lt;FIVE_PRIME_CLIP&gt;
-          [default: 4294967295]
+          maximum allowable distance of the left-most end of an alignment from the 5' transcript end [default: 4294967295]
   -s, --score-threshold &lt;SCORE_THRESHOLD&gt;
-          [default: 0.95]
+          fraction of the best possible alignment score that a secondary alignment must have for consideration [default: 0.95]
   -m, --min-aligned-fraction &lt;MIN_ALIGNED_FRACTION&gt;
-          [default: 0.5]
+          fraction of a query that must be mapped within an alignemnt to consider the alignemnt valid [default: 0.5]
   -l, --min-aligned-len &lt;MIN_ALIGNED_LEN&gt;
-          [default: 50]
+          minimum number of nucleotides in the aligned portion of a read [default: 50]
   -n, --allow-negative-strand
+          allow both forward-strand and reverse-complement alignments
 
-      --model-coverage
+coverage model:
+      --model-coverage  apply the coverage model
+  -b, --bins &lt;BINS&gt;     number of bins to use in coverage model [default: 10]
 
-  -t  --threads
-          [default: 1]
-  -q  --short-quant
-              Location where the shore read counts can be read
-  -b  --bins
-          [default: 10]
-  -h, --help
-          Print help
-  -V, --version
-          Print version
+EM:
+      --max-em-iter &lt;MAX_EM_ITER&gt;
+          maximum number of iterations for which to run the EM algorithm [default: 1000]
+      --convergence-thresh &lt;CONVERGENCE_THRESH&gt;
+          maximum number of iterations for which to run the EM algorithm [default: 0.001]
+  -q, --short-quant &lt;SHORT_QUANT&gt;
+          location of short read quantification (if provided)
+
 </code></pre>
-<p>The input should be a <code>bam</code> format file, with reads aligned using <code>minimap2</code> against the <em>transcriptome</em>. That is, <code>oarfish</code> does not currently handle spliced alignment to the genome.  Further, the output alignments should be name sorted (the default order produced by <code>minimap2</code> should be fine).</p>
-<p>The output is a tab separated file listing the quantified targets, as well as information about their length and other metadata. The <code>num_reads</code> column provides the estimate of the number of reads originating from each target.</p>
+<p>The input should be a <code>bam</code> format file, with reads aligned using <a href="https://github.com/lh3/minimap2"><code>minimap2</code></a> against the <em>transcriptome</em>. That is, <code>oarfish</code> does not currently handle spliced alignment to the genome.  Further, the output alignments should be name sorted (the default order produced by <code>minimap2</code> should be fine).</p>
+<h3 id="output">Output</h3>
+<p>The <code>--output</code> option passed to <code>oarfish</code> corresponds to a directory (that will be created if it doesn't exist), under which the relevant output files will be placed.
+The output of <code>oarfish</code> constist of 2 files:</p>
+<pre><code>* `info.json` - a JSON format file containing information about relevant parameters with which `oarfish` was run, and other relevant inforamtion from the processed sample apart from the actual transcript quantifications.
+* `quant.tsv` - a tab separated file listing the quantified targets, as well as information about their length and other metadata. The `num_reads` column provides the estimate of the number of reads originating from each target.
+</code></pre>
 <h3 id="references">References</h3>
 <div class="footnote">
 <hr />
