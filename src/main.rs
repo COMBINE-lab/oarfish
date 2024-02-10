@@ -22,6 +22,10 @@ use crate::util::oarfish_types::{
 use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::write_output;
 
+
+/// These represent different "meta-options", specific settings 
+/// for all of the different filters that should be applied in 
+/// different cases.
 #[derive(Clone, Debug, clap::ValueEnum)]
 enum FilterGroup {
     NoFilters,
@@ -183,11 +187,6 @@ fn main() -> io::Result<()> {
     // explicitly check that alignment was done with a supported
     // aligner (right now, just minimap2).
     for (prog, _pmap) in header.programs().iter() {
-        assert_eq!(
-            prog, "minimap2",
-            "Currently, only minimap2 is supported as an aligner. The bam file listed {}.",
-            prog
-        );
         if prog == "minimap2" {
             saw_minimap2 = true;
             break;
