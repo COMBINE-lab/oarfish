@@ -1,5 +1,6 @@
 use crate::util::oarfish_types::TranscriptInfo;
 
+#[allow(dead_code)]
 pub fn bin_transcript_normalize_counts(
     t: &TranscriptInfo,
     num_bins: &u32,

@@ -21,7 +21,7 @@ pub fn normalize_read_probs(
             let end_bin: usize = (end_aln / bin_length) as usize;
             let coverage_probability: &Vec<f64> = &txp_info[target_id].coverage_prob;
 
-            let cov_prob: f64 = (start_bin..=end_bin)
+            let cov_prob: f64 = (start_bin..end_bin)
                 .map(|i| {
                     match (
                         i == start_bin,

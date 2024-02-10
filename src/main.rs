@@ -28,15 +28,6 @@ enum FilterGroup {
     NanocountFilters,
 }
 
-
-fn filter_type_parser(s: &str) -> Result<FilterGroup, String> {
-    match s {
-        "none" | "no" => Ok(FilterGroup::NoFilters),
-        "nanocount" | "Nanocount" | "NanoCount" => Ok(FilterGroup::NanocountFilters),
-        t => Err(format!("Do not recognize filter type {}", t)),
-    }
-}
-
 /// accurate transcript quantification from long-read RNA-seq data
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -48,7 +39,7 @@ struct Args {
     #[arg(short, long, required = true)]
     output: String,
 
-    #[arg(long, help_heading="filters", value_enum)]
+    #[arg(long, help_heading = "filters", value_enum)]
     filter_group: Option<FilterGroup>,
 
     /// maximum allowable distance of the right-most end of an alignment from the 3' transcript end
@@ -59,35 +50,59 @@ struct Args {
     five_prime_clip: u32,
     /// fraction of the best possible alignment score that a secondary alignment must have for
     /// consideration
-    #[arg(short, long, conflicts_with = "filter-group", help_heading="filters", default_value_t = 0.95)]
+    #[arg(
+        short,
+        long,
+        conflicts_with = "filter-group",
+        help_heading = "filters",
+        default_value_t = 0.95
+    )]
     score_threshold: f32,
     /// fraction of a query that must be mapped within an alignemnt to consider the alignemnt
     /// valid
-    #[arg(short, long, conflicts_with = "filter-group", help_heading="filters", default_value_t = 0.5)]
+    #[arg(
+        short,
+        long,
+        conflicts_with = "filter-group",
+        help_heading = "filters",
+        default_value_t = 0.5
+    )]
     min_aligned_fraction: f32,
     /// minimum number of nucleotides in the aligned portion of a read
-    #[arg(short = 'l', long, conflicts_with = "filter-group", help_heading="filters", default_value_t = 50)]
+    #[arg(
+        short = 'l',
+        long,
+        conflicts_with = "filter-group",
+        help_heading = "filters",
+        default_value_t = 50
+    )]
     min_aligned_len: u32,
     /// allow both forward-strand and reverse-complement alignments
-    #[arg(short = 'n', long, conflicts_with = "filter-group", help_heading="filters", value_parser)]
+    #[arg(
+        short = 'n',
+        long,
+        conflicts_with = "filter-group",
+        help_heading = "filters",
+        value_parser
+    )]
     allow_negative_strand: bool,
     /// apply the coverage model
-    #[arg(long, help_heading="coverage model", value_parser)]
+    #[arg(long, help_heading = "coverage model", value_parser)]
     model_coverage: bool,
     /// maximum number of iterations for which to run the EM algorithm
-    #[arg(long, help_heading="EM", default_value_t = 1000)]
+    #[arg(long, help_heading = "EM", default_value_t = 1000)]
     max_em_iter: u32,
     /// maximum number of iterations for which to run the EM algorithm
-    #[arg(long, help_heading="EM", default_value_t = 1e-3)]
+    #[arg(long, help_heading = "EM", default_value_t = 1e-3)]
     convergence_thresh: f64,
     /// maximum number of cores that the oarfish can use to obtain binomial probability
     #[arg(short, long, default_value_t = 1)]
     threads: usize,
     /// location of short read quantification (if provided)
-    #[arg(short = 'q', long, help_heading="EM")]
+    #[arg(short = 'q', long, help_heading = "EM")]
     short_quant: Option<String>,
     /// number of bins to use in coverage model
-    #[arg(short, long, help_heading="coverage model", default_value_t = 10)]
+    #[arg(short, long, help_heading = "coverage model", default_value_t = 10)]
     bins: u32,
 }
 
@@ -258,7 +273,7 @@ fn main() -> io::Result<()> {
                 .allow_rc(true)
                 .model_coverage(args.model_coverage)
                 .build()
-        },
+        }
         Some(FilterGroup::NanocountFilters) => {
             info!("setting filters to nanocount defaults.");
             AlignmentFilters::builder()
@@ -270,8 +285,8 @@ fn main() -> io::Result<()> {
                 .allow_rc(false)
                 .model_coverage(args.model_coverage)
                 .build()
-        },
-        None => { 
+        }
+        None => {
             info!("setting user-provided filter parameters.");
             AlignmentFilters::builder()
                 .five_prime_clip(args.five_prime_clip)
@@ -332,9 +347,16 @@ fn main() -> io::Result<()> {
 
     // loop over the transcripts in the header and fill in the relevant
     // information here.
-    for (rseq, rmap) in header.reference_sequences().iter() {
-        txps.push(TranscriptInfo::with_len_and_bins(rmap.length(), args.bins));
-        txps_name.push(rseq.to_string());
+    if args.model_coverage {
+        for (rseq, rmap) in header.reference_sequences().iter() {
+            txps.push(TranscriptInfo::with_len_and_bins(rmap.length(), args.bins));
+            txps_name.push(rseq.to_string());
+        }
+    } else {
+        for (rseq, rmap) in header.reference_sequences().iter() {
+            txps.push(TranscriptInfo::with_len(rmap.length()));
+            txps_name.push(rseq.to_string());
+        }
     }
 
     // we'll need these to keep track of which alignments belong

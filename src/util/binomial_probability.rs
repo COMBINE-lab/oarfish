@@ -1,4 +1,3 @@
-use crate::util::count_function::bin_transcript_normalize_counts;
 use crate::util::oarfish_types::TranscriptInfo;
 use itertools::izip;
 use rayon::prelude::*;
@@ -90,14 +89,12 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
     info!("computing coverage probabilities");
 
     rayon::ThreadPoolBuilder::new()
-        .num_threads(1)//threads)
+        .num_threads(threads)
         .build()
         .unwrap();
 
     txps.par_iter_mut().enumerate().for_each(|(_i, t)| {
-        let temp_prob: Vec<f64>;
-
-        if *bins != 0 {
+        let temp_prob: Vec<f64> = if *bins != 0 {
             /*
             let bin_counts: Vec<f32>;
             let bin_lengths: Vec<f32>;
@@ -118,10 +115,10 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
                 .zip(bin_lengths.iter())
                 .map(|(&count, &length)| (count as f64) / (length as f64))
                 .sum();
-            temp_prob = binomial_probability(&bin_counts, &bin_lengths, distinct_rate);
+            binomial_probability(&bin_counts, &bin_lengths, distinct_rate)
         } else {
             std::unimplemented!("coverage model with 0 bins is not currently implemented");
-        }
+        };
 
         t.coverage_prob = temp_prob;
     });

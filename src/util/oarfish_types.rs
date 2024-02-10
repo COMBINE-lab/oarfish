@@ -11,8 +11,9 @@ use typed_builder::TypedBuilder;
 use bio_types::strand::Strand;
 use noodles_sam as sam;
 use sam::{alignment::record::data::field::tag::Tag as AlnTag, Header};
+
 #[allow(unused_imports)]
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AlnInfo {
@@ -163,14 +164,14 @@ impl TranscriptInfo {
         let num_intervals = self.coverage_bins.len();
         let num_intervals_f = num_intervals as f64;
         let tlen_f = self.lenf;
-        let bin_width = (tlen_f /num_intervals_f).round() as f32;
+        let bin_width = (tlen_f / num_intervals_f).round() as f32;
 
         let cov_f32 = self.coverage_bins.iter().map(|f| *f as f32).collect();
         let mut widths_f32 = Vec::<f32>::with_capacity(num_intervals);
         for bidx in 0..num_intervals {
             let bidxf = bidx as f32;
-            let bin_start = (bidxf * bin_width) as f32;
-            let bin_end = ((bidxf + 1.0) * bin_width).min(self.lenf as f32) as f32;
+            let bin_start = bidxf * bin_width;
+            let bin_end = ((bidxf + 1.0) * bin_width).min(self.lenf as f32);
             widths_f32.push(bin_end - bin_start);
         }
         (cov_f32, widths_f32)
@@ -178,10 +179,11 @@ impl TranscriptInfo {
 
     #[inline(always)]
     pub fn add_interval(&mut self, start: u32, stop: u32, weight: f64) {
+        const ONE_PLUS_EPSILON: f64 = 1.0_f64 + f64::EPSILON;
         let num_intervals = self.coverage_bins.len();
         let num_intervals_f = num_intervals as f64;
         let tlen_f = self.lenf;
-        let bin_width = (tlen_f /num_intervals_f).round();
+        let bin_width = (tlen_f / num_intervals_f).round();
         let start = start.min(stop);
         let stop = start.max(stop);
         let start_bin = (((start as f64) / tlen_f) * num_intervals_f).floor() as usize;
@@ -190,20 +192,26 @@ impl TranscriptInfo {
         let get_overlap = |s1: u32, e1: u32, s2: u32, e2: u32| -> u32 {
             if s1 <= e2 {
                 e1.min(e2) - s1.max(s2)
-            } else { 0_u32 }
+            } else {
+                0_u32
+            }
         };
 
-        for (bidx, bin) in self.coverage_bins[start_bin..end_bin].iter_mut().enumerate() {
+        for (bidx, bin) in self.coverage_bins[start_bin..end_bin]
+            .iter_mut()
+            .enumerate()
+        {
             let bidxf = (start_bin + bidx) as f64;
             let curr_bin_start = (bidxf * bin_width) as u32;
             let curr_bin_end = ((bidxf + 1.0) * bin_width).min(tlen_f) as u32;
-            
+
             let olap = get_overlap(start, stop, curr_bin_start, curr_bin_end);
             let olfrac = (olap as f64) / ((curr_bin_end - curr_bin_start) as f64);
             *bin += olfrac;
-            if olfrac > 1.0_f64 { 
-                eprintln!("first_bin = {start_bin}, last_bin = {end_bin}");
-                eprintln!("bin = {}, olfrac = {}, olap = {}, curr_bin_start = {}, curr_bin_end = {}, start = {start}, stop = {stop}", *bin, olfrac, olap, curr_bin_start, curr_bin_end); 
+            if olfrac > ONE_PLUS_EPSILON {
+                error!("first_bin = {start_bin}, last_bin = {end_bin}");
+                error!("bin = {}, olfrac = {}, olap = {}, curr_bin_start = {}, curr_bin_end = {}, start = {start}, stop = {stop}", *bin, olfrac, olap, curr_bin_start, curr_bin_end);
+                panic!("coverage computation error; please report this error at https://github.com/COMBINE-lab/oarfish.")
             }
         }
         self.total_weight += weight;
@@ -286,8 +294,8 @@ impl<'h> InMemoryAlignmentStore<'h> {
             self.coverage_probabilities
                 .extend(vec![0.0_f64; alns.len()]);
             self.boundaries.push(self.alignments.len());
-            // @Susan-Zare : this is making things unreasonably slow. Perhaps 
-            // we should avoid pushing actual ranges, and just compute the 
+            // @Susan-Zare : this is making things unreasonably slow. Perhaps
+            // we should avoid pushing actual ranges, and just compute the
             // contribution of each range to the coverage online.
             //for a in alns {
             //    txps[a.ref_id as usize].ranges.push(a.start..a.end);
@@ -422,7 +430,7 @@ impl fmt::Display for DiscardTable {
 }
 
 impl AlignmentFilters {
-    /// Applies the filters defined by this AlignmentFilters struct 
+    /// Applies the filters defined by this AlignmentFilters struct
     /// to the alignments provided in `ag`, a vector of alignments representing
     /// a group of contiguous alignments for the same target.
     ///
@@ -480,7 +488,7 @@ impl AlignmentFilters {
                 // get the alignment span
                 let aln_span = x.alignment_span().expect("valid span").unwrap() as u32;
 
-                // get the alignment score, as computed by the aligner 
+                // get the alignment score, as computed by the aligner
                 let score = x
                     .data()
                     .get(&AlnTag::ALIGNMENT_SCORE)
@@ -495,7 +503,7 @@ impl AlignmentFilters {
                     .expect("alignment record should have flags")
                     .is_reverse_complemented();
 
-                // filter this alignment out if we are not permitting 
+                // filter this alignment out if we are not permitting
                 // antisense alignments.
                 if is_rc && !self.allow_rc {
                     discard_table.discard_ori += 1;
@@ -608,7 +616,7 @@ impl AlignmentFilters {
                     .unwrap()
                     .expect("valid transcript id");
 
-                // since we are retaining this alignment, then 
+                // since we are retaining this alignment, then
                 // add it to the coverage of the the corresponding
                 // transcript.
                 txps[tid].add_interval(
