@@ -25,7 +25,7 @@ pub fn bin_transcript_normalize_counts(
     let mut bin_counts: Vec<f32> = vec![0.0; bins.len()];
     let mut bin_coverage: Vec<f64> = vec![0.0; bins.len()];
     let bin_lengths: Vec<f32> = bins.iter().map(|range| range.end - range.start).collect();
-
+    /*
     for read in t.ranges.iter() {
         let mut discarded_read_flag: bool = true;
 
@@ -60,6 +60,7 @@ pub fn bin_transcript_normalize_counts(
             num_discarded_read += 1;
         }
     }
+    */
 
     (bin_counts, bin_lengths, num_discarded_read, bin_coverage)
 }

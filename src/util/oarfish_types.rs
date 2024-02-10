@@ -120,7 +120,6 @@ pub struct TranscriptInfo {
     pub len: NonZeroUsize,
     pub total_weight: f64,
     coverage_bins: Vec<f64>,
-    pub ranges: Vec<std::ops::Range<u32>>,
     pub coverage_prob: Vec<f64>,
     pub lenf: f64,
 }
@@ -132,7 +131,6 @@ impl TranscriptInfo {
             len: NonZeroUsize::new(0).unwrap(),
             total_weight: 0.0_f64,
             coverage_bins: vec![0.0_f64; 10],
-            ranges: Vec::new(),
             coverage_prob: Vec::new(),
             lenf: 0_f64,
         }
@@ -143,7 +141,6 @@ impl TranscriptInfo {
             len,
             total_weight: 0.0_f64,
             coverage_bins: vec![0.0_f64; 10],
-            ranges: Vec::new(),
             coverage_prob: Vec::new(),
             lenf: len.get() as f64,
         }
@@ -153,7 +150,6 @@ impl TranscriptInfo {
             len,
             total_weight: 0.0_f64,
             coverage_bins: vec![0.0_f64; bins as usize],
-            ranges: Vec::new(),
             coverage_prob: Vec::new(),
             lenf: len.get() as f64,
         }
