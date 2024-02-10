@@ -113,6 +113,10 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     // have converged within this threshold of relative
     // change between two subsequent iterations.
     pub convergence_thresh: f64,
+    // An optional vector of abundances from which 
+    // to initalize the EM, otherwise, a default 
+    // uniform initalization is used.
+    pub init_abundances: Option<Vec<f64>>
 }
 
 #[derive(Debug, PartialEq)]

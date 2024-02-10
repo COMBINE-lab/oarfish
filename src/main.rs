@@ -153,7 +153,7 @@ fn m_step(
 /// target sequences.  The return value is a `Vec` of f64 values,
 /// each of which is the estimated number of fragments arising from
 /// each target.
-fn em(em_info: &mut EMInfo, short_read_path: Option<String>, txps_name: &[String]) -> Vec<f64> {
+fn em(em_info: &mut EMInfo) -> Vec<f64> {
     let eq_map = em_info.eq_map;
     let fops = &eq_map.filter_opts;
     let tinfo: &mut Vec<TranscriptInfo> = em_info.txp_info;
@@ -164,9 +164,9 @@ fn em(em_info: &mut EMInfo, short_read_path: Option<String>, txps_name: &[String
     // initialize the estimated counts for the EM procedure
     let mut prev_counts: Vec<f64>;
 
-    if let Some(sr_path) = short_read_path {
+    if let Some(ref init_counts) = em_info.init_abundances {
         // initalize with the short-read quantification
-        prev_counts = read_short_quant_vec(&sr_path, txps_name).unwrap_or_else(|e| panic!("{}", e));
+        prev_counts = init_counts.clone();
     } else {
         // uniform, length normalized abundance
         let avg = total_weight / (tinfo.len() as f64);
@@ -442,6 +442,13 @@ fn main() -> io::Result<()> {
         store.num_aligned_reads().to_formatted_string(&Locale::en)
     );
 
+
+    let init_abundances = if let Some(sr_path) = args.short_quant {
+        Some(read_short_quant_vec(&sr_path, &txps_name).unwrap_or_else(|e| panic!("{}", e)))
+    } else {
+        None
+    };
+
     // wrap up all of the relevant information we need for estimation
     // in an EMInfo struct and then call the EM algorithm.
     let mut emi = EMInfo {
@@ -449,9 +456,10 @@ fn main() -> io::Result<()> {
         txp_info: &mut txps,
         max_iter: args.max_em_iter,
         convergence_thresh: args.convergence_thresh,
+        init_abundances
     };
 
-    let counts = em(&mut emi, args.short_quant, &txps_name);
+    let counts = em(&mut emi);
 
     // write the output
     write_out_count(
