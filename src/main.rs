@@ -7,7 +7,7 @@ use std::{
 };
 
 use num_format::{Locale, ToFormattedString};
-use tracing::info;
+use tracing::{trace, info};
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 
 use noodles_bam as bam;
@@ -237,8 +237,12 @@ fn main() -> io::Result<()> {
     // critical information was missing from the records. This happened when
     // moving to the new version of noodles. Track `https://github.com/zaeleus/noodles/issues/230`
     // to see if it's clear why this is the case
-    for (_i, result) in reader.record_bufs(&header).enumerate() {
+    for (i, result) in reader.record_bufs(&header).enumerate() {
         let record = result?;
+
+        if i % 100_000 == 1 {
+            trace!("processed {i} alignment records");
+        }
         // unmapped reads don't contribute to quantification
         // but we track them.
         if record.flags().is_unmapped() {
