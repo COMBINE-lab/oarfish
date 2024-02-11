@@ -420,11 +420,10 @@ EM:
 </code></pre>
 <p>The input should be a <code>bam</code> format file, with reads aligned using <a href="https://github.com/lh3/minimap2"><code>minimap2</code></a> against the <em>transcriptome</em>. That is, <code>oarfish</code> does not currently handle spliced alignment to the genome.  Further, the output alignments should be name sorted (the default order produced by <code>minimap2</code> should be fine). <em>Specifically</em>, <code>oarfish</code> relies on the existence of the <code>AS</code> tag in the <code>bam</code> records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read.</p>
 <h3 id="output">Output</h3>
-<p>The <code>--output</code> option passed to <code>oarfish</code> corresponds to a directory (that will be created if it doesn't exist), under which the relevant output files will be placed.
-The output of <code>oarfish</code> constist of 2 files:</p>
+<p>The <code>--output</code> option passed to <code>oarfish</code> corresponds to a path prefix (this prefix can contain the path separator character and if it refers to a directory that does not yeat exist, that directory will be created). Based on this path prefix, say <code>P</code>, <code>oarfish</code> will create 2 files:</p>
 <ul>
-<li><code>info.json</code> - a JSON format file containing information about relevant parameters with which <code>oarfish</code> was run, and other relevant inforamtion from the processed sample apart from the actual transcript quantifications.</li>
-<li><code>quant.tsv</code> - a tab separated file listing the quantified targets, as well as information about their length and other metadata. The <code>num_reads</code> column provides the estimate of the number of reads originating from each target.</li>
+<li><code>P.meta_info.json</code> - a JSON format file containing information about relevant parameters with which <code>oarfish</code> was run, and other relevant inforamtion from the processed sample apart from the actual transcript quantifications.</li>
+<li><code>P.quant</code> - a tab separated file listing the quantified targets, as well as information about their length and other metadata. The <code>num_reads</code> column provides the estimate of the number of reads originating from each target.</li>
 </ul>
 <h3 id="references">References</h3>
 <div class="footnote">
