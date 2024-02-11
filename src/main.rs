@@ -321,6 +321,7 @@ fn main() -> io::Result<()> {
         &args.output,
         &args.model_coverage,
         &args.bins,
+        &emi,
         &header,
         &counts,
     )?;

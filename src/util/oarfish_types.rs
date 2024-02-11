@@ -6,6 +6,7 @@ use std::iter::FromIterator;
 use tabled::builder::Builder;
 use tabled::settings::Style;
 
+use serde::Serialize;
 use typed_builder::TypedBuilder;
 
 use bio_types::strand::Strand;
@@ -317,7 +318,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
     }
 }
 
-#[derive(TypedBuilder, Debug)]
+#[derive(TypedBuilder, Debug, Serialize)]
 pub struct AlignmentFilters {
     five_prime_clip: u32,
     three_prime_clip: i64,
@@ -328,7 +329,7 @@ pub struct AlignmentFilters {
     pub model_coverage: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct DiscardTable {
     discard_5p: u32,
     discard_3p: u32,

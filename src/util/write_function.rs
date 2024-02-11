@@ -12,6 +12,7 @@ pub fn write_output(
     output: &String,
     prob_flag: &bool,
     bins: &u32,
+    em_info: &EMInfo,
     header: &noodles_sam::header::Header,
     counts: &[f64],
 ) -> io::Result<()> {
@@ -27,7 +28,9 @@ pub fn write_output(
     {
         let info = json!({
             "prob_model" : prob,
-            "num_bins" : bins
+            "num_bins" : bins,
+            "filter_options" : em_info.eq_map.filter_opts,
+            "discard_table" : em_info.eq_map.discard_table
         });
 
         let mut info_path = std::path::PathBuf::from(&output_directory);
