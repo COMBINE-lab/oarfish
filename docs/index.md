@@ -1,5 +1,7 @@
 # oarfish: transcript quantification from long-read RNA-seq data
 
+### Basic usage
+
 `oarfish` is a program, written in [`rust`](https://www.rust-lang.org/), for quantifying transcript-level expression from long-read (i.e. Oxford nanopore cDNA and direct RNA and PacBio) sequencing technologies. `oarfish` requires a sample of sequencing reads aligned to the *transcriptome* (currntly not to the genome). It handles multi-mapping reads through the use of probabilistic allocation via an expectation-maximization (EM) algorithm.  
 
 It optionally employs many filters to help discard alignments that may reduce quantification accuracy.  Currently, the set of filters applied in `oarfish` are directly derived from the [`NanoCount`](https://github.com/a-slide/NanoCount)[^Gleeson] tool; both the filters that exist, and the way their values are set (with the exception of the `--three-prime-clip` filter, which is not set by default in `oarfish` but is in `NanoCount`).
@@ -13,6 +15,8 @@ accurate transcript quantification from long-read RNA-seq data
 Usage: oarfish [OPTIONS] --alignments <ALIGNMENTS> --output <OUTPUT>
 
 Options:
+      --quiet                    be quiet (i.e. don't output log messages that aren't at least warnings)
+      --verbose                  be verbose (i.e. output all non-developer logging messages)
   -a, --alignments <ALIGNMENTS>  path to the file containing the input alignments
   -o, --output <OUTPUT>          location where output quantification file should be written
   -t, --threads <THREADS>        maximum number of cores that the oarfish can use to obtain binomial probability [default: 1]
@@ -46,7 +50,6 @@ EM:
           maximum number of iterations for which to run the EM algorithm [default: 0.001]
   -q, --short-quant <SHORT_QUANT>
           location of short read quantification (if provided)
-
 ```
 
 The input should be a `bam` format file, with reads aligned using [`minimap2`](https://github.com/lh3/minimap2) against the _transcriptome_. That is, `oarfish` does not currently handle spliced alignment to the genome.  Further, the output alignments should be name sorted (the default order produced by `minimap2` should be fine). _Specifically_, `oarfish` relies on the existence of the `AS` tag in the `bam` records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read.
