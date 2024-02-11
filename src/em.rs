@@ -1,9 +1,7 @@
+use crate::util::oarfish_types::{EMInfo, InMemoryAlignmentStore, TranscriptInfo};
 use itertools::izip;
-use tracing::{info, span};
 use num_format::{Locale, ToFormattedString};
-use crate::util::oarfish_types::{
-    EMInfo, InMemoryAlignmentStore, TranscriptInfo,
-};
+use tracing::{info, span};
 
 /// Performs one iteration of the EM algorithm by looping over all
 /// alignments and computing their estimated probability of being
@@ -144,5 +142,3 @@ pub fn em(em_info: &mut EMInfo) -> Vec<f64> {
     //  return the final estimated abundances
     curr_counts
 }
-
-

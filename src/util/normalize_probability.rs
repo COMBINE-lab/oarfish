@@ -1,5 +1,5 @@
-use tracing::{info, instrument};
 use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
+use tracing::{info, instrument};
 
 #[instrument(skip(store, txp_info))]
 pub fn normalize_read_probs(

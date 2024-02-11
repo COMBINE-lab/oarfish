@@ -322,38 +322,38 @@ impl<'h> InMemoryAlignmentStore<'h> {
 /// be applied to alignments
 #[derive(TypedBuilder, Debug, Serialize)]
 pub struct AlignmentFilters {
-    /// How far an alignment can start from the 
-    /// 5' end of the transcript and still be 
+    /// How far an alignment can start from the
+    /// 5' end of the transcript and still be
     /// considered valid
     five_prime_clip: u32,
-    /// How far an alignment can end from the 
-    /// 3' end of the transcript and still be 
+    /// How far an alignment can end from the
+    /// 3' end of the transcript and still be
     /// considered valid
     three_prime_clip: i64,
-    /// The fraction of the best recorded alignment 
+    /// The fraction of the best recorded alignment
     /// score for this *read* that the current alignment
-    /// must obtain in order to be retained. For 
-    /// example 0.95 means that it must be within 
+    /// must obtain in order to be retained. For
+    /// example 0.95 means that it must be within
     /// 95% of the best alignment.
     score_threshold: f32,
-    /// The minimum fraction of the read length that 
-    /// must be part of the alignment in order 
+    /// The minimum fraction of the read length that
+    /// must be part of the alignment in order
     /// for this alignment to be retained.
     min_aligned_fraction: f32,
     /// The minimum absolute length of this read that
-    /// must be aligned under this alignment in 
+    /// must be aligned under this alignment in
     /// order for this alignment to be  retained
     min_aligned_len: u32,
-    /// Determines if we should allow alignments to the 
-    /// antisense strand; true if we should and false 
+    /// Determines if we should allow alignments to the
+    /// antisense strand; true if we should and false
     /// otherwise.
     allow_rc: bool,
-    // True if we are enabling our coverage model and 
+    // True if we are enabling our coverage model and
     // false otherwise.
     pub model_coverage: bool,
 }
 
-/// This structure records information about 
+/// This structure records information about
 /// the number of alignments (and reads) discarded
 /// due to the application of `AlignmentFilters`.
 #[derive(Debug, Serialize)]

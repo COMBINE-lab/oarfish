@@ -7,13 +7,13 @@ use std::{
 };
 
 use num_format::{Locale, ToFormattedString};
-use tracing::{trace, info};
+use tracing::{info, trace};
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 
 use noodles_bam as bam;
 
-mod util;
 mod em;
+mod util;
 use crate::util::binomial_probability::binomial_continuous_prob;
 use crate::util::normalize_probability::normalize_read_probs;
 use crate::util::oarfish_types::{
@@ -22,9 +22,8 @@ use crate::util::oarfish_types::{
 use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::write_output;
 
-
-/// These represent different "meta-options", specific settings 
-/// for all of the different filters that should be applied in 
+/// These represent different "meta-options", specific settings
+/// for all of the different filters that should be applied in
 /// different cases.
 #[derive(Clone, Debug, clap::ValueEnum)]
 enum FilterGroup {
@@ -36,6 +35,14 @@ enum FilterGroup {
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
+    /// be quiet (i.e. don't output log messages that aren't at least warnings)
+    #[arg(long, conflicts_with = "verbose")]
+    quiet: bool,
+
+    /// be verbose (i.e. output all non-developer logging messages)
+    #[arg(long)]
+    verbose: bool,
+
     /// path to the file containing the input alignments
     #[arg(short, long, required = true)]
     alignments: PathBuf,
@@ -110,21 +117,29 @@ struct Args {
     bins: u32,
 }
 
-fn main() -> io::Result<()> {
+fn main() -> anyhow::Result<()> {
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    let (filtered_layer, reload_handle) = tracing_subscriber::reload::Layer::new(env_filter);
+
     // set up the logging.  Here we will take the
     // logging level from the environment variable if
     // it is set.  Otherwise, we'll set the default
     tracing_subscriber::registry()
         // log level to INFO.
         .with(fmt::layer().with_writer(io::stderr))
-        .with(
-            EnvFilter::builder()
-                .with_default_directive(LevelFilter::INFO.into())
-                .from_env_lossy(),
-        )
+        .with(filtered_layer)
         .init();
 
     let args = Args::parse();
+
+    if args.quiet {
+        let _ = reload_handle.modify(|filter| *filter = EnvFilter::new("WARN"))?;
+    }
+    if args.verbose {
+        let _ = reload_handle.modify(|filter| *filter = EnvFilter::new("TRACE"))?;
+    }
 
     // set all of the filter options that the user
     // wants to apply.
@@ -220,7 +235,10 @@ fn main() -> io::Result<()> {
             txps_name.push(rseq.to_string());
         }
     }
-    info!("parsed reference information for {} transcripts.", txps.len());
+    info!(
+        "parsed reference information for {} transcripts.",
+        txps.len()
+    );
 
     // we'll need these to keep track of which alignments belong
     // to which reads.
