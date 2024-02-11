@@ -134,7 +134,7 @@ fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    // change the logging filter if the user specified quiet or 
+    // change the logging filter if the user specified quiet or
     // verbose.
     if args.quiet {
         reload_handle.modify(|filter| *filter = EnvFilter::new("WARN"))?;

@@ -1,7 +1,7 @@
 use crate::util::oarfish_types::{EMInfo, InMemoryAlignmentStore, TranscriptInfo};
 use itertools::izip;
 use num_format::{Locale, ToFormattedString};
-use tracing::{info, span};
+use tracing::{info, span, trace};
 
 /// Performs one iteration of the EM algorithm by looping over all
 /// alignments and computing their estimated probability of being
@@ -115,11 +115,19 @@ pub fn em(em_info: &mut EMInfo) -> Vec<f64> {
         // difference we observed.
         niter += 1;
         if niter % 10 == 0 {
-            info!(
-                "iteration {}; rel diff {}",
-                niter.to_formatted_string(&Locale::en),
-                rel_diff
-            );
+            if niter % 100 == 0 {
+                info!(
+                    "iteration {}; rel diff {}",
+                    niter.to_formatted_string(&Locale::en),
+                    rel_diff
+                );
+            } else {
+                trace!(
+                    "iteration {}; rel diff {}",
+                    niter.to_formatted_string(&Locale::en),
+                    rel_diff
+                );
+            }
         }
         rel_diff = 0.0_f64;
     }
