@@ -398,7 +398,7 @@ EM:
           location of short read quantification (if provided)
 
 </code></pre>
-<p>The input should be a <code>bam</code> format file, with reads aligned using <a href="https://github.com/lh3/minimap2"><code>minimap2</code></a> against the <em>transcriptome</em>. That is, <code>oarfish</code> does not currently handle spliced alignment to the genome.  Further, the output alignments should be name sorted (the default order produced by <code>minimap2</code> should be fine).</p>
+<p>The input should be a <code>bam</code> format file, with reads aligned using <a href="https://github.com/lh3/minimap2"><code>minimap2</code></a> against the <em>transcriptome</em>. That is, <code>oarfish</code> does not currently handle spliced alignment to the genome.  Further, the output alignments should be name sorted (the default order produced by <code>minimap2</code> should be fine). <em>Specifically</em>, <code>oarfish</code> relies on the existence of the <code>AS</code> tag in the <code>bam</code> records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read.</p>
 <h3 id="output">Output</h3>
 <p>The <code>--output</code> option passed to <code>oarfish</code> corresponds to a directory (that will be created if it doesn't exist), under which the relevant output files will be placed.
 The output of <code>oarfish</code> constist of 2 files:</p>
