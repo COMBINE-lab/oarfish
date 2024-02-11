@@ -2,28 +2,40 @@ use crate::util::oarfish_types::EMInfo;
 use serde_json::json;
 use std::{
     fs,
+    fs::create_dir_all,
     fs::File,
     fs::OpenOptions,
     io::{self, BufWriter, Write},
 };
+use std::path::{Path, PathBuf};
+use path_tools::WithAdditionalExtension;
 
 //this part is taken from dev branch
 pub fn write_output(
-    output: &String,
+    output: &PathBuf,
     prob_flag: &bool,
     bins: &u32,
     em_info: &EMInfo,
     header: &noodles_sam::header::Header,
     counts: &[f64],
 ) -> io::Result<()> {
+
+
+    // if there is a parent directory
+    if let Some(p) = output.parent() {
+        // unless this was a relative path with one component,
+        // which we should treat as the file prefix, then grab
+        // the non-empty parent and create it.
+        if p != Path::new("") {
+            create_dir_all(p)?;
+        }
+    }
+
     let prob = if *prob_flag {
         "binomial"
     } else {
         "no_coverage"
     };
-
-    let output_directory = output.to_string();
-    fs::create_dir_all(&output_directory)?;
 
     {
         let info = json!({
@@ -33,8 +45,7 @@ pub fn write_output(
             "discard_table" : em_info.eq_map.discard_table
         });
 
-        let mut info_path = std::path::PathBuf::from(&output_directory);
-        info_path.push("info.json");
+        let info_path = output.with_additional_extension(".meta_info.json");
         let write = OpenOptions::new()
             .write(true)
             .create(true)
@@ -45,7 +56,7 @@ pub fn write_output(
         serde_json::ser::to_writer_pretty(write, &info)?;
     }
 
-    let out_path: String = format!("{}/quant.tsv", output_directory);
+    let out_path = output.with_additional_extension(".quant");
     File::create(&out_path)?;
 
     let write = OpenOptions::new()

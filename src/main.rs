@@ -48,7 +48,7 @@ struct Args {
     alignments: PathBuf,
     /// location where output quantification file should be written
     #[arg(short, long, required = true)]
-    output: String,
+    output: PathBuf,
 
     #[arg(long, help_heading = "filters", value_enum)]
     filter_group: Option<FilterGroup>,

@@ -57,11 +57,10 @@ The input should be a `bam` format file, with reads aligned using [`minimap2`](h
 
 ### Output
 
-The `--output` option passed to `oarfish` corresponds to a directory (that will be created if it doesn't exist), under which the relevant output files will be placed.
-The output of `oarfish` constist of 2 files:
+The `--output` option passed to `oarfish` corresponds to a path prefix (this prefix can contain the path separator character and if it refers to a directory that does not yeat exist, that directory will be created). Based on this path prefix, say `P`, `oarfish` will create 2 files:
 
-  * `info.json` - a JSON format file containing information about relevant parameters with which `oarfish` was run, and other relevant inforamtion from the processed sample apart from the actual transcript quantifications.
-  * `quant.tsv` - a tab separated file listing the quantified targets, as well as information about their length and other metadata. The `num_reads` column provides the estimate of the number of reads originating from each target.
+  * `P.meta_info.json` - a JSON format file containing information about relevant parameters with which `oarfish` was run, and other relevant inforamtion from the processed sample apart from the actual transcript quantifications.
+  * `P.quant` - a tab separated file listing the quantified targets, as well as information about their length and other metadata. The `num_reads` column provides the estimate of the number of reads originating from each target.
 
 
 ### References
