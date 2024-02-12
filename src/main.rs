@@ -193,8 +193,11 @@ fn main() -> anyhow::Result<()> {
         .map(BufReader::new)
         .map(bam::io::Reader::new)?;
 
+    // parse the header, and ensure that the reads were mapped with minimap2 (as far as we
+    // can tell).
     let header = alignment_parser::read_and_verify_header(&mut reader, &args.alignments)?;
     let num_ref_seqs = header.reference_sequences().len();
+
     // where we'll write down the per-transcript information we need
     // to track.
     let mut txps: Vec<TranscriptInfo> = Vec::with_capacity(num_ref_seqs);
@@ -218,9 +221,12 @@ fn main() -> anyhow::Result<()> {
         txps.len()
     );
 
+    // now parse the actual alignments for the reads and store the results
+    // in our in-memory stor
     let mut store = InMemoryAlignmentStore::new(filter_opts, &header);
     alignment_parser::parse_alignments(&mut store, &header, &mut reader, &mut txps)?;
 
+    // print discard table information in which the user might be interested.
     info!("\ndiscard_table: \n{}\n", store.discard_table.to_table());
 
     if store.filter_opts.model_coverage {
