@@ -7,11 +7,12 @@ use std::{
 };
 
 use num_format::{Locale, ToFormattedString};
-use tracing::{info, trace};
+use tracing::info;
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 
 use noodles_bam as bam;
 
+mod alignment_parser;
 mod em;
 mod util;
 use crate::util::binomial_probability::binomial_continuous_prob;
@@ -117,35 +118,10 @@ struct Args {
     bins: u32,
 }
 
-fn main() -> anyhow::Result<()> {
-    let env_filter = EnvFilter::builder()
-        .with_default_directive(LevelFilter::INFO.into())
-        .from_env_lossy();
-    let (filtered_layer, reload_handle) = tracing_subscriber::reload::Layer::new(env_filter);
-
-    // set up the logging.  Here we will take the
-    // logging level from the environment variable if
-    // it is set.  Otherwise, we'll set the default
-    tracing_subscriber::registry()
-        // log level to INFO.
-        .with(fmt::layer().with_writer(io::stderr))
-        .with(filtered_layer)
-        .init();
-
-    let args = Args::parse();
-
-    // change the logging filter if the user specified quiet or
-    // verbose.
-    if args.quiet {
-        reload_handle.modify(|filter| *filter = EnvFilter::new("WARN"))?;
-    }
-    if args.verbose {
-        reload_handle.modify(|filter| *filter = EnvFilter::new("TRACE"))?;
-    }
-
+fn get_filter_opts(args: &Args) -> AlignmentFilters {
     // set all of the filter options that the user
     // wants to apply.
-    let filter_opts = match args.filter_group {
+    match args.filter_group {
         Some(FilterGroup::NoFilters) => {
             info!("disabling alignment filters.");
             AlignmentFilters::builder()
@@ -182,7 +158,36 @@ fn main() -> anyhow::Result<()> {
                 .model_coverage(args.model_coverage)
                 .build()
         }
-    };
+    }
+}
+
+fn main() -> anyhow::Result<()> {
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(LevelFilter::INFO.into())
+        .from_env_lossy();
+    let (filtered_layer, reload_handle) = tracing_subscriber::reload::Layer::new(env_filter);
+
+    // set up the logging.  Here we will take the
+    // logging level from the environment variable if
+    // it is set.  Otherwise, we'll set the default
+    tracing_subscriber::registry()
+        // log level to INFO.
+        .with(fmt::layer().with_writer(io::stderr))
+        .with(filtered_layer)
+        .init();
+
+    let args = Args::parse();
+
+    // change the logging filter if the user specified quiet or
+    // verbose.
+    if args.quiet {
+        reload_handle.modify(|filter| *filter = EnvFilter::new("WARN"))?;
+    }
+    if args.verbose {
+        reload_handle.modify(|filter| *filter = EnvFilter::new("TRACE"))?;
+    }
+
+    let filter_opts = get_filter_opts(&args);
 
     let mut reader = File::open(&args.alignments)
         .map(BufReader::new)
@@ -242,70 +247,9 @@ fn main() -> anyhow::Result<()> {
         txps.len()
     );
 
-    // we'll need these to keep track of which alignments belong
-    // to which reads.
-    let mut prev_read = String::new();
-    let mut num_unmapped = 0_u64;
-    let mut records_for_read = vec![];
     let mut store = InMemoryAlignmentStore::new(filter_opts, &header);
+    alignment_parser::parse_alignments(&mut store, &header, &mut reader, &mut txps)?;
 
-    // Parse the input alignemnt file, gathering the alignments aggregated
-    // by their source read. **Note**: this requires that we have a
-    // name-sorted input bam file (currently, aligned against the transcriptome).
-    //
-    // *NOTE*: this had to be changed from `records` to `record_bufs` or
-    // critical information was missing from the records. This happened when
-    // moving to the new version of noodles. Track `https://github.com/zaeleus/noodles/issues/230`
-    // to see if it's clear why this is the case
-    for (i, result) in reader.record_bufs(&header).enumerate() {
-        let record = result?;
-
-        if i % 100_000 == 1 {
-            trace!("processed {i} alignment records");
-        }
-        // unmapped reads don't contribute to quantification
-        // but we track them.
-        if record.flags().is_unmapped() {
-            num_unmapped += 1;
-            continue;
-        }
-        let record_copy = record.clone();
-        if let Some(rname) = record.name() {
-            let rstring: String = String::from_utf8_lossy(rname.as_ref()).into_owned();
-            // if this is an alignment for the same read, then
-            // push it onto our temporary vector.
-            if prev_read == rstring {
-                if let Some(_ref_id) = record.reference_sequence_id() {
-                    records_for_read.push(record_copy);
-                }
-            } else {
-                // otherwise, record the alignment range for the
-                // previous read record.
-                if !prev_read.is_empty() {
-                    store.add_group(&mut txps, &mut records_for_read);
-                    records_for_read.clear();
-                }
-                // the new "prev_read" name is the current read name
-                // so it becomes the first on the new alignment range
-                // vector.
-                prev_read = rstring;
-                if let Some(_ref_id) = record.reference_sequence_id() {
-                    records_for_read.push(record_copy);
-                }
-            }
-        }
-    }
-    // if we end with a non-empty alignment range vector, then
-    // add that group.
-    if !records_for_read.is_empty() {
-        store.add_group(&mut txps, &mut records_for_read);
-        records_for_read.clear();
-    }
-
-    info!(
-        "the alignment file contained {} unmapped read records.",
-        num_unmapped.to_formatted_string(&Locale::en)
-    );
     info!("\ndiscard_table: \n{}\n", store.discard_table.to_table());
 
     if store.filter_opts.model_coverage {

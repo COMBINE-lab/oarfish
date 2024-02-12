@@ -1,5 +1,7 @@
 use crate::util::oarfish_types::EMInfo;
+use path_tools::WithAdditionalExtension;
 use serde_json::json;
+use std::path::{Path, PathBuf};
 use std::{
     fs,
     fs::create_dir_all,
@@ -7,8 +9,6 @@ use std::{
     fs::OpenOptions,
     io::{self, BufWriter, Write},
 };
-use std::path::{Path, PathBuf};
-use path_tools::WithAdditionalExtension;
 
 //this part is taken from dev branch
 pub fn write_output(
@@ -19,8 +19,6 @@ pub fn write_output(
     header: &noodles_sam::header::Header,
     counts: &[f64],
 ) -> io::Result<()> {
-
-
     // if there is a parent directory
     if let Some(p) = output.parent() {
         // unless this was a relative path with one component,
