@@ -193,36 +193,7 @@ fn main() -> anyhow::Result<()> {
         .map(BufReader::new)
         .map(bam::io::Reader::new)?;
 
-    // read the bam file header, print out some basic info
-    let header = reader.read_header()?;
-    info!(
-        "read header from BAM file {}, contains {} reference sequences.",
-        args.alignments.display(),
-        header
-            .reference_sequences()
-            .len()
-            .to_formatted_string(&Locale::en)
-    );
-
-    let mut saw_minimap2 = false;
-    let mut progs = vec![];
-    // explicitly check that alignment was done with a supported
-    // aligner (right now, just minimap2).
-    for (prog, _pmap) in header.programs().iter() {
-        if prog == "minimap2" {
-            saw_minimap2 = true;
-            break;
-        } else {
-            progs.push(prog);
-        }
-    }
-    assert!(
-        saw_minimap2,
-        "Currently, only minimap2 is supported as an aligner. The bam file listed {:?}.",
-        progs
-    );
-    info!("saw minimap2 as a program in the header; proceeding.");
-
+    let header = alignment_parser::read_and_verify_header(&mut reader, &args.alignments)?;
     let num_ref_seqs = header.reference_sequences().len();
     // where we'll write down the per-transcript information we need
     // to track.
