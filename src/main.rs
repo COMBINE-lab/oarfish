@@ -245,7 +245,7 @@ fn main() -> anyhow::Result<()> {
         store.num_aligned_reads().to_formatted_string(&Locale::en)
     );
 
-    // if we are seeding the quantification estimates with short read 
+    // if we are seeding the quantification estimates with short read
     // abundances, then read those in here.
     let init_abundances = args.short_quant.map(|sr_path| {
         read_short_quant_vec(&sr_path, &txps_name).unwrap_or_else(|e| panic!("{}", e))
@@ -261,7 +261,7 @@ fn main() -> anyhow::Result<()> {
         init_abundances,
     };
 
-    let counts = em::em(&mut emi, args.threads);
+    let counts = em::em_par(&mut emi, args.threads);
 
     // write the output
     write_output(
