@@ -27,6 +27,7 @@ serde = { version = "1", features = ["derive"] }
 itertools = "0.12.1"
 serde_json = "1.0.113"
 path-tools = "0.1.0"
+atomic_float = "0.1.0"
 
 [[bin]]
 name = "oarfish"

@@ -1,7 +1,11 @@
-use crate::util::oarfish_types::{EMInfo, InMemoryAlignmentStore, TranscriptInfo};
+use std::sync::atomic::Ordering;
+
+use crate::util::oarfish_types::{EMInfo, AlnInfo, TranscriptInfo};
 use itertools::izip;
 use num_format::{Locale, ToFormattedString};
 use tracing::{info, span, trace};
+use atomic_float::AtomicF64;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 /// Performs one iteration of the EM algorithm by looping over all
 /// alignments and computing their estimated probability of being
@@ -9,17 +13,18 @@ use tracing::{info, span, trace};
 /// Then, `curr_counts` is computed by summing over the expected assignment
 /// likelihood for all reads mapping to each target.
 #[inline]
-fn m_step(
-    eq_map: &InMemoryAlignmentStore,
+fn m_step<'a>(
+    eq_iterates: &[(&'a [AlnInfo], &'a [f32], &'a [f64])],
     _tinfo: &mut [TranscriptInfo],
     model_coverage: bool,
-    prev_count: &mut [f64],
-    curr_counts: &mut [f64],
+    prev_count: &mut [AtomicF64],
+    curr_counts: &mut [AtomicF64],
 ) {
     const DENOM_THRESH: f64 = 1e-30_f64;
-    for (alns, probs, coverage_probs) in eq_map.iter() {
+    // for (alns, probs, coverage_probs) in eq_map.iter() {
+    eq_iterates.par_iter().for_each_with(&curr_counts, |curr_counts, (alns, probs, coverage_probs)| {
         let mut denom = 0.0_f64;
-        for (a, p, cp) in izip!(alns, probs, coverage_probs) {
+        for (a, p, cp) in izip!(*alns, *probs, *coverage_probs) {
             // Compute the probability of assignment of the
             // current read based on this alignment and the
             // target's estimated abundance.
@@ -27,7 +32,7 @@ fn m_step(
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
 
-            denom += prev_count[target_id] * prob * cov_prob;
+            denom += prev_count[target_id].load(Ordering::Relaxed) * prob * cov_prob;
         }
 
         // If this read can be assigned
@@ -35,24 +40,27 @@ fn m_step(
             // Loop over all possible assignment locations and proportionally
             // allocate the read according to our model and current parameter
             // estimates.
-            for (a, p, cp) in izip!(alns, probs, coverage_probs) {
+            for (a, p, cp) in izip!(*alns, *probs, *coverage_probs) {
                 let target_id = a.ref_id as usize;
                 let prob = *p as f64;
                 let cov_prob = if model_coverage { *cp } else { 1.0 };
-                let inc = (prev_count[target_id] * prob * cov_prob) / denom;
-                curr_counts[target_id] += inc;
+                let inc = (prev_count[target_id].load(Ordering::Relaxed) * prob * cov_prob) / denom;
+                //curr_counts[target_id] += inc;
+                curr_counts[target_id].fetch_add(inc, Ordering::AcqRel);
             }
         }
-    }
+    });
 }
 
 /// Perform the EM algorithm to estimate the abundances of the
 /// target sequences.  The return value is a `Vec` of f64 values,
 /// each of which is the estimated number of fragments arising from
 /// each target.
-pub fn em(em_info: &mut EMInfo) -> Vec<f64> {
+pub fn em(em_info: &mut EMInfo, nthreads: usize) -> Vec<f64> {
     let span = span!(tracing::Level::INFO, "em");
     let _guard = span.enter();
+
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(nthreads).build().unwrap();
 
     let eq_map = em_info.eq_map;
     let fops = &eq_map.filter_opts;
@@ -60,10 +68,12 @@ pub fn em(em_info: &mut EMInfo) -> Vec<f64> {
     let max_iter = em_info.max_iter;
     let convergence_thresh = em_info.convergence_thresh;
     let total_weight: f64 = eq_map.num_aligned_reads() as f64;
-
+    let eq_iterates: Vec<(&[AlnInfo], &[f32], &[f64])> = eq_map.iter().collect();
     // initialize the estimated counts for the EM procedure
-    let mut prev_counts: Vec<f64>;
+    let mut prev_counts: Vec<f64> = vec![];
+    let mut curr_counts: Vec<AtomicF64> = vec![0.0f64; tinfo.len()].iter().map(|x| AtomicF64::new(*x)).collect();
 
+    pool.install( || {
     if let Some(ref init_counts) = em_info.init_abundances {
         // initalize with the short-read quantification
         prev_counts = init_counts.clone();
@@ -72,8 +82,8 @@ pub fn em(em_info: &mut EMInfo) -> Vec<f64> {
         let avg = total_weight / (tinfo.len() as f64);
         prev_counts = vec![avg; tinfo.len()];
     }
+    let mut prev_counts: Vec<AtomicF64> = prev_counts.iter().map( |x| AtomicF64::new(*x) ).collect();
 
-    let mut curr_counts = vec![0.0f64; tinfo.len()];
 
     let mut rel_diff = 0.0_f64;
     let mut niter = 0_u32;
@@ -83,7 +93,7 @@ pub fn em(em_info: &mut EMInfo) -> Vec<f64> {
     while niter < max_iter {
         // allocate the fragments and compute the new counts
         m_step(
-            eq_map,
+            &eq_iterates,
             tinfo,
             fops.model_coverage,
             &mut prev_counts,
@@ -93,16 +103,19 @@ pub fn em(em_info: &mut EMInfo) -> Vec<f64> {
         // compute the relative difference in the parameter estimates
         // between the current and previous rounds
         for i in 0..curr_counts.len() {
-            if prev_counts[i] > 1e-8 {
-                let rd = (curr_counts[i] - prev_counts[i]) / prev_counts[i];
+            if prev_counts[i].load(Ordering::Relaxed) > 1e-8 {
+                let cc = curr_counts[i].load(Ordering::Relaxed);
+                let pc = prev_counts[i].load(Ordering::Relaxed);
+                let rd = (cc - pc) / pc;
                 rel_diff = rel_diff.max(rd);
             }
         }
 
         // swap the current and previous abundances
         std::mem::swap(&mut prev_counts, &mut curr_counts);
+
         // clear out the new abundances
-        curr_counts.fill(0.0_f64);
+        curr_counts.par_iter().for_each( |x| x.store(0.0f64, Ordering::Relaxed)); //fill(0.0_f64);
 
         // if the maximum relative difference is small enough
         // and we've done at least 10 rounds of the EM, then
@@ -134,19 +147,21 @@ pub fn em(em_info: &mut EMInfo) -> Vec<f64> {
 
     // set very small abundances to 0
     prev_counts.iter_mut().for_each(|x| {
-        if *x < 1e-8 {
-            *x = 0.0
+        if x.load(Ordering::Relaxed) < 1e-8 {
+            x.store(0.0, Ordering::Relaxed);
         }
     });
     // perform one more EM round, since we just zeroed out
     // very small abundances
     m_step(
-        eq_map,
+        &eq_iterates,
         tinfo,
         fops.model_coverage,
         &mut prev_counts,
         &mut curr_counts,
     );
+
+    });
     //  return the final estimated abundances
-    curr_counts
+    curr_counts.iter().map(|x| x.load(Ordering::Relaxed)).collect::<Vec<f64>>()
 }

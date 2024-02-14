@@ -261,7 +261,7 @@ fn main() -> anyhow::Result<()> {
         init_abundances,
     };
 
-    let counts = em::em(&mut emi);
+    let counts = em::em(&mut emi, args.threads);
 
     // write the output
     write_output(
