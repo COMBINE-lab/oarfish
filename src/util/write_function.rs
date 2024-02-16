@@ -43,7 +43,7 @@ pub fn write_output(
             "discard_table" : em_info.eq_map.discard_table
         });
 
-        let info_path = output.with_additional_extension(".meta_info.json");
+        let info_path = output.with_additional_extension(format!(".{}.meta_info.json", prob));
         let write = OpenOptions::new()
             .write(true)
             .create(true)
@@ -54,7 +54,7 @@ pub fn write_output(
         serde_json::ser::to_writer_pretty(write, &info)?;
     }
 
-    let out_path = output.with_additional_extension(".quant");
+    let out_path = output.with_additional_extension(format!(".{}.quant", prob));
     File::create(&out_path)?;
 
     let write = OpenOptions::new()
