@@ -1,3 +1,4 @@
+use serde::Deserialize;
 use std::fmt;
 use std::num::NonZeroUsize;
 
@@ -5,12 +6,15 @@ use std::iter::FromIterator;
 use tabled::builder::Builder;
 use tabled::settings::Style;
 
+use serde::Serialize;
 use typed_builder::TypedBuilder;
 
 use bio_types::strand::Strand;
 use noodles_sam as sam;
-use sam::record::data::field::tag;
-use tracing::{info, warn};
+use sam::{alignment::record::data::field::tag::Tag as AlnTag, Header};
+
+#[allow(unused_imports)]
+use tracing::{error, info, warn};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AlnInfo {
@@ -22,19 +26,30 @@ pub struct AlnInfo {
 }
 
 impl AlnInfo {
+    #[allow(dead_code)]
     pub fn alignment_span(&self) -> u32 {
         self.end - self.start
     }
 }
 
-impl From<&sam::alignment::record::Record> for AlnInfo {
-    fn from(aln: &sam::alignment::record::Record) -> Self {
+impl AlnInfo {
+    fn from_noodles_record<T: sam::alignment::record::Record>(
+        aln: &T,
+        aln_header: &Header,
+    ) -> Self {
         Self {
-            ref_id: aln.reference_sequence_id().unwrap() as u32,
-            start: aln.alignment_start().unwrap().get() as u32,
-            end: aln.alignment_end().unwrap().get() as u32,
+            ref_id: aln
+                .reference_sequence_id(aln_header)
+                .unwrap()
+                .expect("valid reference id") as u32,
+            start: aln
+                .alignment_start()
+                .unwrap()
+                .expect("valid aln start")
+                .get() as u32,
+            end: aln.alignment_end().unwrap().expect("valid aln end").get() as u32,
             prob: 0.0_f64,
-            strand: if aln.flags().is_reverse_complemented() {
+            strand: if aln.flags().expect("valid flags").is_reverse_complemented() {
                 Strand::Reverse
             } else {
                 Strand::Forward
@@ -42,25 +57,86 @@ impl From<&sam::alignment::record::Record> for AlnInfo {
         }
     }
 }
+/*
+impl<T: sam::alignment::record::Record> From<&T> for AlnInfo {
+    fn from(aln: &T) -> Self {
+        Self {
+            ref_id: aln.reference_sequence_id().unwrap() as u32,
+            start: aln.alignment_start().unwrap().expect("valid aln start").get() as u32,
+            end: aln.alignment_end().unwrap().expect("valid aln end").get() as u32,
+            prob: 0.0_f64,
+            strand: if aln.flags().expect("valid flags").is_reverse_complemented() {
+                Strand::Reverse
+            } else {
+                Strand::Forward
+            },
+        }
+    }
+}
+*/
+
+/// Holds the info relevant for reading the short read quants
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "PascalCase")]
+pub struct ShortReadRecord {
+    pub name: String,
+    pub length: i32,
+    pub effective_length: f64,
+    #[serde(rename = "TPM")]
+    pub tpm: f64,
+    pub num_reads: f64,
+}
+
+#[allow(dead_code)]
+impl ShortReadRecord {
+    pub fn empty(name: &str) -> Self {
+        Self {
+            name: name.to_owned(),
+            length: 0,
+            effective_length: 0.0,
+            tpm: 0.0,
+            num_reads: 0.0,
+        }
+    }
+}
+
+/// Holds the info relevant for running the EM algorithm
+pub struct EMInfo<'eqm, 'tinfo, 'h> {
+    // the read alignment infomation we'll need to
+    // perform the EM
+    pub eq_map: &'eqm InMemoryAlignmentStore<'h>,
+    // relevant information about each target transcript
+    pub txp_info: &'tinfo mut Vec<TranscriptInfo>,
+    // maximum number of iterations the EM will run
+    // before returning an estimate.
+    pub max_iter: u32,
+    // the EM will terminate early if *all* parameters
+    // have converged within this threshold of relative
+    // change between two subsequent iterations.
+    pub convergence_thresh: f64,
+    // An optional vector of abundances from which
+    // to initalize the EM, otherwise, a default
+    // uniform initalization is used.
+    pub init_abundances: Option<Vec<f64>>,
+}
 
 #[derive(Debug, PartialEq)]
 pub struct TranscriptInfo {
-    len: NonZeroUsize,
-    total_weight: f64,
+    pub len: NonZeroUsize,
+    pub total_weight: f64,
     coverage_bins: Vec<f64>,
-    pub coverage_prob: f64,
+    pub coverage_prob: Vec<f64>,
     pub lenf: f64,
 }
 
 impl TranscriptInfo {
     #[allow(dead_code)]
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             len: NonZeroUsize::new(0).unwrap(),
             total_weight: 0.0_f64,
             coverage_bins: vec![0.0_f64; 10],
-            //ranges: Vec::new(),
-            coverage_prob: 1.0,
+            coverage_prob: Vec::new(),
             lenf: 0_f64,
         }
     }
@@ -70,42 +146,79 @@ impl TranscriptInfo {
             len,
             total_weight: 0.0_f64,
             coverage_bins: vec![0.0_f64; 10],
-            //ranges: Vec::new(),
-            coverage_prob: 1.0,
+            coverage_prob: Vec::new(),
+            lenf: len.get() as f64,
+        }
+    }
+    pub fn with_len_and_bins(len: NonZeroUsize, bins: u32) -> Self {
+        Self {
+            len,
+            total_weight: 0.0_f64,
+            coverage_bins: vec![0.0_f64; bins as usize],
+            coverage_prob: Vec::new(),
             lenf: len.get() as f64,
         }
     }
 
+    #[inline(always)]
+    pub fn get_normalized_counts_and_lengths(&self) -> (Vec<f32>, Vec<f32>) {
+        let num_intervals = self.coverage_bins.len();
+        let num_intervals_f = num_intervals as f64;
+        let tlen_f = self.lenf;
+        let bin_width = (tlen_f / num_intervals_f).round() as f32;
+
+        let cov_f32 = self.coverage_bins.iter().map(|f| *f as f32).collect();
+        let mut widths_f32 = Vec::<f32>::with_capacity(num_intervals);
+        for bidx in 0..num_intervals {
+            let bidxf = bidx as f32;
+            let bin_start = bidxf * bin_width;
+            let bin_end = ((bidxf + 1.0) * bin_width).min(self.lenf as f32);
+            widths_f32.push(bin_end - bin_start);
+        }
+        (cov_f32, widths_f32)
+    }
+
+    #[inline(always)]
     pub fn add_interval(&mut self, start: u32, stop: u32, weight: f64) {
-        const NUM_INTERVALS: usize = 10_usize;
-        const NUM_INTERVALS_F: f64 = 10.0_f64;
-        // find the starting bin
-        let start_bin = ((((start as f64) / self.lenf) * NUM_INTERVALS_F).floor() as usize)
-            .min(NUM_INTERVALS - 1);
-        let end_bin = ((((stop as f64) / self.lenf) * NUM_INTERVALS_F).floor() as usize)
-            .min(NUM_INTERVALS - 1);
-        for bin in &mut self.coverage_bins[start_bin..=end_bin] {
-            *bin += weight;
+        const ONE_PLUS_EPSILON: f64 = 1.0_f64 + f64::EPSILON;
+        let num_intervals = self.coverage_bins.len();
+        let num_intervals_f = num_intervals as f64;
+        let tlen_f = self.lenf;
+        let bin_width = (tlen_f / num_intervals_f).round();
+        let start = start.min(stop);
+        let stop = start.max(stop);
+        let start_bin = (((start as f64) / tlen_f) * num_intervals_f).floor() as usize;
+        let end_bin = (((stop as f64) / tlen_f) * num_intervals_f).floor() as usize;
+
+        let get_overlap = |s1: u32, e1: u32, s2: u32, e2: u32| -> u32 {
+            if s1 <= e2 {
+                e1.min(e2) - s1.max(s2)
+            } else {
+                0_u32
+            }
+        };
+
+        for (bidx, bin) in self.coverage_bins[start_bin..end_bin]
+            .iter_mut()
+            .enumerate()
+        {
+            let bidxf = (start_bin + bidx) as f64;
+            let curr_bin_start = (bidxf * bin_width) as u32;
+            let curr_bin_end = ((bidxf + 1.0) * bin_width).min(tlen_f) as u32;
+
+            let olap = get_overlap(start, stop, curr_bin_start, curr_bin_end);
+            let olfrac = (olap as f64) / ((curr_bin_end - curr_bin_start) as f64);
+            *bin += olfrac;
+            if olfrac > ONE_PLUS_EPSILON {
+                error!("first_bin = {start_bin}, last_bin = {end_bin}");
+                error!("bin = {}, olfrac = {}, olap = {}, curr_bin_start = {}, curr_bin_end = {}, start = {start}, stop = {stop}", *bin, olfrac, olap, curr_bin_start, curr_bin_end);
+                panic!("coverage computation error; please report this error at https://github.com/COMBINE-lab/oarfish.")
+            }
         }
         self.total_weight += weight;
     }
 
-    pub fn compute_coverage_prob(&mut self) {
-        // first normalize
-        const EVEN_COV: f64 = 0.1_f64;
-        let sum: f64 = self.coverage_bins.iter().sum();
-        let deviation: f64 = if sum > 0.0 {
-            self.coverage_bins
-                .iter()
-                .copied()
-                .fold(0.0_f64, |a, e| a + ((e / sum) - EVEN_COV).abs())
-        } else {
-            2.0_f64
-        };
-        let coverage_prob = (-deviation * 4.0).exp();
-        self.coverage_prob = coverage_prob;
-    }
-
+    #[allow(dead_code)]
     pub fn clear_coverage_dist(&mut self) {
         self.coverage_bins.fill(0.0_f64);
         self.total_weight = 0.0_f64;
@@ -113,22 +226,24 @@ impl TranscriptInfo {
 }
 
 #[derive(Debug)]
-pub struct InMemoryAlignmentStore {
+pub struct InMemoryAlignmentStore<'h> {
     pub filter_opts: AlignmentFilters,
-    alignments: Vec<AlnInfo>,
-    probabilities: Vec<f32>,
+    pub aln_header: &'h Header,
+    pub alignments: Vec<AlnInfo>,
+    pub as_probabilities: Vec<f32>,
+    pub coverage_probabilities: Vec<f64>,
     // holds the boundaries between records for different reads
     boundaries: Vec<usize>,
     pub discard_table: DiscardTable,
 }
 
-pub struct InMemoryAlignmentStoreIter<'a> {
-    store: &'a InMemoryAlignmentStore,
-    idx: usize,
+pub struct InMemoryAlignmentStoreIter<'a, 'h> {
+    pub store: &'a InMemoryAlignmentStore<'h>,
+    pub idx: usize,
 }
 
-impl<'a> Iterator for InMemoryAlignmentStoreIter<'a> {
-    type Item = (&'a [AlnInfo], &'a [f32]);
+impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
+    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx + 1 >= self.store.boundaries.len() {
@@ -139,18 +254,21 @@ impl<'a> Iterator for InMemoryAlignmentStoreIter<'a> {
             self.idx += 1;
             Some((
                 &self.store.alignments[start..end],
-                &self.store.probabilities[start..end],
+                &self.store.as_probabilities[start..end],
+                &self.store.coverage_probabilities[start..end],
             ))
         }
     }
 }
 
-impl InMemoryAlignmentStore {
-    pub fn new(fo: AlignmentFilters) -> Self {
+impl<'h> InMemoryAlignmentStore<'h> {
+    pub fn new(fo: AlignmentFilters, header: &'h Header) -> Self {
         InMemoryAlignmentStore {
             filter_opts: fo,
+            aln_header: header,
             alignments: vec![],
-            probabilities: vec![],
+            as_probabilities: vec![],
+            coverage_probabilities: vec![],
             boundaries: vec![0],
             discard_table: DiscardTable::new(),
         }
@@ -163,16 +281,27 @@ impl InMemoryAlignmentStore {
         }
     }
 
-    pub fn add_group(
+    pub fn add_group<T: sam::alignment::record::Record + std::fmt::Debug>(
         &mut self,
         txps: &mut [TranscriptInfo],
-        ag: &mut Vec<sam::alignment::record::Record>,
+        ag: &mut Vec<T>,
     ) {
-        let (alns, probs) = self.filter_opts.filter(&mut self.discard_table, txps, ag);
+        let (alns, as_probs) =
+            self.filter_opts
+                .filter(&mut self.discard_table, self.aln_header, txps, ag);
         if !alns.is_empty() {
             self.alignments.extend_from_slice(&alns);
-            self.probabilities.extend_from_slice(&probs);
+            self.as_probabilities.extend_from_slice(&as_probs);
+            self.coverage_probabilities
+                .extend(vec![0.0_f64; alns.len()]);
             self.boundaries.push(self.alignments.len());
+            // @Susan-Zare : this is making things unreasonably slow. Perhaps
+            // we should avoid pushing actual ranges, and just compute the
+            // contribution of each range to the coverage online.
+            //for a in alns {
+            //    txps[a.ref_id as usize].ranges.push(a.start..a.end);
+            //}
+            //
         }
     }
 
@@ -188,18 +317,46 @@ impl InMemoryAlignmentStore {
         }
     }
 }
-#[derive(TypedBuilder, Debug)]
+
+/// The parameters controling the filters that will
+/// be applied to alignments
+#[derive(TypedBuilder, Debug, Serialize)]
 pub struct AlignmentFilters {
+    /// How far an alignment can start from the
+    /// 5' end of the transcript and still be
+    /// considered valid
     five_prime_clip: u32,
+    /// How far an alignment can end from the
+    /// 3' end of the transcript and still be
+    /// considered valid
     three_prime_clip: i64,
+    /// The fraction of the best recorded alignment
+    /// score for this *read* that the current alignment
+    /// must obtain in order to be retained. For
+    /// example 0.95 means that it must be within
+    /// 95% of the best alignment.
     score_threshold: f32,
+    /// The minimum fraction of the read length that
+    /// must be part of the alignment in order
+    /// for this alignment to be retained.
     min_aligned_fraction: f32,
+    /// The minimum absolute length of this read that
+    /// must be aligned under this alignment in
+    /// order for this alignment to be  retained
     min_aligned_len: u32,
+    /// Determines if we should allow alignments to the
+    /// antisense strand; true if we should and false
+    /// otherwise.
     allow_rc: bool,
+    // True if we are enabling our coverage model and
+    // false otherwise.
     pub model_coverage: bool,
 }
 
-#[derive(Debug)]
+/// This structure records information about
+/// the number of alignments (and reads) discarded
+/// due to the application of `AlignmentFilters`.
+#[derive(Debug, Serialize)]
 pub struct DiscardTable {
     discard_5p: u32,
     discard_3p: u32,
@@ -256,56 +413,66 @@ impl DiscardTable {
 
 impl fmt::Display for DiscardTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
+        writeln!(
             f,
-            "discarded because of distance from 5' {}\n",
+            "discarded because of distance from 5' {}",
             self.discard_5p
         )
         .expect("couldn't format discard table.");
-        write!(
+        writeln!(
             f,
-            "discarded because of distance from 3' {}\n",
+            "discarded because of distance from 3' {}",
             self.discard_3p
         )
         .expect("couldn't format discard table.");
-        write!(
+        writeln!(
             f,
-            "discarded because of score fraction {}\n",
+            "discarded because of score fraction {}",
             self.discard_score
         )
         .expect("couldn't format discard table.");
-        write!(
+        writeln!(
             f,
-            "discarded because of aligned fraction {}\n",
+            "discarded because of aligned fraction {}",
             self.discard_aln_frac
         )
         .expect("couldn't format discard table.");
-        write!(
+        writeln!(
             f,
-            "discarded because of aligned length {}\n",
+            "discarded because of aligned length {}",
             self.discard_aln_len
         )
         .expect("couldn't format discard table.");
-        write!(
+        writeln!(
             f,
-            "discarded because of aligned orientation {}\n",
+            "discarded because of aligned orientation {}",
             self.discard_ori
         )
         .expect("couldn't format discard table.");
-        write!(
+        writeln!(
             f,
-            "discarded because alignment is supplemental {}\n",
+            "discarded because alignment is supplemental {}",
             self.discard_supp
         )
     }
 }
 
 impl AlignmentFilters {
-    fn filter(
+    /// Applies the filters defined by this AlignmentFilters struct
+    /// to the alignments provided in `ag`, a vector of alignments representing
+    /// a group of contiguous alignments for the same target.
+    ///
+    /// The details about what alignments have been filtered and why will
+    /// be added to the provided `discard_table`.  
+    ///
+    /// This function returns a vector of the `AlnInfo` structs for alignments
+    /// that pass the filter, and the associated probabilities for each.
+    fn filter<T: sam::alignment::record::Record + std::fmt::Debug>(
         &mut self,
         discard_table: &mut DiscardTable,
+        aln_header: &Header,
         txps: &mut [TranscriptInfo],
-        ag: &mut Vec<sam::alignment::record::Record>,
+        ag: &mut Vec<T>,
     ) -> (Vec<AlnInfo>, Vec<f32>) {
         // track the best score of any alignment we've seen
         // so far for this read (this will designate the
@@ -333,19 +500,39 @@ impl AlignmentFilters {
             })
             .unwrap_or(0_u32);
 
+        // apply the filter criteria to determine what alignments to retain
         ag.retain(|x| {
-            if !x.flags().is_unmapped() {
-                let tid = x.reference_sequence_id().unwrap();
-                let aln_span = x.alignment_span() as u32;
+            // we ony want to retain mapped reads
+            if !x
+                .flags()
+                .expect("alignment record should have flags")
+                .is_unmapped()
+            {
+                let tid = x
+                    .reference_sequence_id(aln_header)
+                    .unwrap()
+                    .expect("valid tid");
+
+                // get the alignment span
+                let aln_span = x.alignment_span().expect("valid span").unwrap() as u32;
+
+                // get the alignment score, as computed by the aligner
                 let score = x
                     .data()
-                    .get(&tag::ALIGNMENT_SCORE)
+                    .get(&AlnTag::ALIGNMENT_SCORE)
+                    .unwrap()
                     .expect("could not get value")
                     .as_int()
                     .unwrap_or(i32::MIN as i64) as i32;
 
                 // the alignment is to the - strand
-                let is_rc = x.flags().is_reverse_complemented();
+                let is_rc = x
+                    .flags()
+                    .expect("alignment record should have flags")
+                    .is_reverse_complemented();
+
+                // filter this alignment out if we are not permitting
+                // antisense alignments.
                 if is_rc && !self.allow_rc {
                     discard_table.discard_ori += 1;
                     return false;
@@ -354,21 +541,28 @@ impl AlignmentFilters {
                 // the alignment is supplementary
                 // *NOTE*: this removes "supplementary" alignments, *not*
                 // "secondary" alignments.
-                let is_supp = x.flags().is_supplementary();
+                let is_supp = x
+                    .flags()
+                    .expect("alignment record should have flags")
+                    .is_supplementary();
                 if is_supp {
                     discard_table.discard_supp += 1;
                     return false;
                 }
 
                 // enough absolute sequence (# of bases) is aligned
-                let filt_aln_len = (aln_span as u32) < self.min_aligned_len;
+                let filt_aln_len = aln_span < self.min_aligned_len;
                 if filt_aln_len {
                     discard_table.discard_aln_len += 1;
                     return false;
                 }
 
                 // not too far from the 3' end
-                let filt_3p = (x.alignment_end().unwrap().get() as i64)
+                let filt_3p = (x
+                    .alignment_end()
+                    .unwrap()
+                    .expect("alignment record should have end position")
+                    .get() as i64)
                     <= (txps[tid].len.get() as i64 - self.three_prime_clip);
                 if filt_3p {
                     discard_table.discard_3p += 1;
@@ -376,7 +570,12 @@ impl AlignmentFilters {
                 }
 
                 // not too far from the 5' end
-                let filt_5p = (x.alignment_start().unwrap().get() as u32) >= self.five_prime_clip;
+                let filt_5p = (x
+                    .alignment_start()
+                    .unwrap()
+                    .expect("alignment record should have a start position")
+                    .get() as u32)
+                    >= self.five_prime_clip;
                 if filt_5p {
                     discard_table.discard_5p += 1;
                     return false;
@@ -425,7 +624,8 @@ impl AlignmentFilters {
             .iter_mut()
             .map(|a| {
                 a.data()
-                    .get(&tag::ALIGNMENT_SCORE)
+                    .get(&AlnTag::ALIGNMENT_SCORE)
+                    .unwrap()
                     .expect("could not get value")
                     .as_int()
                     .unwrap_or(0) as i32
@@ -433,16 +633,32 @@ impl AlignmentFilters {
             .collect();
 
         for (i, score) in scores.iter_mut().enumerate() {
+            const SCORE_PROB_DENOM: f32 = 10.0;
             let fscore = *score as f32;
             let score_ok = (fscore * inv_max_score) >= self.score_threshold; //>= thresh_score;
             if score_ok {
-                let f = 10_f32 * ((fscore - mscore) / mscore);
+                let f = (fscore - mscore) / SCORE_PROB_DENOM;
                 probabilities.push(f.exp());
 
-                let tid = ag[i].reference_sequence_id().unwrap();
+                let tid = ag[i]
+                    .reference_sequence_id(aln_header)
+                    .unwrap()
+                    .expect("valid transcript id");
+
+                // since we are retaining this alignment, then
+                // add it to the coverage of the the corresponding
+                // transcript.
                 txps[tid].add_interval(
-                    ag[i].alignment_start().unwrap().get() as u32,
-                    ag[i].alignment_end().unwrap().get() as u32,
+                    ag[i]
+                        .alignment_start()
+                        .unwrap()
+                        .expect("valid alignment start")
+                        .get() as u32,
+                    ag[i]
+                        .alignment_end()
+                        .unwrap()
+                        .expect("valid alignment end")
+                        .get() as u32,
                     1.0_f64,
                 );
             } else {
@@ -457,6 +673,29 @@ impl AlignmentFilters {
             scores[index - 1] > i32::MIN
         });
 
-        (ag.iter().map(|x| x.into()).collect(), probabilities)
+        (
+            ag.iter()
+                .map(|x| AlnInfo::from_noodles_record(x, aln_header))
+                .collect(),
+            probabilities,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::util::oarfish_types::AlnInfo;
+    use bio_types::strand::Strand;
+
+    #[test]
+    fn aln_span_is_correct() {
+        let ainf = AlnInfo {
+            ref_id: 0,
+            start: 0,
+            end: 100,
+            prob: 0.5,
+            strand: Strand::Forward,
+        };
+        assert_eq!(ainf.alignment_span(), 100);
     }
 }
