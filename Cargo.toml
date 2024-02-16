@@ -1,15 +1,38 @@
 [package]
 name = "oarfish"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+authors = [
+  "Zahra Zare Jousheghani <zzare@umd.edu>",
+  "Rob Patro <rob@cs.umd.edu>",
+]
+description = "A fast, accurate and versatile tool for long-read transcript quantification."
+license-file = "LICENSE"
+readme = "README.md"
 repository = "https://github.com/COMBINE-lab/oarfish"
+homepage = "https://COMBINE-lab.github.io/oarfish"
+include = [
+  "/src/*.rs",
+  "/src/util/*.rs",
+  "/Cargo.toml",
+  "/Cargo.lock",
+  "/README.md",
+  "/LICENSE"
+]
+keywords = [
+  "RNA-seq",
+  "quantification",
+  "long-read",
+  "transcriptomics"
+]
+categories = ["command-line-utilities", "science"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 anyhow = "1.0.79"
 bio-types = "1.0.1"
-clap = { version = "4.5.0", features = ["derive"] }
+clap = { version = "4.5.1", features = ["derive"] }
 coitrees = "0.4.0"
 noodles-bam = "0.55.0"
 noodles-gtf = "0.23.0"
