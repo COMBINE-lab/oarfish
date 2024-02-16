@@ -633,11 +633,11 @@ impl AlignmentFilters {
             .collect();
 
         for (i, score) in scores.iter_mut().enumerate() {
+            const SCORE_PROB_DENOM: f32 = 10.0;
             let fscore = *score as f32;
             let score_ok = (fscore * inv_max_score) >= self.score_threshold; //>= thresh_score;
             if score_ok {
-                //let f = 10_f32 * ((fscore - mscore) / mscore);
-                let f = (fscore - mscore) / 10.0_f32;
+                let f = (fscore - mscore) / SCORE_PROB_DENOM;
                 probabilities.push(f.exp());
 
                 let tid = ag[i]
@@ -662,10 +662,6 @@ impl AlignmentFilters {
                     1.0_f64,
                 );
             } else {
-                //if let Some(name) = ag[i].name() {
-                //    let name_str = String::from_utf8_lossy(name.as_bytes());
-                //    info!("read: {:?}, score: {:?}", name_str, fscore);
-                //} 
                 *score = i32::MIN;
                 discard_table.discard_score += 1;
             }
