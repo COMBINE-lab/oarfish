@@ -11,7 +11,7 @@ process map_samples {
     minimap2 -t 8 -ax map-ont -N 100 ${ref} ${sample} | samtools view -@4 -h -F 2052 -bS > ${sample_id}_${ref_type}.bam
     """
 }
-
+//
 process build_sirv_index {
   input:
     tuple path(ref_fasta), path(ref_gtf), val(ref_type)

@@ -11,7 +11,7 @@ process map_samples {
     minimap2 -t 8 -ax map-ont -N 100 ${params.gencode_31_with_sequin} ${sample} | samtools view -@4 -h -F 2052 -bS > ${sample_name}.bam
     """
 }
-
+//
 process quant_samples_oarfish {
   publishDir "sequin/quants/oarfish"
 
