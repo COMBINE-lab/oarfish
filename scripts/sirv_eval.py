@@ -5,21 +5,21 @@ import json
 
 def main():
     # read ground truth
-    t = pd.read_excel("test_data/molar_concentrations.xlsx", sheet_name="Sheet2")
+    t = pd.read_excel("../../data/sirv_ref_data/molar_concentrations.xlsx", sheet_name="Sheet2")
     t["E0"] = t["E2"]
     t.loc[t["E0"] > 0, "E0"] = 1
 
     d = {"SRR6058583": "E2", "SRR6058584": "E0"}
 
-    data_dir = "../data/nanocount_paper/"
+    data_dir = "sirv"
     for a in ["c", "i", "o"]:
         merged = {}
         for k, v in d.items():
             o = pd.read_csv(
-                f"{data_dir}/SIRV/quants/oarfish/{k}_{a}_quant.tsv", sep="\t"
+                f"{data_dir}/quants/oarfish/{k}_{a}_quant.tsv", sep="\t"
             )
             n = pd.read_csv(
-                f"{data_dir}/SIRV/quants/nanocount/{k}_{a}_quant.tsv", sep="\s+"
+                f"{data_dir}/quants/nanocount/{k}_{a}_quant.tsv", sep="\s+"
             )
             merged[v] = pd.merge(o, t, left_on="tname", right_on="Name", how="outer")
             merged[v] = pd.merge(

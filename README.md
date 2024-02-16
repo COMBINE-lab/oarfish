@@ -27,6 +27,12 @@ Options:
 
       --model-coverage
 
+  -t  --threads
+          [default: 1]
+  -q  --short-quant
+              Location where the shore read counts can be read
+  -b  --bins
+          [default: 10]
   -h, --help
           Print help
   -V, --version
