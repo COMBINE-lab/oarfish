@@ -1,10 +1,6 @@
 use clap::Parser;
 
-use arrow2::{
-    array::Float64Array,
-    chunk::Chunk,
-    datatypes::Field,
-};
+use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 
 use std::{
     fs::File,
@@ -116,7 +112,7 @@ struct Args {
     #[arg(long, help_heading = "EM", default_value_t = 1e-3)]
     convergence_thresh: f64,
     /// maximum number of cores that the oarfish can use to obtain binomial probability
-    #[arg(short= 'j', long, default_value_t = 1)]
+    #[arg(short = 'j', long, default_value_t = 1)]
     threads: usize,
     /// location of short read quantification (if provided)
     #[arg(short = 'q', long, help_heading = "EM")]
@@ -289,6 +285,8 @@ fn main() -> anyhow::Result<()> {
         &counts,
     )?;
 
+    // if the user requested bootstrap replicates,
+    // compute and write those out now.
     if args.num_bootstraps > 0 {
         let breps = em::bootstrap(&emi, args.num_bootstraps, args.threads);
 

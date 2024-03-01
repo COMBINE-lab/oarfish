@@ -106,6 +106,7 @@ fn m_step<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])>>(
 pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a, F: Fn() -> I>(
     em_info: &'a EMInfo,
     make_iter: F,
+    do_log: bool,
 ) -> Vec<f64> {
     let eq_map = em_info.eq_map;
     let fops = &eq_map.filter_opts;
@@ -169,7 +170,7 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
         // is a multiple of 10, print out  the maximum relative
         // difference we observed.
         niter += 1;
-        if niter % 10 == 0 {
+        if do_log && (niter % 10 == 0) {
             if niter % 100 == 0 {
                 info!(
                     "iteration {}; rel diff {}",
@@ -219,7 +220,7 @@ pub fn em(em_info: &EMInfo, _nthreads: usize) -> Vec<f64> {
     // scored alignments on demand
     let make_iter = || em_info.eq_map.iter();
 
-    do_em(em_info, make_iter)
+    do_em(em_info, make_iter, true)
 }
 
 pub fn do_bootstrap(em_info: &EMInfo) -> Vec<f64> {
@@ -244,7 +245,7 @@ pub fn do_bootstrap(em_info: &EMInfo) -> Vec<f64> {
         prev: None,
     };
 
-    do_em(em_info, make_iter)
+    do_em(em_info, make_iter, false)
 }
 
 pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f64>> {
@@ -262,6 +263,8 @@ pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f6
         (0..num_boot)
             .into_par_iter()
             .map(|i| {
+                let span = span!(tracing::Level::INFO, "bootstrap");
+                let _guard = span.enter();
                 info!("evaluating bootstrap replicate {}", i);
                 do_bootstrap(em_info)
             })
