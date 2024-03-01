@@ -1,11 +1,14 @@
 use std::sync::atomic::Ordering;
 
-use crate::util::oarfish_types::{AlnInfo, EMInfo, InMemoryAlignmentStore, TranscriptInfo};
+use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
 use atomic_float::AtomicF64;
 use itertools::izip;
 use num_format::{Locale, ToFormattedString};
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rand::thread_rng;
+use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use tracing::{info, span, trace};
+
+use crate::bootstrap;
 
 /// Performs one iteration of the EM algorithm by looping over all
 /// alignments and computing their estimated probability of being
@@ -15,7 +18,7 @@ use tracing::{info, span, trace};
 #[inline]
 fn m_step_par<'a>(
     eq_iterates: &[(&'a [AlnInfo], &'a [f32], &'a [f64])],
-    _tinfo: &mut [TranscriptInfo],
+    _tinfo: &[TranscriptInfo],
     model_coverage: bool,
     prev_count: &mut [AtomicF64],
     curr_counts: &mut [AtomicF64],
@@ -63,15 +66,15 @@ fn m_step_par<'a>(
 /// likelihood for all reads mapping to each target.
 #[inline]
 #[allow(dead_code)]
-fn m_step(
-    eq_map: &InMemoryAlignmentStore,
-    _tinfo: &mut [TranscriptInfo],
+fn m_step<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])>>(
+    eq_map_iter: I,
+    _tinfo: &[TranscriptInfo],
     model_coverage: bool,
     prev_count: &mut [f64],
     curr_counts: &mut [f64],
 ) {
     const DENOM_THRESH: f64 = 1e-30_f64;
-    for (alns, probs, coverage_probs) in eq_map.iter() {
+    for (alns, probs, coverage_probs) in eq_map_iter {
         let mut denom = 0.0_f64;
         for (a, p, cp) in izip!(alns, probs, coverage_probs) {
             // Compute the probability of assignment of the
@@ -100,18 +103,13 @@ fn m_step(
     }
 }
 
-/// Perform the EM algorithm to estimate the abundances of the
-/// target sequences.  The return value is a `Vec` of f64 values,
-/// each of which is the estimated number of fragments arising from
-/// each target.
-#[allow(dead_code)]
-pub fn em(em_info: &mut EMInfo, _nthreads: usize) -> Vec<f64> {
-    let span = span!(tracing::Level::INFO, "em");
-    let _guard = span.enter();
-
+pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a, F: Fn() -> I>(
+    em_info: &'a EMInfo,
+    make_iter: F,
+) -> Vec<f64> {
     let eq_map = em_info.eq_map;
     let fops = &eq_map.filter_opts;
-    let tinfo: &mut Vec<TranscriptInfo> = em_info.txp_info;
+    let tinfo: &Vec<TranscriptInfo> = em_info.txp_info;
     let max_iter = em_info.max_iter;
     let convergence_thresh = em_info.convergence_thresh;
     let total_weight: f64 = eq_map.num_aligned_reads() as f64;
@@ -137,7 +135,7 @@ pub fn em(em_info: &mut EMInfo, _nthreads: usize) -> Vec<f64> {
     while niter < max_iter {
         // allocate the fragments and compute the new counts
         m_step(
-            eq_map,
+            make_iter(),
             tinfo,
             fops.model_coverage,
             &mut prev_counts,
@@ -198,7 +196,7 @@ pub fn em(em_info: &mut EMInfo, _nthreads: usize) -> Vec<f64> {
     // perform one more EM round, since we just zeroed out
     // very small abundances
     m_step(
-        eq_map,
+        make_iter(),
         tinfo,
         fops.model_coverage,
         &mut prev_counts,
@@ -212,7 +210,70 @@ pub fn em(em_info: &mut EMInfo, _nthreads: usize) -> Vec<f64> {
 /// target sequences.  The return value is a `Vec` of f64 values,
 /// each of which is the estimated number of fragments arising from
 /// each target.
-pub fn em_par(em_info: &mut EMInfo, nthreads: usize) -> Vec<f64> {
+#[allow(dead_code)]
+pub fn em(em_info: &EMInfo, _nthreads: usize) -> Vec<f64> {
+    let span = span!(tracing::Level::INFO, "em");
+    let _guard = span.enter();
+
+    // function that produces an iterator over the
+    // scored alignments on demand
+    let make_iter = || em_info.eq_map.iter();
+
+    do_em(em_info, make_iter)
+}
+
+pub fn do_bootstrap(em_info: &EMInfo) -> Vec<f64> {
+    let mut rng = thread_rng();
+    let n = em_info.eq_map.len();
+    let inds = bootstrap::get_sample_inds(n, &mut rng);
+
+    // to not sample the indices but instead just
+    // run with all reads sampled once
+    /*
+    let mut inds = Vec::with_capacity(n);
+    for i in 0..n { inds.push(i); }
+    */
+
+    // function that produces an iterator over the
+    // scored alignments on demand
+    let make_iter = || bootstrap::SampleWithReplaceIter {
+        inds: &inds,
+        iter: em_info.eq_map.iter(),
+        idx: 0,
+        e_ptr: 0,
+        prev: None,
+    };
+
+    do_em(em_info, make_iter)
+}
+
+pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f64>> {
+    let span = span!(tracing::Level::INFO, "bootstrap");
+    let _guard = span.enter();
+
+    info!("will collection {num_boot} bootstraps");
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(nthreads)
+        .build()
+        .unwrap();
+
+    pool.install(|| {
+        (0..num_boot)
+            .into_par_iter()
+            .map(|i| {
+                info!("evaluating bootstrap replicate {}", i);
+                do_bootstrap(em_info)
+            })
+            .collect()
+    })
+}
+
+/// Perform the EM algorithm to estimate the abundances of the
+/// target sequences.  The return value is a `Vec` of f64 values,
+/// each of which is the estimated number of fragments arising from
+/// each target.
+pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
     let span = span!(tracing::Level::INFO, "em");
     let _guard = span.enter();
 
@@ -223,7 +284,7 @@ pub fn em_par(em_info: &mut EMInfo, nthreads: usize) -> Vec<f64> {
 
     let eq_map = em_info.eq_map;
     let fops = &eq_map.filter_opts;
-    let tinfo: &mut Vec<TranscriptInfo> = em_info.txp_info;
+    let tinfo: &Vec<TranscriptInfo> = em_info.txp_info;
     let max_iter = em_info.max_iter;
     let convergence_thresh = em_info.convergence_thresh;
     let total_weight: f64 = eq_map.num_aligned_reads() as f64;

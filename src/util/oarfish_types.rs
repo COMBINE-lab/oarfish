@@ -237,6 +237,13 @@ pub struct InMemoryAlignmentStore<'h> {
     pub discard_table: DiscardTable,
 }
 
+impl<'h> InMemoryAlignmentStore<'h> {
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.boundaries.len()
+    }
+}
+
 pub struct InMemoryAlignmentStoreIter<'a, 'h> {
     pub store: &'a InMemoryAlignmentStore<'h>,
     pub idx: usize,
@@ -245,6 +252,7 @@ pub struct InMemoryAlignmentStoreIter<'a, 'h> {
 impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
     type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx + 1 >= self.store.boundaries.len() {
             None
@@ -258,6 +266,13 @@ impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
                 &self.store.coverage_probabilities[start..end],
             ))
         }
+    }
+}
+
+impl<'a, 'h> ExactSizeIterator for InMemoryAlignmentStoreIter<'a, 'h> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.store.boundaries.len()
     }
 }
 
