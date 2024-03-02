@@ -1,5 +1,7 @@
 use clap::Parser;
 
+use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
+
 use std::{
     fs::File,
     io::{self, BufReader},
@@ -13,15 +15,17 @@ use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 use noodles_bam as bam;
 
 mod alignment_parser;
+mod bootstrap;
 mod em;
 mod util;
+
 use crate::util::binomial_probability::binomial_continuous_prob;
 use crate::util::normalize_probability::normalize_read_probs;
 use crate::util::oarfish_types::{
     AlignmentFilters, EMInfo, InMemoryAlignmentStore, TranscriptInfo,
 };
 use crate::util::read_function::read_short_quant_vec;
-use crate::util::write_function::write_output;
+use crate::util::write_function::{write_infrep_file, write_output};
 
 /// These represent different "meta-options", specific settings
 /// for all of the different filters that should be applied in
@@ -108,11 +112,14 @@ struct Args {
     #[arg(long, help_heading = "EM", default_value_t = 1e-3)]
     convergence_thresh: f64,
     /// maximum number of cores that the oarfish can use to obtain binomial probability
-    #[arg(short, long, default_value_t = 1)]
+    #[arg(short = 'j', long, default_value_t = 1)]
     threads: usize,
     /// location of short read quantification (if provided)
     #[arg(short = 'q', long, help_heading = "EM")]
     short_quant: Option<String>,
+    /// number of bootstrap replicates to produce to assess quantification uncertainty
+    #[arg(long, default_value_t = 0)]
+    num_bootstraps: u32,
     /// number of bins to use in coverage model
     #[arg(short, long, help_heading = "coverage model", default_value_t = 10)]
     bins: u32,
@@ -253,7 +260,7 @@ fn main() -> anyhow::Result<()> {
 
     // wrap up all of the relevant information we need for estimation
     // in an EMInfo struct and then call the EM algorithm.
-    let mut emi = EMInfo {
+    let emi = EMInfo {
         eq_map: &store,
         txp_info: &mut txps,
         max_iter: args.max_em_iter,
@@ -261,17 +268,42 @@ fn main() -> anyhow::Result<()> {
         init_abundances,
     };
 
-    let counts = em::em_par(&mut emi, args.threads);
+    let counts = if args.threads > 4 {
+        em::em_par(&emi, args.threads)
+    } else {
+        em::em(&emi, args.threads)
+    };
 
     // write the output
     write_output(
         &args.output,
         &args.model_coverage,
-        &args.bins,
+        args.bins,
+        args.num_bootstraps,
         &emi,
         &header,
         &counts,
     )?;
+
+    // if the user requested bootstrap replicates,
+    // compute and write those out now.
+    if args.num_bootstraps > 0 {
+        let breps = em::bootstrap(&emi, args.num_bootstraps, args.threads);
+
+        let mut new_arrays = vec![];
+        let mut bs_fields = vec![];
+        for (i, b) in breps.into_iter().enumerate() {
+            let bs_array = Float64Array::from_vec(b);
+            bs_fields.push(Field::new(
+                format!("bootstrap.{}", i),
+                bs_array.data_type().clone(),
+                false,
+            ));
+            new_arrays.push(bs_array.boxed());
+        }
+        let chunk = Chunk::new(new_arrays);
+        write_infrep_file(&args.output, bs_fields, chunk)?;
+    }
 
     Ok(())
 }

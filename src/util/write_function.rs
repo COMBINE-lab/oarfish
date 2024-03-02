@@ -1,4 +1,11 @@
 use crate::util::oarfish_types::EMInfo;
+use crate::util::parquet_utils;
+
+use arrow2::{
+    array::Array,
+    chunk::Chunk,
+    datatypes::{Field, Schema},
+};
 use path_tools::WithAdditionalExtension;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -14,7 +21,8 @@ use std::{
 pub fn write_output(
     output: &PathBuf,
     prob_flag: &bool,
-    bins: &u32,
+    bins: u32,
+    num_bootstraps: u32,
     em_info: &EMInfo,
     header: &noodles_sam::header::Header,
     counts: &[f64],
@@ -39,6 +47,7 @@ pub fn write_output(
         let info = json!({
             "prob_model" : prob,
             "num_bins" : bins,
+            "num_bootstraps" : num_bootstraps,
             "filter_options" : em_info.eq_map.filter_opts,
             "discard_table" : em_info.eq_map.discard_table
         });
@@ -124,4 +133,16 @@ pub fn write_out_cdf(
     }
 
     Ok(())
+}
+
+pub(crate) fn write_infrep_file(
+    output_path: &Path,
+    fields: Vec<Field>,
+    chunk: Chunk<Box<dyn Array>>,
+) -> anyhow::Result<()> {
+    let output_path = output_path
+        .to_path_buf()
+        .with_additional_extension(".infreps.pq");
+    let schema = Schema::from(fields);
+    parquet_utils::write_chunk_to_file(output_path.to_str().unwrap(), schema, chunk)
 }
