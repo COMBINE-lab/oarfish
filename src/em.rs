@@ -237,13 +237,7 @@ pub fn do_bootstrap(em_info: &EMInfo) -> Vec<f64> {
 
     // function that produces an iterator over the
     // scored alignments on demand
-    let make_iter = || bootstrap::SampleWithReplaceIter {
-        inds: &inds,
-        iter: em_info.eq_map.iter(),
-        idx: 0,
-        e_ptr: 0,
-        prev: None,
-    };
+    let make_iter = || em_info.eq_map.random_sampling_iter(&inds);
 
     do_em(em_info, make_iter, false)
 }

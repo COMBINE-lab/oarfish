@@ -7,7 +7,7 @@ use arrow2::{
     datatypes::{Field, Schema},
 };
 use path_tools::WithAdditionalExtension;
-use serde_json::json;
+
 use std::path::{Path, PathBuf};
 use std::{
     fs,
@@ -20,10 +20,7 @@ use std::{
 //this part is taken from dev branch
 pub fn write_output(
     output: &PathBuf,
-    prob_flag: &bool,
-    bins: u32,
-    num_bootstraps: u32,
-    em_info: &EMInfo,
+    info: serde_json::Value,
     header: &noodles_sam::header::Header,
     counts: &[f64],
 ) -> io::Result<()> {
@@ -37,21 +34,7 @@ pub fn write_output(
         }
     }
 
-    let prob = if *prob_flag {
-        "binomial"
-    } else {
-        "no_coverage"
-    };
-
     {
-        let info = json!({
-            "prob_model" : prob,
-            "num_bins" : bins,
-            "num_bootstraps" : num_bootstraps,
-            "filter_options" : em_info.eq_map.filter_opts,
-            "discard_table" : em_info.eq_map.discard_table
-        });
-
         let info_path = output.with_additional_extension(".meta_info.json");
         let write = OpenOptions::new()
             .write(true)

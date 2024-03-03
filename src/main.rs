@@ -9,6 +9,8 @@ use std::{
 };
 
 use num_format::{Locale, ToFormattedString};
+use serde::Serialize;
+use serde_json::json;
 use tracing::info;
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 
@@ -30,14 +32,14 @@ use crate::util::write_function::{write_infrep_file, write_output};
 /// These represent different "meta-options", specific settings
 /// for all of the different filters that should be applied in
 /// different cases.
-#[derive(Clone, Debug, clap::ValueEnum)]
+#[derive(Clone, Debug, clap::ValueEnum, Serialize)]
 enum FilterGroup {
     NoFilters,
     NanocountFilters,
 }
 
 /// accurate transcript quantification from long-read RNA-seq data
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Serialize)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
     /// be quiet (i.e. don't output log messages that aren't at least warnings)
@@ -168,6 +170,31 @@ fn get_filter_opts(args: &Args) -> AlignmentFilters {
     }
 }
 
+fn get_json_info(args: &Args, emi: &EMInfo) -> serde_json::Value {
+    let prob = if args.model_coverage {
+        "binomial"
+    } else {
+        "no_coverage"
+    };
+
+    json!({
+        "prob_model" : prob,
+        "num_bins" : args.bins,
+        "filter_options" : &emi.eq_map.filter_opts,
+        "discard_table" : &emi.eq_map.discard_table,
+        "alignments": &args.alignments,
+        "output": &args.output,
+        "verbose": &args.verbose,
+        "quiet": &args.quiet,
+        "em_max_iter": &args.max_em_iter,
+        "em_convergence_thresh": &args.convergence_thresh,
+        "threads": &args.threads,
+        "filter_group": &args.filter_group,
+        "short_quant": &args.short_quant,
+        "num_bootstraps": &args.num_bootstraps
+    })
+}
+
 fn main() -> anyhow::Result<()> {
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
@@ -254,8 +281,8 @@ fn main() -> anyhow::Result<()> {
 
     // if we are seeding the quantification estimates with short read
     // abundances, then read those in here.
-    let init_abundances = args.short_quant.map(|sr_path| {
-        read_short_quant_vec(&sr_path, &txps_name).unwrap_or_else(|e| panic!("{}", e))
+    let init_abundances = args.short_quant.as_ref().map(|sr_path| {
+        read_short_quant_vec(sr_path, &txps_name).unwrap_or_else(|e| panic!("{}", e))
     });
 
     // wrap up all of the relevant information we need for estimation
@@ -274,16 +301,12 @@ fn main() -> anyhow::Result<()> {
         em::em(&emi, args.threads)
     };
 
+    // prepare the JSON object we'll write
+    // to meta_info.json
+    let json_info = get_json_info(&args, &emi);
+
     // write the output
-    write_output(
-        &args.output,
-        &args.model_coverage,
-        args.bins,
-        args.num_bootstraps,
-        &emi,
-        &header,
-        &counts,
-    )?;
+    write_output(&args.output, json_info, &header, &counts)?;
 
     // if the user requested bootstrap replicates,
     // compute and write those out now.
