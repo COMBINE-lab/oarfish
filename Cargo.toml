@@ -1,6 +1,6 @@
 [package]
 name = "oarfish"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 authors = [
   "Zahra Zare Jousheghani <zzare@umd.edu>",
@@ -34,9 +34,9 @@ anyhow = "1.0.80"
 bio-types = "1.0.1"
 clap = { version = "4.5.1", features = ["derive"] }
 coitrees = "0.4.0"
-noodles-bam = "0.55.0"
+noodles-bam = "0.56.0"
 noodles-gtf = "0.23.0"
-noodles-sam = "0.52.0"
+noodles-sam = "0.53.0"
 num-format = "0.4.4"
 tabled = "0.15.0"
 tracing = "0.1.40"
