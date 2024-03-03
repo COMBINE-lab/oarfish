@@ -240,8 +240,42 @@ pub struct InMemoryAlignmentStore<'h> {
 impl<'h> InMemoryAlignmentStore<'h> {
     #[inline]
     pub fn len(&self) -> usize {
-        self.boundaries.len()
+        self.boundaries.len().saturating_sub(1)
     }
+}
+
+pub struct InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'h, 'b> {
+    pub store: &'a InMemoryAlignmentStore<'h>,
+    pub rand_inds: std::slice::Iter<'b, usize>,
+}
+
+impl<'a, 'b, 'h> Iterator for InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'b, 'h> {
+    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(next_ind) = self.rand_inds.next() {
+            let start = self.store.boundaries[*next_ind];
+            let end = self.store.boundaries[*next_ind + 1];
+            Some((
+                &self.store.alignments[start..end],
+                &self.store.as_probabilities[start..end],
+                &self.store.coverage_probabilities[start..end],
+            ))
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.rand_inds.len(), Some(self.rand_inds.len()))
+    }
+}
+
+impl<'a, 'b, 'h> ExactSizeIterator
+    for InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'b, 'h>
+{
 }
 
 pub struct InMemoryAlignmentStoreIter<'a, 'h> {
@@ -267,14 +301,14 @@ impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
             ))
         }
     }
-}
 
-impl<'a, 'h> ExactSizeIterator for InMemoryAlignmentStoreIter<'a, 'h> {
     #[inline]
-    fn len(&self) -> usize {
-        self.store.boundaries.len()
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.store.len(), Some(self.store.len()))
     }
 }
+
+impl<'a, 'h> ExactSizeIterator for InMemoryAlignmentStoreIter<'a, 'h> {}
 
 impl<'h> InMemoryAlignmentStore<'h> {
     pub fn new(fo: AlignmentFilters, header: &'h Header) -> Self {
@@ -293,6 +327,19 @@ impl<'h> InMemoryAlignmentStore<'h> {
         InMemoryAlignmentStoreIter {
             store: self,
             idx: 0,
+        }
+    }
+
+    pub fn random_sampling_iter<'a, 'b>(
+        &'a self,
+        inds: &'b [usize],
+    ) -> InMemoryAlignmentStoreSamplingWithReplacementIter
+    where
+        'b: 'a,
+    {
+        InMemoryAlignmentStoreSamplingWithReplacementIter {
+            store: self,
+            rand_inds: inds.iter(),
         }
     }
 
@@ -326,7 +373,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
 
     pub fn num_aligned_reads(&self) -> usize {
         if !self.boundaries.is_empty() {
-            self.boundaries.len() - 1
+            self.len()
         } else {
             0
         }
