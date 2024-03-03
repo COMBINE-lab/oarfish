@@ -65,7 +65,6 @@ fn m_step_par<'a>(
 /// Then, `curr_counts` is computed by summing over the expected assignment
 /// likelihood for all reads mapping to each target.
 #[inline]
-#[allow(dead_code)]
 fn m_step<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])>>(
     eq_map_iter: I,
     _tinfo: &[TranscriptInfo],
@@ -103,6 +102,15 @@ fn m_step<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])>>(
     }
 }
 
+/// The code that actually performs the EM loop in the single-threaded context.
+/// The parameters are
+/// `em_info` : an [EMInfo] struct that contains the relevant parameters and data
+/// `make_iter`: a function that returns an iterator over the alignments and conditional
+/// probabilites
+/// `do_log`: `true` if logging information is written about this EM run and false otherwise
+///
+/// returns:
+/// A [Vec<f64>] represented the expected read assignments to each transcript.
 pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a, F: Fn() -> I>(
     em_info: &'a EMInfo,
     make_iter: F,
