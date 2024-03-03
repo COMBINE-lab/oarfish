@@ -6,22 +6,31 @@
 
 It optionally employs many filters to help discard alignments that may reduce quantification accuracy.  Currently, the set of filters applied in `oarfish` are directly derived from the [`NanoCount`](https://github.com/a-slide/NanoCount)[^Gleeson] tool; both the filters that exist, and the way their values are set (with the exception of the `--three-prime-clip` filter, which is not set by default in `oarfish` but is in `NanoCount`).
 
-Additionally, `oarfish` provides options to make use of coverage profiles derived from the aligned reads to improve quantification accuracy.  The use of this coverage model is enabled with the `--model-coverage` flag.
+Additionally, `oarfish` provides options to make use of coverage profiles derived from the aligned reads to improve quantification accuracy.  The use of this coverage model is enabled with the `--model-coverage` flag. You can read more about `oarfish`[^preprint] in the [preprint](https://www.biorxiv.org/content/10.1101/2024.02.28.582591v1). Please cite the preprint if you use `oarfish` in your work or analysis.
 
 The usage can be provided by passing `-h` at the command line.
 ```
-accurate transcript quantification from long-read RNA-seq data
+A fast, accurate and versatile tool for long-read transcript quantification.
 
 Usage: oarfish [OPTIONS] --alignments <ALIGNMENTS> --output <OUTPUT>
 
 Options:
-      --quiet                    be quiet (i.e. don't output log messages that aren't at least warnings)
-      --verbose                  be verbose (i.e. output all non-developer logging messages)
-  -a, --alignments <ALIGNMENTS>  path to the file containing the input alignments
-  -o, --output <OUTPUT>          location where output quantification file should be written
-  -t, --threads <THREADS>        maximum number of cores that the oarfish can use to obtain binomial probability [default: 1]
-  -h, --help                     Print help
-  -V, --version                  Print version
+      --quiet
+          be quiet (i.e. don't output log messages that aren't at least warnings)
+      --verbose
+          be verbose (i.e. output all non-developer logging messages)
+  -a, --alignments <ALIGNMENTS>
+          path to the file containing the input alignments
+  -o, --output <OUTPUT>
+          location where output quantification file should be written
+  -j, --threads <THREADS>
+          maximum number of cores that the oarfish can use to obtain binomial probability [default: 1]
+      --num-bootstraps <NUM_BOOTSTRAPS>
+          number of bootstrap replicates to produce to assess quantification uncertainty [default: 0]
+  -h, --help
+          Print help
+  -V, --version
+          Print version
 
 filters:
       --filter-group <FILTER_GROUP>
@@ -54,6 +63,9 @@ EM:
 
 The input should be a `bam` format file, with reads aligned using [`minimap2`](https://github.com/lh3/minimap2) against the _transcriptome_. That is, `oarfish` does not currently handle spliced alignment to the genome.  Further, the output alignments should be name sorted (the default order produced by `minimap2` should be fine). _Specifically_, `oarfish` relies on the existence of the `AS` tag in the `bam` records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read.
 
+### Inferential Replicates
+
+`oarfish` has the ability to compute [_inferential replicates_](https://academic.oup.com/nar/article/47/18/e105/5542870) of its quantification estimates. This is performed by bootstrap sampling of the original read mappings, and subsequently performing inference under each resampling.  These inferential replicates allow assessing the variance of the point estimate of transcript abundance, and can lead to improved differential analysis at the transcript level, if using a differential testing tool that takes advantage of this information. The generation of inferential replicates is controlled by the `--num-bootstraps` argument to `oarfish`.  The default value is `0`, meaning that no inferential replicates are generated.  If you set this to some value greater than `0`, the the requested number of inferential replicates will be generated. It is recommended, if generating inferential replicates, to run `oarfish` with multiple threads, since replicate generation is highly-parallelized. Finally, if replicates are generated, they are written to a [`Parquet`](https://parquet.apache.org/), starting with the specified output stem and ending with `infreps.pq`.
 
 ### Output
 
@@ -61,8 +73,10 @@ The `--output` option passed to `oarfish` corresponds to a path prefix (this pre
 
   * `P.meta_info.json` - a JSON format file containing information about relevant parameters with which `oarfish` was run, and other relevant inforamtion from the processed sample apart from the actual transcript quantifications.
   * `P.quant` - a tab separated file listing the quantified targets, as well as information about their length and other metadata. The `num_reads` column provides the estimate of the number of reads originating from each target.
-
+  * `P.infreps.pq` - a [`Parquet`](https://parquet.apache.org/) table where each row is a transcript and each column is an inferential replicate, containing the estimated counts for each transcript under each computed inferential replicate.
 
 ### References
 
 [^Gleeson]: Josie Gleeson, Adrien Leger, Yair D J Prawer, Tracy A Lane, Paul J Harrison, Wilfried Haerty, Michael B Clark, Accurate expression quantification from nanopore direct RNA sequencing with NanoCount, Nucleic Acids Research, Volume 50, Issue 4, 28 February 2022, Page e19, [https://doi.org/10.1093/nar/gkab1129](https://doi.org/10.1093/nar/gkab1129)
+
+[^preprint]: Zahra Zare Jousheghani, Rob Patro. Oarfish: Enhanced probabilistic modeling leads to improved accuracy in long read transcriptome quantification, bioRxiv 2024.02.28.582591; doi: [https://doi.org/10.1101/2024.02.28.582591](https://doi.org/10.1101/2024.02.28.582591)
