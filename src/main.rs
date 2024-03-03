@@ -170,6 +170,9 @@ fn get_filter_opts(args: &Args) -> AlignmentFilters {
     }
 }
 
+/// Produce a [serde_json::Value] that encodes the relevant arguments and 
+/// parameters of the run that we wish to record to file. Ultimately, this 
+/// will be written to the corresponding `meta_info.json` file for this run.
 fn get_json_info(args: &Args, emi: &EMInfo) -> serde_json::Value {
     let prob = if args.model_coverage {
         "binomial"
