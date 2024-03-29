@@ -9,6 +9,9 @@ use arrow2::{
 };
 use std::fs::File;
 
+/// Write a chunk of values `chunk` to a file specified at the
+/// provided `path` using `scheme`. This raises an [anyhow::Error] if
+/// there is an error in creating the file or writing the contents.
 pub(crate) fn write_chunk_to_file(
     path: &str,
     schema: Schema,
