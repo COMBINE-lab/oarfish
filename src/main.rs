@@ -173,7 +173,7 @@ fn get_filter_opts(args: &Args) -> AlignmentFilters {
 /// Produce a [serde_json::Value] that encodes the relevant arguments and
 /// parameters of the run that we wish to record to file. Ultimately, this
 /// will be written to the corresponding `meta_info.json` file for this run.
-fn get_json_info(args: &Args, emi: &EMInfo) -> serde_json::Value {
+fn get_json_info(args: &Args, emi: &EMInfo, seqcol_digest: &str) -> serde_json::Value {
     let prob = if args.model_coverage {
         "binomial"
     } else {
@@ -194,7 +194,8 @@ fn get_json_info(args: &Args, emi: &EMInfo) -> serde_json::Value {
         "threads": &args.threads,
         "filter_group": &args.filter_group,
         "short_quant": &args.short_quant,
-        "num_bootstraps": &args.num_bootstraps
+        "num_bootstraps": &args.num_bootstraps,
+        "seqcol_digest": seqcol_digest
     })
 }
 
@@ -233,6 +234,15 @@ fn main() -> anyhow::Result<()> {
     // parse the header, and ensure that the reads were mapped with minimap2 (as far as we
     // can tell).
     let header = alignment_parser::read_and_verify_header(&mut reader, &args.alignments)?;
+    let seqcol_digest = {
+        let sc = seqcol_rs::SeqCol::from_sam_header(
+            header
+                .reference_sequences()
+                .iter()
+                .map(|(k, v)| (k.as_slice(), v.length().into())),
+        );
+        sc.digest(seqcol_rs::DigestConfig::default())?
+    };
     let num_ref_seqs = header.reference_sequences().len();
 
     // where we'll write down the per-transcript information we need
@@ -306,7 +316,7 @@ fn main() -> anyhow::Result<()> {
 
     // prepare the JSON object we'll write
     // to meta_info.json
-    let json_info = get_json_info(&args, &emi);
+    let json_info = get_json_info(&args, &emi, &seqcol_digest);
 
     // write the output
     write_output(&args.output, json_info, &header, &counts)?;
