@@ -1,5 +1,6 @@
 use clap::Parser;
 
+use anyhow::Context;
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 
 use std::{
@@ -235,13 +236,18 @@ fn main() -> anyhow::Result<()> {
     // can tell).
     let header = alignment_parser::read_and_verify_header(&mut reader, &args.alignments)?;
     let seqcol_digest = {
+        info!("calculating seqcol digest");
         let sc = seqcol_rs::SeqCol::from_sam_header(
             header
                 .reference_sequences()
                 .iter()
                 .map(|(k, v)| (k.as_slice(), v.length().into())),
         );
-        sc.digest(seqcol_rs::DigestConfig::default())?
+        let d = sc.digest(seqcol_rs::DigestConfig::default()).context(
+            "failed to compute the seqcol digest for the information from the alignment header",
+        )?;
+        info!("done calculating seqcol digest");
+        d
     };
     let num_ref_seqs = header.reference_sequences().len();
 
