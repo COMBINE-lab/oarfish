@@ -367,17 +367,13 @@ impl<'h> InMemoryAlignmentStore<'h> {
         }
     }
 
+    #[inline(always)]
     pub fn total_len(&self) -> usize {
         self.alignments.len()
     }
 
-    pub fn num_aligned_reads(&self) -> usize {
-        if !self.boundaries.is_empty() {
-            self.len()
-        } else {
-            0
-        }
-    }
+    #[inline(always)]
+    pub fn num_aligned_reads(&self) -> usize { self.len().saturating_sub(1) }
 }
 
 /// The parameters controling the filters that will
@@ -700,6 +696,7 @@ impl AlignmentFilters {
             let score_ok = (fscore * inv_max_score) >= self.score_threshold; //>= thresh_score;
             if score_ok {
                 let f = (fscore - mscore) / SCORE_PROB_DENOM;
+                //let f = (fscore - mscore) * inv_max_score * SCORE_PROB_DENOM;
                 probabilities.push(f.exp());
 
                 let tid = ag[i]
@@ -729,11 +726,9 @@ impl AlignmentFilters {
             }
         }
 
-        let mut index = 0;
-        ag.retain(|_| {
-            index += 1;
-            scores[index - 1] > i32::MIN
-        });
+        let mut score_it = scores.iter();
+        ag.retain(|_| *score_it.next().unwrap() > i32::MIN);
+        assert_eq!(ag.len(), probabilities.len());
 
         (
             ag.iter()

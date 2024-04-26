@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
+use crate::util::constants;
 use atomic_float::AtomicF64;
 use itertools::izip;
 use num_format::{Locale, ToFormattedString};
@@ -23,7 +24,6 @@ fn m_step_par<'a>(
     prev_count: &mut [AtomicF64],
     curr_counts: &mut [AtomicF64],
 ) {
-    const DENOM_THRESH: f64 = 1e-30_f64;
     // for (alns, probs, coverage_probs) in eq_map.iter() {
     eq_iterates.par_iter().for_each_with(
         &curr_counts,
@@ -41,7 +41,7 @@ fn m_step_par<'a>(
             }
 
             // If this read can be assigned
-            if denom > DENOM_THRESH {
+            if denom > constants::EM_DENOM_THRESH {
                 // Loop over all possible assignment locations and proportionally
                 // allocate the read according to our model and current parameter
                 // estimates.
@@ -72,7 +72,6 @@ fn m_step<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])>>(
     prev_count: &mut [f64],
     curr_counts: &mut [f64],
 ) {
-    const DENOM_THRESH: f64 = 1e-30_f64;
     for (alns, probs, coverage_probs) in eq_map_iter {
         let mut denom = 0.0_f64;
         for (a, p, cp) in izip!(alns, probs, coverage_probs) {
@@ -87,7 +86,7 @@ fn m_step<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])>>(
         }
 
         // If this read can be assigned
-        if denom > DENOM_THRESH {
+        if denom > constants::EM_DENOM_THRESH {
             // Loop over all possible assignment locations and proportionally
             // allocate the read according to our model and current parameter
             // estimates.
@@ -154,7 +153,7 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
         // compute the relative difference in the parameter estimates
         // between the current and previous rounds
         for i in 0..curr_counts.len() {
-            if prev_counts[i] > 1e-8 {
+            if prev_counts[i] > constants::MIN_READ_THRESH {
                 let cc = curr_counts[i];
                 let pc = prev_counts[i];
                 let rd = (cc - pc) / pc;
@@ -198,7 +197,7 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
 
     // set very small abundances to 0
     for x in &mut prev_counts {
-        if *x < 1e-8 {
+        if *x < constants::MIN_READ_THRESH {
             *x = 0.0;
         }
     }
@@ -330,7 +329,7 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
             // compute the relative difference in the parameter estimates
             // between the current and previous rounds
             for i in 0..curr_counts.len() {
-                if prev_counts[i].load(Ordering::Relaxed) > 1e-8 {
+                if prev_counts[i].load(Ordering::Relaxed) > constants::MIN_READ_THRESH {
                     let cc = curr_counts[i].load(Ordering::Relaxed);
                     let pc = prev_counts[i].load(Ordering::Relaxed);
                     let rd = (cc - pc) / pc;
@@ -349,7 +348,7 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
             // if the maximum relative difference is small enough
             // and we've done at least 10 rounds of the EM, then
             // exit (early stop).
-            if (rel_diff < convergence_thresh) && (niter > 50) {
+            if (rel_diff < convergence_thresh) && (niter > 1) {
                 break;
             }
             // increment the iteration and, if this iteration
@@ -376,10 +375,11 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
 
         // set very small abundances to 0
         prev_counts.iter_mut().for_each(|x| {
-            if x.load(Ordering::Relaxed) < 1e-8 {
+            if x.load(Ordering::Relaxed) < constants::MIN_READ_THRESH {
                 x.store(0.0, Ordering::Relaxed);
             }
         });
+        
         // perform one more EM round, since we just zeroed out
         // very small abundances
         m_step_par(
