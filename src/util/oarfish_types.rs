@@ -12,6 +12,49 @@ use typed_builder::TypedBuilder;
 use bio_types::strand::Strand;
 use noodles_sam as sam;
 use sam::{alignment::record::data::field::tag::Tag as AlnTag, Header};
+use std::collections::{HashSet, HashMap};
+
+pub fn entropy_function(probability: &Vec<f64>) -> (f64, f64, f64, f64) {
+    let sum: f64 = probability.iter().sum();
+    let normalized_prob: Vec<f64> = probability.iter().map(|&p| p / sum).collect();
+    let entropy: f64  = normalized_prob.iter().map(|&p| if p < 10e-8 {10e-8 * (10e-8 as f64).log2()} else {p * (p).log2()}).sum();
+
+    (-entropy, (probability.len() as f64).log2(), -(entropy / (probability.len() as f64).log2()), 1.0 + (entropy / (probability.len() as f64).log2()))
+}
+
+
+#[derive(Debug, Clone)]
+pub struct Fragment {
+    pub name: String,              // Name of the fragment
+    pub mappings: HashSet<usize>,  // Set of transcripts mapped by the fragment
+}
+
+// Implementation of equivalence relation ~ for fragments
+impl Fragment {
+    pub fn equivalent(&self, other: &Fragment) -> bool {
+        self.mappings == other.mappings
+    }
+}
+
+pub fn construct_equivalence_classes(fragments: Vec<Fragment>) -> HashMap<Vec<usize>, (usize, Vec<String>)> {
+    let mut equivalence_classes = HashMap::new();
+
+    for fragment in fragments {
+        // Compute the key for the equivalence class (set of mapped transcripts)
+        let key = fragment.mappings.iter().cloned().collect::<Vec<_>>();
+
+        // Look up or insert into the hash map
+        let entry = equivalence_classes.entry(key.clone());
+        let mut value = entry.or_insert((0, Vec::new()));
+
+        // Increment the count
+        value.0 += 1;
+        // Add the fragment name to the equivalence class
+        value.1.push(fragment.name.clone());
+    }
+
+    equivalence_classes
+}
 
 #[allow(unused_imports)]
 use tracing::{error, info, warn};
@@ -124,9 +167,17 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
 pub struct TranscriptInfo {
     pub len: NonZeroUsize,
     pub total_weight: f64,
-    coverage_bins: Vec<f64>,
+    pub coverage_bins: Vec<f64>,
     pub coverage_prob: Vec<f64>,
+    pub txp_counts: Vec<f64>,
     pub lenf: f64,
+    pub entropy: f64,
+    pub entropy_max: f64,
+    pub entropy_ratio: f64,
+    pub entropy_ratio_1: f64,
+    pub tin: f64,
+    pub num_read: f64,
+    pub bin_width: usize,
 }
 
 impl TranscriptInfo {
@@ -137,7 +188,15 @@ impl TranscriptInfo {
             total_weight: 0.0_f64,
             coverage_bins: vec![0.0_f64; 10],
             coverage_prob: Vec::new(),
+            txp_counts: Vec::new(),
             lenf: 0_f64,
+            entropy: 0_f64,
+            entropy_max: 0_f64,
+            entropy_ratio: 0_f64,
+            entropy_ratio_1: 0_f64,
+            tin: 0_f64,
+            num_read: 0_f64,
+            bin_width: 2_usize,
         }
     }
 
@@ -147,16 +206,32 @@ impl TranscriptInfo {
             total_weight: 0.0_f64,
             coverage_bins: vec![0.0_f64; 10],
             coverage_prob: Vec::new(),
+            txp_counts: vec![0.0_f64; len.get()],
             lenf: len.get() as f64,
+            entropy: 0_f64,
+            entropy_max: 0_f64,
+            entropy_ratio: 0_f64,
+            entropy_ratio_1: 0_f64,
+            tin: 0_f64,
+            num_read: 0_f64,
+            bin_width: 2_usize,
         }
     }
-    pub fn with_len_and_bins(len: NonZeroUsize, bins: u32) -> Self {
+    pub fn with_len_and_bins(len: NonZeroUsize, bin_len: usize) -> Self {
         Self {
             len,
             total_weight: 0.0_f64,
-            coverage_bins: vec![0.0_f64; bins as usize],
+            coverage_bins: vec![0.0_f64; ((len.get() as f64) / bin_len as f64).ceil() as usize],
+            bin_width: bin_len,
             coverage_prob: Vec::new(),
+            txp_counts: vec![0.0_f64; len.get()],
             lenf: len.get() as f64,
+            entropy: 0_f64,
+            entropy_max: 0_f64,
+            entropy_ratio: 0_f64,
+            entropy_ratio_1: 0_f64,
+            tin: 0_f64,
+            num_read: 0_f64,
         }
     }
 
@@ -165,7 +240,8 @@ impl TranscriptInfo {
         let num_intervals = self.coverage_bins.len();
         let num_intervals_f = num_intervals as f64;
         let tlen_f = self.lenf;
-        let bin_width = (tlen_f / num_intervals_f).round() as f32;
+        //let bin_width = (tlen_f / num_intervals_f).round() as f32;
+        let bin_width = self.bin_width as f32;
 
         let cov_f32 = self.coverage_bins.iter().map(|f| *f as f32).collect();
         let mut widths_f32 = Vec::<f32>::with_capacity(num_intervals);
@@ -174,6 +250,13 @@ impl TranscriptInfo {
             let bin_start = bidxf * bin_width;
             let bin_end = ((bidxf + 1.0) * bin_width).min(self.lenf as f32);
             widths_f32.push(bin_end - bin_start);
+            if bin_end < bin_start {
+                eprintln!("tlen_f: {:?}", tlen_f);
+                eprintln!("num_intervals_f: {:?}", num_intervals_f);
+                eprintln!("bin_width: {:?}", bin_width);
+                eprintln!("bidxf: {:?}", bidxf);
+            }
+            assert!(bin_end > bin_start);
         }
         (cov_f32, widths_f32)
     }
@@ -184,7 +267,8 @@ impl TranscriptInfo {
         let num_intervals = self.coverage_bins.len();
         let num_intervals_f = num_intervals as f64;
         let tlen_f = self.lenf;
-        let bin_width = (tlen_f / num_intervals_f).round();
+        //let bin_width = (tlen_f / num_intervals_f).round();
+        let bin_width = self.bin_width as f64;
         let start = start.min(stop);
         let stop = start.max(stop);
         let start_bin = (((start as f64) / tlen_f) * num_intervals_f).floor() as usize;
@@ -210,6 +294,7 @@ impl TranscriptInfo {
             let olfrac = (olap as f64) / ((curr_bin_end - curr_bin_start) as f64);
             *bin += olfrac;
             if olfrac > ONE_PLUS_EPSILON {
+                error!("num_intervals = {num_intervals}, bin_width = {bin_width}");
                 error!("first_bin = {start_bin}, last_bin = {end_bin}");
                 error!("bin = {}, olfrac = {}, olap = {}, curr_bin_start = {}, curr_bin_end = {}, start = {start}, stop = {stop}", *bin, olfrac, olap, curr_bin_start, curr_bin_end);
                 panic!("coverage computation error; please report this error at https://github.com/COMBINE-lab/oarfish.")
@@ -232,10 +317,14 @@ pub struct InMemoryAlignmentStore<'h> {
     pub alignments: Vec<AlnInfo>,
     pub as_probabilities: Vec<f32>,
     pub coverage_probabilities: Vec<f64>,
+    pub as_val: Vec<f32>,
+    pub kde_prob: Vec<f64>,
+    pub read_name: Vec<String>,
     // holds the boundaries between records for different reads
     boundaries: Vec<usize>,
     pub discard_table: DiscardTable,
 }
+
 
 pub struct InMemoryAlignmentStoreIter<'a, 'h> {
     pub store: &'a InMemoryAlignmentStore<'h>,
@@ -243,7 +332,7 @@ pub struct InMemoryAlignmentStoreIter<'a, 'h> {
 }
 
 impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
-    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
+    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64], &'a [f32], &'a [String], &'a [f64]);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx + 1 >= self.store.boundaries.len() {
@@ -256,6 +345,9 @@ impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
                 &self.store.alignments[start..end],
                 &self.store.as_probabilities[start..end],
                 &self.store.coverage_probabilities[start..end],
+                &self.store.as_val[start..end],
+                &self.store.read_name[start..end],
+                &self.store.kde_prob[start..end],
             ))
         }
     }
@@ -269,6 +361,9 @@ impl<'h> InMemoryAlignmentStore<'h> {
             alignments: vec![],
             as_probabilities: vec![],
             coverage_probabilities: vec![],
+            as_val: vec![],
+            kde_prob: vec![],
+            read_name: vec![],
             boundaries: vec![0],
             discard_table: DiscardTable::new(),
         }
@@ -286,14 +381,18 @@ impl<'h> InMemoryAlignmentStore<'h> {
         txps: &mut [TranscriptInfo],
         ag: &mut Vec<T>,
     ) {
-        let (alns, as_probs) =
+        let (alns, as_probs, as_value, rstring) =
             self.filter_opts
                 .filter(&mut self.discard_table, self.aln_header, txps, ag);
         if !alns.is_empty() {
             self.alignments.extend_from_slice(&alns);
             self.as_probabilities.extend_from_slice(&as_probs);
+            self.as_val.extend_from_slice(&as_value);
+            self.read_name.extend_from_slice(&rstring);
             self.coverage_probabilities
                 .extend(vec![0.0_f64; alns.len()]);
+            self.kde_prob
+                .extend(vec![1.0_f64; alns.len()]);
             self.boundaries.push(self.alignments.len());
             // @Susan-Zare : this is making things unreasonably slow. Perhaps
             // we should avoid pushing actual ranges, and just compute the
@@ -473,7 +572,7 @@ impl AlignmentFilters {
         aln_header: &Header,
         txps: &mut [TranscriptInfo],
         ag: &mut Vec<T>,
-    ) -> (Vec<AlnInfo>, Vec<f32>) {
+    ) -> (Vec<AlnInfo>, Vec<f32>, Vec<f32>, Vec<String>) {
         // track the best score of any alignment we've seen
         // so far for this read (this will designate the
         // "primary" alignment for the read).
@@ -603,19 +702,21 @@ impl AlignmentFilters {
 
         if ag.is_empty() || aln_len_at_best_retained == 0 || best_retained_score <= 0 {
             // There were no valid alignments
-            return (vec![], vec![]);
+            return (vec![], vec![], vec![], vec![]);
         }
         if aln_frac_at_best_retained < self.min_aligned_fraction {
             // The best retained alignment did not have sufficient
             // coverage to be kept
             discard_table.discard_aln_frac += 1;
-            return (vec![], vec![]);
+            return (vec![], vec![], vec![], vec![]);
         }
 
         // if we got here, then we have a valid "best" alignment
         discard_table.valid_best_aln += 1;
 
         let mut probabilities = Vec::<f32>::with_capacity(ag.len());
+        let mut read_name = Vec::<String>::with_capacity(ag.len());
+        let mut AS_vec = Vec::<f32>::with_capacity(ag.len());
         let mscore = best_retained_score as f32;
         let inv_max_score = 1.0 / mscore;
 
@@ -637,6 +738,13 @@ impl AlignmentFilters {
             let fscore = *score as f32;
             let score_ok = (fscore * inv_max_score) >= self.score_threshold; //>= thresh_score;
             if score_ok {
+                AS_vec.push(fscore.clone());
+                let mut rstring: String = "None".to_string();
+                if let Some(rname) = ag[i].name() {
+                    rstring = String::from_utf8_lossy(rname.as_bytes()).to_string();
+                }
+                read_name.push(rstring);
+
                 let f = (fscore - mscore) / SCORE_PROB_DENOM;
                 probabilities.push(f.exp());
 
@@ -678,6 +786,8 @@ impl AlignmentFilters {
                 .map(|x| AlnInfo::from_noodles_record(x, aln_header))
                 .collect(),
             probabilities,
+            AS_vec,
+            read_name,
         )
     }
 }

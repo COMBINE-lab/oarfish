@@ -14,7 +14,7 @@ use tracing::{info, span, trace};
 /// likelihood for all reads mapping to each target.
 #[inline]
 fn m_step_par<'a>(
-    eq_iterates: &[(&'a [AlnInfo], &'a [f32], &'a [f64])],
+    eq_iterates: &[(&'a [AlnInfo], &'a [f32], &'a [f64], &'a [f32], &'a [String], &'a [f64])],
     _tinfo: &mut [TranscriptInfo],
     model_coverage: bool,
     prev_count: &mut [AtomicF64],
@@ -24,17 +24,18 @@ fn m_step_par<'a>(
     // for (alns, probs, coverage_probs) in eq_map.iter() {
     eq_iterates.par_iter().for_each_with(
         &curr_counts,
-        |curr_counts, (alns, probs, coverage_probs)| {
+        |curr_counts, (alns, probs, coverage_probs, _as_val, _read_name, kde_probs)| {
             let mut denom = 0.0_f64;
-            for (a, p, cp) in izip!(*alns, *probs, *coverage_probs) {
+            for (a, p, cp, kdep) in izip!(*alns, *probs, *coverage_probs, *kde_probs) {
                 // Compute the probability of assignment of the
                 // current read based on this alignment and the
                 // target's estimated abundance.
                 let target_id = a.ref_id as usize;
                 let prob = *p as f64;
                 let cov_prob = if model_coverage { *cp } else { 1.0 };
+                let kde_prob = *kdep as f64;
 
-                denom += prev_count[target_id].load(Ordering::Relaxed) * prob * cov_prob;
+                denom += prev_count[target_id].load(Ordering::Relaxed) * prob * cov_prob * kde_prob;
             }
 
             // If this read can be assigned
@@ -42,12 +43,13 @@ fn m_step_par<'a>(
                 // Loop over all possible assignment locations and proportionally
                 // allocate the read according to our model and current parameter
                 // estimates.
-                for (a, p, cp) in izip!(*alns, *probs, *coverage_probs) {
+                for (a, p, cp, kdep) in izip!(*alns, *probs, *coverage_probs, *kde_probs) {
                     let target_id = a.ref_id as usize;
                     let prob = *p as f64;
                     let cov_prob = if model_coverage { *cp } else { 1.0 };
+                    let kde_prob = *kdep as f64;
                     let inc =
-                        (prev_count[target_id].load(Ordering::Relaxed) * prob * cov_prob) / denom;
+                        (prev_count[target_id].load(Ordering::Relaxed) * prob * cov_prob * kde_prob) / denom;
                     //curr_counts[target_id] += inc;
                     curr_counts[target_id].fetch_add(inc, Ordering::AcqRel);
                 }
@@ -71,17 +73,18 @@ fn m_step(
     curr_counts: &mut [f64],
 ) {
     const DENOM_THRESH: f64 = 1e-30_f64;
-    for (alns, probs, coverage_probs) in eq_map.iter() {
+    for (alns, probs, coverage_probs, _as_val, _read_name, kde_probs) in eq_map.iter() {
         let mut denom = 0.0_f64;
-        for (a, p, cp) in izip!(alns, probs, coverage_probs) {
+        for (a, p, cp, kdep) in izip!(alns, probs, coverage_probs, kde_probs) {
             // Compute the probability of assignment of the
             // current read based on this alignment and the
             // target's estimated abundance.
             let target_id = a.ref_id as usize;
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
+            let kde_prob = *kdep as f64;
 
-            denom += prev_count[target_id] * prob * cov_prob;
+            denom += prev_count[target_id] * prob * cov_prob * kde_prob;
         }
 
         // If this read can be assigned
@@ -89,11 +92,12 @@ fn m_step(
             // Loop over all possible assignment locations and proportionally
             // allocate the read according to our model and current parameter
             // estimates.
-            for (a, p, cp) in izip!(alns, probs, coverage_probs) {
+            for (a, p, cp, kdep) in izip!(alns, probs, coverage_probs, kde_probs) {
                 let target_id = a.ref_id as usize;
                 let prob = *p as f64;
                 let cov_prob = if model_coverage { *cp } else { 1.0 };
-                let inc = (prev_count[target_id] * prob * cov_prob) / denom;
+                let kde_prob = *kdep as f64;
+                let inc = (prev_count[target_id] * prob * cov_prob * kde_prob) / denom;
                 curr_counts[target_id] += inc;
             }
         }
@@ -227,7 +231,7 @@ pub fn em_par(em_info: &mut EMInfo, nthreads: usize) -> Vec<f64> {
     let max_iter = em_info.max_iter;
     let convergence_thresh = em_info.convergence_thresh;
     let total_weight: f64 = eq_map.num_aligned_reads() as f64;
-    let eq_iterates: Vec<(&[AlnInfo], &[f32], &[f64])> = eq_map.iter().collect();
+    let eq_iterates: Vec<(&[AlnInfo], &[f32], &[f64], &[f32], &[String], &[f64])> = eq_map.iter().collect();
     // initialize the estimated counts for the EM procedure
     let prev_counts: Vec<f64>;
     let mut curr_counts: Vec<AtomicF64> = vec![0.0f64; tinfo.len()]

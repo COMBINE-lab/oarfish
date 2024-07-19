@@ -7,7 +7,7 @@ repository = "https://github.com/COMBINE-lab/oarfish"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.79"
+anyhow = "1.0.86"
 bio-types = "1.0.1"
 clap = { version = "4.5.0", features = ["derive"] }
 coitrees = "0.4.0"
@@ -28,6 +28,11 @@ itertools = "0.12.1"
 serde_json = "1.0.113"
 path-tools = "0.1.0"
 atomic_float = "0.1.0"
+dashmap = "5.5.3"
+pyo3 = "0.21.2"
+numpy = "0.21.0"
+num = "0.4"
+kders = { git = "ssh://git@github.com/COMBINE-lab/kde-rs.git", branch = "dev", version = "0.1.0" }
 
 [[bin]]
 name = "oarfish"
