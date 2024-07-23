@@ -12,21 +12,34 @@ use typed_builder::TypedBuilder;
 use bio_types::strand::Strand;
 use noodles_sam as sam;
 use sam::{alignment::record::data::field::tag::Tag as AlnTag, Header};
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashMap, HashSet};
 
 pub fn entropy_function(probability: &Vec<f64>) -> (f64, f64, f64, f64) {
     let sum: f64 = probability.iter().sum();
     let normalized_prob: Vec<f64> = probability.iter().map(|&p| p / sum).collect();
-    let entropy: f64  = normalized_prob.iter().map(|&p| if p < 10e-8 {10e-8 * (10e-8 as f64).log2()} else {p * (p).log2()}).sum();
+    let entropy: f64 = normalized_prob
+        .iter()
+        .map(|&p| {
+            if p < 10e-8 {
+                10e-8 * (10e-8 as f64).log2()
+            } else {
+                p * (p).log2()
+            }
+        })
+        .sum();
 
-    (-entropy, (probability.len() as f64).log2(), -(entropy / (probability.len() as f64).log2()), 1.0 + (entropy / (probability.len() as f64).log2()))
+    (
+        -entropy,
+        (probability.len() as f64).log2(),
+        -(entropy / (probability.len() as f64).log2()),
+        1.0 + (entropy / (probability.len() as f64).log2()),
+    )
 }
-
 
 #[derive(Debug, Clone)]
 pub struct Fragment {
-    pub name: String,              // Name of the fragment
-    pub mappings: HashSet<usize>,  // Set of transcripts mapped by the fragment
+    pub name: String,             // Name of the fragment
+    pub mappings: HashSet<usize>, // Set of transcripts mapped by the fragment
 }
 
 // Implementation of equivalence relation ~ for fragments
@@ -36,7 +49,9 @@ impl Fragment {
     }
 }
 
-pub fn construct_equivalence_classes(fragments: Vec<Fragment>) -> HashMap<Vec<usize>, (usize, Vec<String>)> {
+pub fn construct_equivalence_classes(
+    fragments: Vec<Fragment>,
+) -> HashMap<Vec<usize>, (usize, Vec<String>)> {
     let mut equivalence_classes = HashMap::new();
 
     for fragment in fragments {
@@ -251,10 +266,10 @@ impl TranscriptInfo {
             let bin_end = ((bidxf + 1.0) * bin_width).min(self.lenf as f32);
             widths_f32.push(bin_end - bin_start);
             if bin_end < bin_start {
-                eprintln!("tlen_f: {:?}", tlen_f);
-                eprintln!("num_intervals_f: {:?}", num_intervals_f);
-                eprintln!("bin_width: {:?}", bin_width);
-                eprintln!("bidxf: {:?}", bidxf);
+                warn!("tlen_f: {:?}", tlen_f);
+                warn!("num_intervals_f: {:?}", num_intervals_f);
+                warn!("bin_width: {:?}", bin_width);
+                warn!("bidxf: {:?}", bidxf);
             }
             assert!(bin_end > bin_start);
         }
@@ -325,14 +340,20 @@ pub struct InMemoryAlignmentStore<'h> {
     pub discard_table: DiscardTable,
 }
 
-
 pub struct InMemoryAlignmentStoreIter<'a, 'h> {
     pub store: &'a InMemoryAlignmentStore<'h>,
     pub idx: usize,
 }
 
 impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
-    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64], &'a [f32], &'a [String], &'a [f64]);
+    type Item = (
+        &'a [AlnInfo],
+        &'a [f32],
+        &'a [f64],
+        &'a [f32],
+        &'a [String],
+        &'a [f64],
+    );
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.idx + 1 >= self.store.boundaries.len() {
@@ -391,8 +412,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
             self.read_name.extend_from_slice(&rstring);
             self.coverage_probabilities
                 .extend(vec![0.0_f64; alns.len()]);
-            self.kde_prob
-                .extend(vec![1.0_f64; alns.len()]);
+            self.kde_prob.extend(vec![1.0_f64; alns.len()]);
             self.boundaries.push(self.alignments.len());
             // @Susan-Zare : this is making things unreasonably slow. Perhaps
             // we should avoid pushing actual ranges, and just compute the

@@ -1,8 +1,8 @@
 use crate::util::oarfish_types::TranscriptInfo;
 use itertools::izip;
 use rayon::prelude::*;
+use statrs::distribution::{ContinuousCDF, Normal};
 use statrs::function::gamma::ln_gamma;
-use statrs::distribution::{Normal, ContinuousCDF};
 
 fn sigmoid(x: f64) -> f64 {
     1.0 / (1.0 + (-x).exp())
@@ -35,8 +35,11 @@ pub fn sigmoid_probability(
             if count == 0.0 || length == 0.0 {
                 0.0
             } else {
-                if count <0.0 || length < 0.0 || distinct_rate <0.0 {
-                eprintln!("count: {:?}, length: {:?}, rate:{:?}", count, length, distinct_rate);
+                if count < 0.0 || length < 0.0 || distinct_rate < 0.0 {
+                    eprintln!(
+                        "count: {:?}, length: {:?}, rate:{:?}",
+                        count, length, distinct_rate
+                    );
                 }
                 (count as f64) / (length as f64 * distinct_rate)
             }
@@ -46,26 +49,32 @@ pub fn sigmoid_probability(
     //###########################################################################################
     // obtain the maximum value of 709 on each bin count
     let avg_cov_prob: f64 = probabilities.iter().sum::<f64>() / (tlen / bin_len as f64);
-    let bin_diff_avg: Vec<f64> = probabilities.iter().map(|&prob| avg_cov_prob - prob).collect();
+    let bin_diff_avg: Vec<f64> = probabilities
+        .iter()
+        .map(|&prob| avg_cov_prob - prob)
+        .collect();
     let sigmoid_prob: Vec<f64> = bin_diff_avg.iter().map(|&x| sigmoid(x)).collect();
     //###########################################################################################
     let sum = sigmoid_prob.iter().sum::<f64>();
-    let normalized_prob: Vec<f64> = sigmoid_prob.iter().map(|&prob| {
-        let normalized = prob / sum;
-        if normalized.is_nan() {
-            eprintln!("Warning: Division resulted in NaN. prob: {}, sum: {}", prob, sum);
-            eprintln!("interval_counts = {:?}", interval_counts);
-            eprintln!("Warning: result: {:?}", sigmoid_prob);
-            panic!("prob_function, normalized_prob is not valid!");
-        }
-        normalized
-    }).collect();
+    let normalized_prob: Vec<f64> = sigmoid_prob
+        .iter()
+        .map(|&prob| {
+            let normalized = prob / sum;
+            if normalized.is_nan() {
+                eprintln!(
+                    "Warning: Division resulted in NaN. prob: {}, sum: {}",
+                    prob, sum
+                );
+                eprintln!("interval_counts = {:?}", interval_counts);
+                eprintln!("Warning: result: {:?}", sigmoid_prob);
+                panic!("prob_function, normalized_prob is not valid!");
+            }
+            normalized
+        })
+        .collect();
 
     normalized_prob
 }
-
-
-
 
 pub fn normal_probability(
     interval_count: &[f32],
@@ -93,8 +102,11 @@ pub fn normal_probability(
             if count == 0.0 || length == 0.0 {
                 0.0
             } else {
-                if count <0.0 || length < 0.0 || distinct_rate <0.0 {
-                eprintln!("count: {:?}, length: {:?}, rate:{:?}", count, length, distinct_rate);
+                if count < 0.0 || length < 0.0 || distinct_rate < 0.0 {
+                    eprintln!(
+                        "count: {:?}, length: {:?}, rate:{:?}",
+                        count, length, distinct_rate
+                    );
                 }
                 (count as f64) / (length as f64 * distinct_rate)
             }
@@ -129,11 +141,8 @@ pub fn normal_probability(
         result
     }).collect();
 
-
-
     // Compute the sum
-    let sum: f64 = normal_prob
-        .iter().sum();
+    let sum: f64 = normal_prob.iter().sum();
 
     // Normalize the probabilities
     let normalized_prob: Vec<f64> = normal_prob
@@ -152,15 +161,17 @@ pub fn normal_probability(
         .collect();
 
     if normalized_prob.iter().any(|&prob| prob < 0.0 || prob > 1.0) {
-        eprintln!("Warning: Normalized probability out of bounds. Normalized probabilities: {:?}", normalized_prob);
+        eprintln!(
+            "Warning: Normalized probability out of bounds. Normalized probabilities: {:?}",
+            normalized_prob
+        );
         panic!("prob_function, normalized_prob out of valid range!");
     }
 
     let normalized_sum = normalized_prob.iter().sum::<f64>();
-    if(count_sum != 0.0 && normalized_sum == 0.0){
+    if (count_sum != 0.0 && normalized_sum == 0.0) {
         panic!("warning in binomial_probability function: Numerical Instability. the count in each bin is non-zero but the resultant probability is zero.");
     }
-
 
     normalized_prob
 }
@@ -175,6 +186,8 @@ pub fn binomial_probability(
     let interval_lengths = interval_length;
     let count_sum = interval_counts.iter().sum::<f32>();
     const ZERO_THRESH: f64 = 1e-20;
+    // @zzare: Where does the magic number 709 come from?
+    const MAX_SCALE_COUNT = 709_f64;
 
     if count_sum == 0.0 {
         return vec![0.0; interval_counts.len()];
@@ -191,8 +204,11 @@ pub fn binomial_probability(
             if count == 0.0 || length == 0.0 {
                 0.0
             } else {
-                if count <0.0 || length < 0.0 || distinct_rate <0.0 {
-                eprintln!("count: {:?}, length: {:?}, rate:{:?}", count, length, distinct_rate);
+                if count < 0.0 || length < 0.0 || distinct_rate < 0.0 {
+                    warn!(
+                        "count: {:?}, length: {:?}, rate:{:?}",
+                        count, length, distinct_rate
+                    );
                 }
                 (count as f64) / (length as f64 * distinct_rate)
             }
@@ -202,13 +218,26 @@ pub fn binomial_probability(
     // compute the quantities (in the numerator and denominator) that we will
     // use to compute the binomial probabilities.
     //###########################################################################################
-    // obtain the maximum value of 709 on each bin count
+    // obtain the maximum value over the bins.
+    // NOTE: f32::max(f32::NAN, x) = x for all x != f32::NAN.
     let max_count = interval_counts.iter().cloned().fold(f32::NAN, f32::max);
+    assert!(!max_count.is_nan(), "Max bin count of NAN was encountered. Please report this issue on GitHub");
+
     //let complementary_count: Vec<f32> = interval_counts.iter().map(|&count_val| count_sum - count_val).collect();
     //let max_comp_count = complementary_count.iter().cloned().fold(f32::NAN, f32::max);
     //let max_val = max_count.max(max_comp_count as f32);
+
     let max_val = max_count;
-    let interval_count_modified: Vec<f32> = interval_counts.iter().map(|&count_val| if count_val == max_val {709.0} else {count_val * 709.0 / max_val}).collect();
+    let interval_count_modified: Vec<f32> = interval_counts
+        .iter()
+        .map(|&count_val| {
+            if count_val == max_val {
+                MAX_SCALE_COUNT
+            } else {
+                count_val * MAX_SCALE_COUNT / max_val
+            }
+        })
+        .collect();
     let sum_vec = interval_count_modified.iter().sum::<f32>();
     //###########################################################################################
     //let sum_vec = count_sum;
@@ -221,15 +250,15 @@ pub fn binomial_probability(
     let (log_numerator2, log_numerator3) : (Vec<f64>, Vec<f64>) = probabilities.iter().zip(interval_count_modified.iter()).map(|(&prob, &count)| {
         let num2 = if prob > ZERO_THRESH { prob.ln() * (count as f64) } else { ZERO_THRESH.ln() * (count as f64) };
         if num2.is_nan() || num2.is_infinite() {
-            eprintln!("num2 is: {:?}", num2);
-            eprintln!("prob and sum_vec and count is: {:?}\t {:?}\t {:?}", prob, sum_vec, count);
+            error!("num2 is: {:?}", num2);
+            error!("prob and sum_vec and count is: {:?}\t {:?}\t {:?}", prob, sum_vec, count);
             panic!("Incorrect result. multinomial_probability function provides nan or infinite values for log_numerator3");
         }
 
         let num3 = if (1.0 - prob) > ZERO_THRESH {(1.0 - prob).ln() * (sum_vec - count) as f64} else { ZERO_THRESH.ln() * (sum_vec - count) as f64};
         if num3.is_nan() || num3.is_infinite() {
-            eprintln!("num3 is: {:?}", num3);
-            eprintln!("prob and sum_vec and count is: {:?}\t {:?}\t {:?}", prob, sum_vec, count);
+            error!("num3 is: {:?}", num3);
+            error!("prob and sum_vec and count is: {:?}\t {:?}\t {:?}", prob, sum_vec, count);
             panic!("Incorrect result. multinomial_probability function provides nan or infinite values for log_numerator3");
         }
 
@@ -241,50 +270,54 @@ pub fn binomial_probability(
             let res = (log_numerator1 - denom + num2 +num3).exp();
             if res.is_nan() || res.is_infinite(){ // || (res == 0.0 && *count != 0.0) {
                 let len = probabilities.len();
-                eprintln!("{log_numerator1}, {denom}, {num2}, {num3}, {res}, {sum_vec}, {len}");
-                eprintln!("interval_counts = {:?}", interval_count_modified);
-                eprintln!("probabilities = {:?}", probabilities);
+                error!("{log_numerator1}, {denom}, {num2}, {num3}, {res}, {sum_vec}, {len}");
+                error!("interval_counts = {:?}", interval_count_modified);
+                error!("probabilities = {:?}", probabilities);
                 let t: Vec<f64> = interval_counts.iter().map(|b| sum_vec as f64 - *b as f64).collect();
-                eprintln!("sum_vec - count = {:?}", t);
+                error!("sum_vec - count = {:?}", t);
                 panic!("Incorrect result. multinomial_probability function provides nan or infinite values for result");
             }
             res
         }).collect();
 
-
-//==============================================================================================
+    //==============================================================================================
     //// Normalize the probabilities by dividing each element by the sum
     ////let normalized_prob: Vec<f64> = result.iter().map(|&prob| prob / sum).collect();
     let sum = result.iter().sum::<f64>();
-    let normalized_prob: Vec<f64> = result.iter().map(|&prob| {
-        let normalized = prob / sum;
-        if normalized.is_nan() {
-            eprintln!("Warning: Division resulted in NaN. prob: {}, sum: {}", prob, sum);
-            eprintln!("interval_counts = {:?}", interval_count_modified);
-            eprintln!("Warning: result: {:?}", result);
-            panic!("prob_function, normalized_prob is not valid!");
-        }
-        normalized
-    }).collect();
-
+    let normalized_prob: Vec<f64> = result
+        .iter()
+        .map(|&prob| {
+            let normalized = prob / sum;
+            if normalized.is_nan() {
+                error!(
+                    "Warning: Division resulted in NaN. prob: {}, sum: {}",
+                    prob, sum
+                );
+                error!("interval_counts = {:?}", interval_count_modified);
+                error!("Warning: result: {:?}", result);
+                panic!("prob_function, normalized_prob is not valid!");
+            }
+            normalized
+        })
+        .collect();
 
     //new method of log values
     //let log_values: Vec<f64> = izip!(log_denominator, log_numerator2, log_numerator3)
     //.map(|(denom, num2, num3)| log_numerator1 - denom + num2 + num3)
     //.collect();
-//
+    //
     //// Find the maximum log value to use for stability
     //let max_log_value = log_values
     //    .iter()
     //    .cloned()
     //    .fold(f64::NEG_INFINITY, f64::max);
-//
+    //
     //// Compute the exponential sum in a numerically stable way
     //let exp_sum: f64 = log_values
     //    .iter()
     //    .map(|&log_val| (log_val - max_log_value).exp())
     //    .sum();
-//
+    //
     //// Normalize the probabilities
     //let normalized_prob: Vec<f64> = log_values
     //    .iter()
@@ -300,22 +333,26 @@ pub fn binomial_probability(
     //        normalized
     //    })
     //    .collect();
-//
+    //
     //if normalized_prob.iter().any(|&prob| prob < 0.0 || prob > 1.0) {
     //    eprintln!("Warning: Normalized probability out of bounds. Normalized probabilities: {:?}", normalized_prob);
     //    panic!("prob_function, normalized_prob out of valid range!");
     //}
-//
+    //
     //let normalized_sum = normalized_prob.iter().sum::<f64>();
     //if(count_sum != 0.0 && normalized_sum == 0.0){
     //    panic!("warning in binomial_probability function: Numerical Instability. the count in each bin is non-zero but the resultant probability is zero.");
     //}
 
-
     normalized_prob
 }
 
-pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, threads: usize, txps_name: &Vec<String>, bin_len: usize) {
+pub fn binomial_continuous_prob(
+    txps: &mut Vec<TranscriptInfo>,
+    threads: usize,
+    txps_name: &Vec<String>,
+    bin_len: usize,
+) {
     use tracing::info;
     use tracing::info_span;
 
@@ -344,7 +381,9 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, threads: usize, 
             //let constant = t.num_read / 10.0;
             //let constant = 1.0;
             let constant = t.num_read / 100.0;
-            t.coverage_bins.iter_mut().for_each(|elem| *elem += constant);
+            t.coverage_bins
+                .iter_mut()
+                .for_each(|elem| *elem += constant);
             let (bin_counts, bin_lengths) = t.get_normalized_counts_and_lengths();
 
             let distinct_rate: f64 = bin_counts
