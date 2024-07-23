@@ -31,7 +31,7 @@ categories = ["command-line-utilities", "science"]
 
 [dependencies]
 seqcol_rs = { git = "https://github.com/COMBINE-lab/seqcol_rs", branch = "dev", version = "0.1.0" }
-anyhow = "1.0.81"
+anyhow = "1.0.86"
 bio-types = "1.0.1"
 clap = { version = "4.5.4", features = ["derive"] }
 coitrees = "0.4.0"
@@ -54,6 +54,7 @@ path-tools = "0.1.0"
 atomic_float = "0.1.0"
 rand = "0.8.5"
 arrow2 = { version = "0.18.0", features = ["io_parquet", "io_parquet_gzip", "io_parquet_zstd", "io_parquet_snappy"] }
+kders = { git = "https://github.com/COMBINE-lab/kde-rs.git", branch = "dev", version = "0.1.0" }
 
 [[bin]]
 name = "oarfish"
