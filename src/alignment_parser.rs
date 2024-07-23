@@ -88,6 +88,9 @@ pub fn parse_alignments<R: io::BufRead>(
                 // previous read record.
                 if !prev_read.is_empty() {
                     store.add_group(txps, &mut records_for_read);
+                    if records_for_read.len() == 1 {
+                        store.inc_unique_alignments();
+                    }
                     records_for_read.clear();
                 }
                 // the new "prev_read" name is the current read name
@@ -104,6 +107,9 @@ pub fn parse_alignments<R: io::BufRead>(
     // add that group.
     if !records_for_read.is_empty() {
         store.add_group(txps, &mut records_for_read);
+        if records_for_read.len() == 1 {
+            store.inc_unique_alignments();
+        }
         records_for_read.clear();
     }
 

@@ -235,6 +235,7 @@ pub struct InMemoryAlignmentStore<'h> {
     // holds the boundaries between records for different reads
     boundaries: Vec<usize>,
     pub discard_table: DiscardTable,
+    pub num_unique_alignments: usize
 }
 
 impl<'h> InMemoryAlignmentStore<'h> {
@@ -320,6 +321,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
             coverage_probabilities: vec![],
             boundaries: vec![0],
             discard_table: DiscardTable::new(),
+            num_unique_alignments: 0
         }
     }
 
@@ -374,6 +376,13 @@ impl<'h> InMemoryAlignmentStore<'h> {
 
     #[inline(always)]
     pub fn num_aligned_reads(&self) -> usize { self.len().saturating_sub(1) }
+
+    #[inline(always)]
+    pub fn inc_unique_alignments(&mut self) { self.num_unique_alignments += 1; }
+
+    #[inline(always)]
+    pub fn unique_alignments(&self) -> usize { self.num_unique_alignments }
+
 }
 
 /// The parameters controling the filters that will
@@ -690,13 +699,15 @@ impl AlignmentFilters {
             })
             .collect();
 
+        let _min_allowed_score = self.score_threshold * mscore;
+
         for (i, score) in scores.iter_mut().enumerate() {
-            const SCORE_PROB_DENOM: f32 = 10.0;
+            const SCORE_PROB_DENOM: f32 = 5.0;
             let fscore = *score as f32;
             let score_ok = (fscore * inv_max_score) >= self.score_threshold; //>= thresh_score;
             if score_ok {
+                //let f = ((fscore - mscore) / (mscore - min_allowed_score)) * SCORE_PROB_DENOM;
                 let f = (fscore - mscore) / SCORE_PROB_DENOM;
-                //let f = (fscore - mscore) * inv_max_score * SCORE_PROB_DENOM;
                 probabilities.push(f.exp());
 
                 let tid = ag[i]

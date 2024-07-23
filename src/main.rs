@@ -297,6 +297,11 @@ fn main() -> anyhow::Result<()> {
         "number of aligned reads : {}",
         store.num_aligned_reads().to_formatted_string(&Locale::en)
     );
+    info!(
+        "number of unique alignments : {}",
+        store.unique_alignments().to_formatted_string(&Locale::en)
+    );
+
 
     // if we are seeding the quantification estimates with short read
     // abundances, then read those in here.
