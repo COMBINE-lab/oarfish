@@ -127,7 +127,7 @@ struct Args {
     #[arg(short, long, help_heading = "coverage model", default_value_t = 100)]
     bin_width: u32,
     /// use a KDE model of the observed fragment length distribution
-    #[arg(short, long)]
+    #[arg(short, long, hide = true)]
     use_kde: bool,
 }
 
@@ -323,7 +323,7 @@ fn main() -> anyhow::Result<()> {
 
     // wrap up all of the relevant information we need for estimation
     // in an EMInfo struct and then call the EM algorithm.
-    let mut emi = EMInfo {
+    let emi = EMInfo {
         eq_map: &store,
         txp_info: &txps,
         max_iter: args.max_em_iter,
@@ -333,6 +333,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     if args.use_kde {
+        /*
         // run EM for model train iterations
         let orig_iter = emi.max_iter;
         emi.max_iter = 10;
@@ -343,6 +344,7 @@ fn main() -> anyhow::Result<()> {
         info!("refreshed KDE model");
         emi.kde_model = Some(new_model?);
         emi.max_iter = orig_iter;
+        */
     }
 
     let counts = if args.threads > 4 {

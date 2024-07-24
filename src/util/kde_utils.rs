@@ -26,8 +26,8 @@ pub fn get_kde_model(
 
     info!("KDE grid maxima = ({}, {})", gd.width, gd.height);
 
-    let kernel_bandwidth = 1_f64;
-    let bin_width = 10_usize;
+    let kernel_bandwidth = 50_f64;
+    let bin_width = 25_usize;
 
     let mut grid = kders::kde::KDEGrid::new(gd, bin_width, Some(kernel_bandwidth));
 
@@ -44,6 +44,7 @@ pub fn get_kde_model(
     Ok(density)
 }
 
+#[allow(unused)]
 pub fn refresh_kde_model(
     txps: &[TranscriptInfo],
     store: &InMemoryAlignmentStore,
@@ -57,21 +58,24 @@ pub fn refresh_kde_model(
 
     info!("KDE grid maxima = ({}, {})", gd.width, gd.height);
 
-    let kernel_bandwidth = 1_f64;
-    let bin_width = 10_usize;
+    let kernel_bandwidth = 50_f64;
+    let bin_width = 25_usize;
 
     let mut grid = kders::kde::KDEGrid::new(gd, bin_width, Some(kernel_bandwidth));
 
     for (ainfs, aprobs, cprobs) in store.iter() {
         let mut denom = 0.0_f64;
-        for (a, p, cp) in izip!(ainfs, aprobs, cprobs) {
+        for (a, p, _cp) in izip!(ainfs, aprobs, cprobs) {
             // Compute the probability of assignment of the
             // current read based on this alignment and the
             // target's estimated abundance.
             let target_id = a.ref_id as usize;
             let prob = *p as f64;
             let cov_prob = 1.0; //if model_coverage { *cp } else { 1.0 };
-            denom += counts[target_id] * prob * cov_prob;
+            let txp_len = txps[target_id].lenf;
+            let aln_len = a.alignment_span();
+            let flprob = kde_model[(txp_len as usize, aln_len as usize)];
+            denom += counts[target_id] * prob * cov_prob * flprob;
         }
 
         // If this read can be assigned
@@ -79,13 +83,14 @@ pub fn refresh_kde_model(
             // Loop over all possible assignment locations and proportionally
             // allocate the read according to our model and current parameter
             // estimates.
-            for (a, p, cp) in izip!(ainfs, aprobs, cprobs) {
+            for (a, p, _cp) in izip!(ainfs, aprobs, cprobs) {
                 let target_id = a.ref_id as usize;
                 let prob = *p as f64;
                 let cov_prob = 1.0; //if model_coverage { *cp } else { 1.0 };
-                let w = (counts[target_id] * prob * cov_prob) / denom;
                 let txp_len = txps[target_id].lenf;
                 let aln_len = a.alignment_span();
+                let flprob = kde_model[(txp_len as usize, aln_len as usize)];
+                let w = (counts[target_id] * prob * cov_prob * flprob) / denom;
                 grid.add_observation(txp_len as usize, aln_len as usize, w);
             }
         }

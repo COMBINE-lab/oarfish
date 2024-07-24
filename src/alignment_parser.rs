@@ -25,7 +25,7 @@ pub fn read_and_verify_header<R: io::BufRead>(
     let mut progs = vec![];
     // explicitly check that alignment was done with a supported
     // aligner (right now, just minimap2).
-    for (prog, _pmap) in header.programs().iter() {
+    for (prog, _pmap) in header.programs().roots() {
         if prog == "minimap2" {
             saw_minimap2 = true;
             break;

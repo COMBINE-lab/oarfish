@@ -33,7 +33,10 @@ pub fn normalize_read_probs(
 
                     if bin_floor_diff <= 0.0
                         || ceil_diff <= 0.0
-                        || !(coverage_probability[i] >= 0.0)
+                        || !(coverage_probability[i]
+                            .partial_cmp(&0.0)
+                            .unwrap_or(std::cmp::Ordering::Less)
+                            .is_ge())
                         || coverage_probability[i].is_nan()
                         || coverage_probability[i].is_infinite()
                     {

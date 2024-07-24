@@ -254,14 +254,6 @@ impl<'h> InMemoryAlignmentStore<'h> {
     pub fn len(&self) -> usize {
         self.boundaries.len().saturating_sub(1)
     }
-
-    pub fn get_longest_alignment(&self) -> Option<usize> {
-        if let Some(ref aln) = self.alignments.iter().max_by_key(|x| x.alignment_span()) {
-            Some(aln.alignment_span() as usize)
-        } else {
-            None
-        }
-    }
 }
 
 pub struct InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'h, 'b> {
