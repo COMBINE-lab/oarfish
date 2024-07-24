@@ -188,8 +188,7 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
         .build()
         .unwrap();
 
-    const MIN_COV: f64 = 1.0;
-    txps.par_iter_mut().enumerate().for_each(|(i, t)| {
+    txps.par_iter_mut().enumerate().for_each(|(_i, t)| {
         let temp_prob: Vec<f64> = if *bins != 0 {
             /*
             let bin_counts: Vec<f32>;
@@ -204,7 +203,8 @@ pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, thre
             ) = bin_transcript_normalize_counts(t, bins); //binning the transcript length and obtain the counts and length vectors
                                                           //==============================================================================================
             */
-            t.coverage_bins.iter_mut().for_each(|elem| *elem += MIN_COV);
+            let min_cov = t.total_weight / 100.;
+            t.coverage_bins.iter_mut().for_each(|elem| *elem += min_cov);
             let (bin_counts, bin_lengths) = t.get_normalized_counts_and_lengths();
 
             let distinct_rate: f64 = bin_counts
