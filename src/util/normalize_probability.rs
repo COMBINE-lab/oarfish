@@ -5,7 +5,7 @@ use tracing::{error, info, instrument};
 pub fn normalize_read_probs(
     store: &mut InMemoryAlignmentStore,
     txp_info: &[TranscriptInfo],
-    num_bins: &u32,
+    bin_width: &u32,
 ) {
     let mut normalize_probs_temp: Vec<f64> = vec![];
     let mut normalized_coverage_prob: Vec<f64> = vec![];
@@ -19,7 +19,7 @@ pub fn normalize_read_probs(
             let start_aln: f32 = a.start as f32;
             let end_aln: f32 = a.end as f32;
             let tlen: f32 = txp_info[target_id].len.get() as f32;
-            let bin_length: f32 = txp_info[target_id].len.get() as f32;
+            let bin_length: f32 = bin_width as f32; //txp_info[target_id].len.get() as f32;
             let start_bin: usize = (start_aln / bin_length) as usize;
             let end_bin: usize = (end_aln / bin_length) as usize;
             let coverage_probability: &Vec<f64> = &txp_info[target_id].coverage_prob;
