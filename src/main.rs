@@ -290,7 +290,7 @@ fn main() -> anyhow::Result<()> {
 
     // if we are using the KDE, create that here.
     let kde_opt: Option<kders::kde::KDEModel> = if args.use_kde {
-        Some(kde_utils::get_kde_model(&txps, &store, None)?)
+        Some(kde_utils::get_kde_model(&txps, &store)?)
     } else {
         None
     };
@@ -334,12 +334,15 @@ fn main() -> anyhow::Result<()> {
 
     if args.use_kde {
         // run EM for model train iterations
+        let orig_iter = emi.max_iter;
         emi.max_iter = 10;
         let counts = em::em(&emi, args.threads);
         // relearn the kde
         let new_model =
             kde_utils::refresh_kde_model(&txps, &store, &emi.kde_model.unwrap(), &counts);
+        info!("refreshed KDE model");
         emi.kde_model = Some(new_model?);
+        emi.max_iter = orig_iter;
     }
 
     let counts = if args.threads > 4 {

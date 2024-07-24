@@ -6,14 +6,13 @@ use tracing::info;
 pub fn get_kde_model(
     txps: &[TranscriptInfo],
     store: &InMemoryAlignmentStore,
-    txp_abund_opt: Option<&[f64]>,
 ) -> anyhow::Result<KDEModel> {
     let mut max_x: f64 = 0_f64;
     let mut max_y: f64 = 0_f64;
 
     for (ainfs, _aprobs, _cprobs) in store.iter() {
         for ainf in ainfs {
-            let txp_len = txps[ainf.ref_id as usize].lenf as f64;
+            let txp_len = txps[ainf.ref_id as usize].lenf;
             let aln_len = ainf.alignment_span() as f64;
             max_x = max_x.max(txp_len);
             max_y = max_y.max(aln_len);
@@ -32,23 +31,12 @@ pub fn get_kde_model(
 
     let mut grid = kders::kde::KDEGrid::new(gd, bin_width, Some(kernel_bandwidth));
 
-    if let Some(_txp_abund) = txp_abund_opt {
-        for (ainfs, _aprobs, _cprobs) in store.iter() {
-            let w = 1. / ainfs.len() as f64;
-            for ainf in ainfs {
-                let txp_len = txps[ainf.ref_id as usize].lenf as f64;
-                let aln_len = ainf.alignment_span();
-                grid.add_observation(txp_len as usize, aln_len as usize, w);
-            }
-        }
-    } else {
-        for (ainfs, _aprobs, _cprobs) in store.iter() {
-            let w = 1. / ainfs.len() as f64;
-            for ainf in ainfs {
-                let txp_len = txps[ainf.ref_id as usize].lenf as f64;
-                let aln_len = ainf.alignment_span();
-                grid.add_observation(txp_len as usize, aln_len as usize, w);
-            }
+    for (ainfs, _aprobs, _cprobs) in store.iter() {
+        let w = 1. / (ainfs.len() as f64);
+        for ainf in ainfs {
+            let txp_len = txps[ainf.ref_id as usize].lenf;
+            let aln_len = ainf.alignment_span();
+            grid.add_observation(txp_len as usize, aln_len as usize, w);
         }
     }
 
@@ -102,5 +90,6 @@ pub fn refresh_kde_model(
             }
         }
     }
+    info!("filled grid; computing KDE");
     grid.get_kde()
 }
