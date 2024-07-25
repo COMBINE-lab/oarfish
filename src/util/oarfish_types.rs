@@ -430,10 +430,9 @@ pub struct AlignmentFilters {
     /// must be aligned under this alignment in
     /// order for this alignment to be  retained
     min_aligned_len: u32,
-    /// Determines if we should allow alignments to the
-    /// antisense strand; true if we should and false
-    /// otherwise.
-    allow_rc: bool,
+    /// Determines which alignments we should consider
+    /// as valid during quantificationwhich_strand.
+    which_strand: bio_types::strand::Strand,
     // True if we are enabling our coverage model and
     // false otherwise.
     pub model_coverage: bool,
@@ -617,11 +616,24 @@ impl AlignmentFilters {
                     .expect("alignment record should have flags")
                     .is_reverse_complemented();
 
-                // filter this alignment out if we are not permitting
-                // antisense alignments.
-                if is_rc && !self.allow_rc {
-                    discard_table.discard_ori += 1;
-                    return false;
+                // if we are keeping only forward strand alignments
+                // filter this alignment if it is rc
+                match (is_rc, self.which_strand) {
+                    (_, bio_types::strand::Strand::Unknown) => { /*do nothing*/ }
+                    // is rc and we want rc
+                    (true, bio_types::strand::Strand::Reverse) => { /*do nothing*/ }
+                    // is fw and we want fw
+                    (false, bio_types::strand::Strand::Forward) => { /*do nothing*/ }
+                    // is fw and we want rc
+                    (false, bio_types::strand::Strand::Reverse) => {
+                        discard_table.discard_ori += 1;
+                        return false;
+                    }
+                    // is rc and we want fw
+                    (true, bio_types::strand::Strand::Forward) => {
+                        discard_table.discard_ori += 1;
+                        return false;
+                    }
                 }
 
                 // the alignment is supplementary

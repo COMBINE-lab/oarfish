@@ -39,6 +39,15 @@ enum FilterGroup {
     NanocountFilters,
 }
 
+fn parse_strand(arg: &str) -> anyhow::Result<bio_types::strand::Strand> {
+    match arg {
+        "+" | "fw" | "FW" | "f" | "F" => Ok(bio_types::strand::Strand::Forward),
+        "-" | "rc" | "RC" | "r" | "R" => Ok(bio_types::strand::Strand::Reverse),
+        "." | "both" | "either" => Ok(bio_types::strand::Strand::Forward),
+        _ => anyhow::bail!("Cannot parse {} as a valid strand type", arg),
+    }
+}
+
 /// accurate transcript quantification from long-read RNA-seq data
 #[derive(Parser, Debug, Serialize)]
 #[clap(author, version, about, long_about = None)]
@@ -96,15 +105,16 @@ struct Args {
         default_value_t = 50
     )]
     min_aligned_len: u32,
-    /// allow both forward-strand and reverse-complement alignments
+    /// only alignments to this strand will be allowed; options are (fw /+, rc/-, or both/.)
     #[arg(
-        short = 'n',
+        short = 's',
         long,
         conflicts_with = "filter-group",
         help_heading = "filters",
-        value_parser
+        default_value_t = bio_types::strand::Strand::Unknown,
+        value_parser = parse_strand
     )]
-    allow_negative_strand: bool,
+    strand_filter: bio_types::strand::Strand,
     /// apply the coverage model
     #[arg(long, help_heading = "coverage model", value_parser)]
     model_coverage: bool,
@@ -143,7 +153,7 @@ fn get_filter_opts(args: &Args) -> AlignmentFilters {
                 .score_threshold(0_f32)
                 .min_aligned_fraction(0_f32)
                 .min_aligned_len(1_u32)
-                .allow_rc(true)
+                .which_strand(bio_types::strand::Strand::Unknown)
                 .model_coverage(args.model_coverage)
                 .build()
         }
@@ -155,7 +165,7 @@ fn get_filter_opts(args: &Args) -> AlignmentFilters {
                 .score_threshold(0.95_f32)
                 .min_aligned_fraction(0.5_f32)
                 .min_aligned_len(50_u32)
-                .allow_rc(false)
+                .which_strand(bio_types::strand::Strand::Forward)
                 .model_coverage(args.model_coverage)
                 .build()
         }
@@ -167,7 +177,7 @@ fn get_filter_opts(args: &Args) -> AlignmentFilters {
                 .score_threshold(args.score_threshold)
                 .min_aligned_fraction(args.min_aligned_fraction)
                 .min_aligned_len(args.min_aligned_len)
-                .allow_rc(args.allow_negative_strand)
+                .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
                 .build()
         }
