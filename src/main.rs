@@ -43,7 +43,7 @@ fn parse_strand(arg: &str) -> anyhow::Result<bio_types::strand::Strand> {
     match arg {
         "+" | "fw" | "FW" | "f" | "F" => Ok(bio_types::strand::Strand::Forward),
         "-" | "rc" | "RC" | "r" | "R" => Ok(bio_types::strand::Strand::Reverse),
-        "." | "both" | "either" => Ok(bio_types::strand::Strand::Forward),
+        "." | "both" | "either" => Ok(bio_types::strand::Strand::Unknown),
         _ => anyhow::bail!("Cannot parse {} as a valid strand type", arg),
     }
 }
