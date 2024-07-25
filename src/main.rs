@@ -107,7 +107,7 @@ struct Args {
     min_aligned_len: u32,
     /// only alignments to this strand will be allowed; options are (fw /+, rc/-, or both/.)
     #[arg(
-        short = 's',
+        short = 'd',
         long,
         conflicts_with = "filter-group",
         help_heading = "filters",
