@@ -32,7 +32,7 @@ categories = ["command-line-utilities", "science"]
 [dependencies]
 seqcol_rs = { git = "https://github.com/COMBINE-lab/seqcol_rs", branch = "dev", version = "0.1.0" }
 anyhow = "1.0.86"
-bio-types = "1.0.3"
+bio-types = { version = "1.0.3", features = ["serde"] }
 clap = { version = "4.5.10", features = ["derive"] }
 coitrees = "0.4.0"
 noodles-bam = "0.65.0"

@@ -5,7 +5,7 @@ import argparse
 
 
 def eval_sim(args):
-    x = pd.read_csv(args.true_abundances, names=["txp_name", "true_reads"], sep="\t")
+    x = pd.read_csv(args.true_abundances, names=["txp_name", "true_reads"], sep="\s+")
     y = pd.read_csv(args.predicted_abundances, sep="\s+")
     y["txp_name"] = y.tname.str.split(".").str.get(0)
 
