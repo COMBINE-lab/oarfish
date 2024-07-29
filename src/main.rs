@@ -189,7 +189,7 @@ fn get_filter_opts(args: &Args) -> AlignmentFilters {
 /// will be written to the corresponding `meta_info.json` file for this run.
 fn get_json_info(args: &Args, emi: &EMInfo, seqcol_digest: &str) -> serde_json::Value {
     let prob = if args.model_coverage {
-        "binomial"
+        "scaled_binomial"
     } else {
         "no_coverage"
     };
