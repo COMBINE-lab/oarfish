@@ -73,9 +73,9 @@ lto = "thin"
 # Config for 'cargo dist'
 [workspace.metadata.dist]
 # The preferred cargo-dist version to use in CI (Cargo.toml SemVer syntax)
-cargo-dist-version = "0.12.0"
+cargo-dist-version = "0.19.1"
 # CI backends to support
-ci = ["github"]
+ci = "github"
 # The installers to generate for each app
 installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
@@ -84,6 +84,8 @@ targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-unknown-linux-
 pr-run-mode = "plan"
 # Whether to install an updater program
 install-updater = false
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
 
 [workspace.metadata.dist.github-custom-runners]
 aarch64-apple-darwin = "macos-14"
