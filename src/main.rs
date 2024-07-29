@@ -22,13 +22,13 @@ mod bootstrap;
 mod em;
 mod util;
 
-use crate::util::binomial_probability::binomial_continuous_prob;
 use crate::util::normalize_probability::normalize_read_probs;
 use crate::util::oarfish_types::{
     AlignmentFilters, EMInfo, InMemoryAlignmentStore, TranscriptInfo,
 };
 use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::{write_infrep_file, write_output};
+use crate::util::{binomial_probability::binomial_continuous_prob, kde_utils};
 
 /// These represent different "meta-options", specific settings
 /// for all of the different filters that should be applied in
@@ -37,6 +37,15 @@ use crate::util::write_function::{write_infrep_file, write_output};
 enum FilterGroup {
     NoFilters,
     NanocountFilters,
+}
+
+fn parse_strand(arg: &str) -> anyhow::Result<bio_types::strand::Strand> {
+    match arg {
+        "+" | "fw" | "FW" | "f" | "F" => Ok(bio_types::strand::Strand::Forward),
+        "-" | "rc" | "RC" | "r" | "R" => Ok(bio_types::strand::Strand::Reverse),
+        "." | "both" | "either" => Ok(bio_types::strand::Strand::Unknown),
+        _ => anyhow::bail!("Cannot parse {} as a valid strand type", arg),
+    }
 }
 
 /// accurate transcript quantification from long-read RNA-seq data
@@ -96,15 +105,16 @@ struct Args {
         default_value_t = 50
     )]
     min_aligned_len: u32,
-    /// allow both forward-strand and reverse-complement alignments
+    /// only alignments to this strand will be allowed; options are (fw /+, rc/-, or both/.)
     #[arg(
-        short = 'n',
+        short = 'd',
         long,
         conflicts_with = "filter-group",
         help_heading = "filters",
-        value_parser
+        default_value_t = bio_types::strand::Strand::Unknown,
+        value_parser = parse_strand
     )]
-    allow_negative_strand: bool,
+    strand_filter: bio_types::strand::Strand,
     /// apply the coverage model
     #[arg(long, help_heading = "coverage model", value_parser)]
     model_coverage: bool,
@@ -123,9 +133,12 @@ struct Args {
     /// number of bootstrap replicates to produce to assess quantification uncertainty
     #[arg(long, default_value_t = 0)]
     num_bootstraps: u32,
-    /// number of bins to use in coverage model
-    #[arg(short, long, help_heading = "coverage model", default_value_t = 10)]
-    bins: u32,
+    /// width of the bins used in the coverage model
+    #[arg(short, long, help_heading = "coverage model", default_value_t = 100)]
+    bin_width: u32,
+    /// use a KDE model of the observed fragment length distribution
+    #[arg(short, long, hide = true)]
+    use_kde: bool,
 }
 
 fn get_filter_opts(args: &Args) -> AlignmentFilters {
@@ -140,7 +153,7 @@ fn get_filter_opts(args: &Args) -> AlignmentFilters {
                 .score_threshold(0_f32)
                 .min_aligned_fraction(0_f32)
                 .min_aligned_len(1_u32)
-                .allow_rc(true)
+                .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
                 .build()
         }
@@ -152,7 +165,7 @@ fn get_filter_opts(args: &Args) -> AlignmentFilters {
                 .score_threshold(0.95_f32)
                 .min_aligned_fraction(0.5_f32)
                 .min_aligned_len(50_u32)
-                .allow_rc(false)
+                .which_strand(bio_types::strand::Strand::Forward)
                 .model_coverage(args.model_coverage)
                 .build()
         }
@@ -164,7 +177,7 @@ fn get_filter_opts(args: &Args) -> AlignmentFilters {
                 .score_threshold(args.score_threshold)
                 .min_aligned_fraction(args.min_aligned_fraction)
                 .min_aligned_len(args.min_aligned_len)
-                .allow_rc(args.allow_negative_strand)
+                .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
                 .build()
         }
@@ -176,14 +189,14 @@ fn get_filter_opts(args: &Args) -> AlignmentFilters {
 /// will be written to the corresponding `meta_info.json` file for this run.
 fn get_json_info(args: &Args, emi: &EMInfo, seqcol_digest: &str) -> serde_json::Value {
     let prob = if args.model_coverage {
-        "binomial"
+        "scaled_binomial"
     } else {
         "no_coverage"
     };
 
     json!({
         "prob_model" : prob,
-        "num_bins" : args.bins,
+        "bin_width" : args.bin_width,
         "filter_options" : &emi.eq_map.filter_opts,
         "discard_table" : &emi.eq_map.discard_table,
         "alignments": &args.alignments,
@@ -260,7 +273,10 @@ fn main() -> anyhow::Result<()> {
     // information here.
     if args.model_coverage {
         for (rseq, rmap) in header.reference_sequences().iter() {
-            txps.push(TranscriptInfo::with_len_and_bins(rmap.length(), args.bins));
+            txps.push(TranscriptInfo::with_len_and_bin_width(
+                rmap.length(),
+                args.bin_width,
+            ));
             txps_name.push(rseq.to_string());
         }
     } else {
@@ -282,11 +298,18 @@ fn main() -> anyhow::Result<()> {
     // print discard table information in which the user might be interested.
     info!("\ndiscard_table: \n{}\n", store.discard_table.to_table());
 
+    // if we are using the KDE, create that here.
+    let kde_opt: Option<kders::kde::KDEModel> = if args.use_kde {
+        Some(kde_utils::get_kde_model(&txps, &store)?)
+    } else {
+        None
+    };
+
     if store.filter_opts.model_coverage {
         //obtaining the Cumulative Distribution Function (CDF) for each transcript
-        binomial_continuous_prob(&mut txps, &args.bins, args.threads);
+        binomial_continuous_prob(&mut txps, &args.bin_width, args.threads);
         //Normalize the probabilities for the records of each read
-        normalize_read_probs(&mut store, &txps, &args.bins);
+        normalize_read_probs(&mut store, &txps, &args.bin_width);
     }
 
     info!(
@@ -296,6 +319,10 @@ fn main() -> anyhow::Result<()> {
     info!(
         "number of aligned reads : {}",
         store.num_aligned_reads().to_formatted_string(&Locale::en)
+    );
+    info!(
+        "number of unique alignments : {}",
+        store.unique_alignments().to_formatted_string(&Locale::en)
     );
 
     // if we are seeding the quantification estimates with short read
@@ -308,11 +335,27 @@ fn main() -> anyhow::Result<()> {
     // in an EMInfo struct and then call the EM algorithm.
     let emi = EMInfo {
         eq_map: &store,
-        txp_info: &mut txps,
+        txp_info: &txps,
         max_iter: args.max_em_iter,
         convergence_thresh: args.convergence_thresh,
         init_abundances,
+        kde_model: kde_opt,
     };
+
+    if args.use_kde {
+        /*
+        // run EM for model train iterations
+        let orig_iter = emi.max_iter;
+        emi.max_iter = 10;
+        let counts = em::em(&emi, args.threads);
+        // relearn the kde
+        let new_model =
+            kde_utils::refresh_kde_model(&txps, &store, &emi.kde_model.unwrap(), &counts);
+        info!("refreshed KDE model");
+        emi.kde_model = Some(new_model?);
+        emi.max_iter = orig_iter;
+        */
+    }
 
     let counts = if args.threads > 4 {
         em::em_par(&emi, args.threads)

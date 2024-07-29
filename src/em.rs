@@ -1,5 +1,6 @@
 use std::sync::atomic::Ordering;
 
+use crate::util::constants;
 use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
 use atomic_float::AtomicF64;
 use itertools::izip;
@@ -16,14 +17,16 @@ use crate::bootstrap;
 /// Then, `curr_counts` is computed by summing over the expected assignment
 /// likelihood for all reads mapping to each target.
 #[inline]
-fn m_step_par<'a>(
+fn m_step_par<'a, DFn>(
     eq_iterates: &[(&'a [AlnInfo], &'a [f32], &'a [f64])],
-    _tinfo: &[TranscriptInfo],
+    tinfo: &[TranscriptInfo],
     model_coverage: bool,
+    density_fn: DFn,
     prev_count: &mut [AtomicF64],
     curr_counts: &mut [AtomicF64],
-) {
-    const DENOM_THRESH: f64 = 1e-30_f64;
+) where
+    DFn: Fn(usize, usize) -> f64 + Sync,
+{
     // for (alns, probs, coverage_probs) in eq_map.iter() {
     eq_iterates.par_iter().for_each_with(
         &curr_counts,
@@ -34,23 +37,37 @@ fn m_step_par<'a>(
                 // current read based on this alignment and the
                 // target's estimated abundance.
                 let target_id = a.ref_id as usize;
+
+                let txp_len = tinfo[target_id].lenf as usize;
+                let aln_len = a.alignment_span() as usize;
+
                 let prob = *p as f64;
                 let cov_prob = if model_coverage { *cp } else { 1.0 };
+                let dens_prob = density_fn(txp_len, aln_len);
 
-                denom += prev_count[target_id].load(Ordering::Relaxed) * prob * cov_prob;
+                denom +=
+                    prev_count[target_id].load(Ordering::Relaxed) * prob * cov_prob * dens_prob;
             }
 
             // If this read can be assigned
-            if denom > DENOM_THRESH {
+            if denom > constants::EM_DENOM_THRESH {
                 // Loop over all possible assignment locations and proportionally
                 // allocate the read according to our model and current parameter
                 // estimates.
                 for (a, p, cp) in izip!(*alns, *probs, *coverage_probs) {
                     let target_id = a.ref_id as usize;
+
+                    let txp_len = tinfo[target_id].lenf as usize;
+                    let aln_len = a.alignment_span() as usize;
+
                     let prob = *p as f64;
                     let cov_prob = if model_coverage { *cp } else { 1.0 };
-                    let inc =
-                        (prev_count[target_id].load(Ordering::Relaxed) * prob * cov_prob) / denom;
+                    let dens_prob = density_fn(txp_len, aln_len);
+                    let inc = (prev_count[target_id].load(Ordering::Relaxed)
+                        * prob
+                        * cov_prob
+                        * dens_prob)
+                        / denom;
                     //curr_counts[target_id] += inc;
                     curr_counts[target_id].fetch_add(inc, Ordering::AcqRel);
                 }
@@ -65,14 +82,16 @@ fn m_step_par<'a>(
 /// Then, `curr_counts` is computed by summing over the expected assignment
 /// likelihood for all reads mapping to each target.
 #[inline]
-fn m_step<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])>>(
+fn m_step<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])>>(
     eq_map_iter: I,
-    _tinfo: &[TranscriptInfo],
+    tinfo: &[TranscriptInfo],
     model_coverage: bool,
+    density_fn: DFn,
     prev_count: &mut [f64],
     curr_counts: &mut [f64],
-) {
-    const DENOM_THRESH: f64 = 1e-30_f64;
+) where
+    DFn: Fn(usize, usize) -> f64,
+{
     for (alns, probs, coverage_probs) in eq_map_iter {
         let mut denom = 0.0_f64;
         for (a, p, cp) in izip!(alns, probs, coverage_probs) {
@@ -80,22 +99,31 @@ fn m_step<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])>>(
             // current read based on this alignment and the
             // target's estimated abundance.
             let target_id = a.ref_id as usize;
+            let txp_len = tinfo[target_id].lenf as usize;
+            let aln_len = a.alignment_span() as usize;
+
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
+            let dens_prob = density_fn(txp_len, aln_len);
 
-            denom += prev_count[target_id] * prob * cov_prob;
+            denom += prev_count[target_id] * prob * cov_prob * dens_prob;
         }
 
         // If this read can be assigned
-        if denom > DENOM_THRESH {
+        if denom > constants::EM_DENOM_THRESH {
             // Loop over all possible assignment locations and proportionally
             // allocate the read according to our model and current parameter
             // estimates.
             for (a, p, cp) in izip!(alns, probs, coverage_probs) {
                 let target_id = a.ref_id as usize;
+                let txp_len = tinfo[target_id].lenf as usize;
+                let aln_len = a.alignment_span() as usize;
+
                 let prob = *p as f64;
                 let cov_prob = if model_coverage { *cp } else { 1.0 };
-                let inc = (prev_count[target_id] * prob * cov_prob) / denom;
+                let dens_prob = density_fn(txp_len, aln_len);
+
+                let inc = (prev_count[target_id] * prob * cov_prob * dens_prob) / denom;
                 curr_counts[target_id] += inc;
             }
         }
@@ -140,6 +168,14 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
     let mut niter = 0_u32;
     let mut _fl_prob = 0.5f64;
 
+    let density_fn = |x, y| -> f64 {
+        if let Some(ref kde_model) = em_info.kde_model {
+            kde_model[(x, y)]
+        } else {
+            1.
+        }
+    };
+
     // for up to the maximum number of iterations
     while niter < max_iter {
         // allocate the fragments and compute the new counts
@@ -147,6 +183,7 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
             make_iter(),
             tinfo,
             fops.model_coverage,
+            density_fn,
             &mut prev_counts,
             &mut curr_counts,
         );
@@ -154,7 +191,7 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
         // compute the relative difference in the parameter estimates
         // between the current and previous rounds
         for i in 0..curr_counts.len() {
-            if prev_counts[i] > 1e-8 {
+            if prev_counts[i] > constants::MIN_READ_THRESH {
                 let cc = curr_counts[i];
                 let pc = prev_counts[i];
                 let rd = (cc - pc) / pc;
@@ -198,7 +235,7 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
 
     // set very small abundances to 0
     for x in &mut prev_counts {
-        if *x < 1e-8 {
+        if *x < constants::MIN_READ_THRESH {
             *x = 0.0;
         }
     }
@@ -208,6 +245,7 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
         make_iter(),
         tinfo,
         fops.model_coverage,
+        density_fn,
         &mut prev_counts,
         &mut curr_counts,
     );
@@ -315,6 +353,14 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
     let mut niter = 0_u32;
     let mut _fl_prob = 0.5f64;
 
+    let density_fn = |x, y| -> f64 {
+        if let Some(ref kde_model) = em_info.kde_model {
+            kde_model[(x, y)]
+        } else {
+            1.
+        }
+    };
+
     pool.install(|| {
         // for up to the maximum number of iterations
         while niter < max_iter {
@@ -323,6 +369,7 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
                 &eq_iterates,
                 tinfo,
                 fops.model_coverage,
+                density_fn,
                 &mut prev_counts,
                 &mut curr_counts,
             );
@@ -330,7 +377,7 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
             // compute the relative difference in the parameter estimates
             // between the current and previous rounds
             for i in 0..curr_counts.len() {
-                if prev_counts[i].load(Ordering::Relaxed) > 1e-8 {
+                if prev_counts[i].load(Ordering::Relaxed) > constants::MIN_READ_THRESH {
                     let cc = curr_counts[i].load(Ordering::Relaxed);
                     let pc = prev_counts[i].load(Ordering::Relaxed);
                     let rd = (cc - pc) / pc;
@@ -349,7 +396,7 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
             // if the maximum relative difference is small enough
             // and we've done at least 10 rounds of the EM, then
             // exit (early stop).
-            if (rel_diff < convergence_thresh) && (niter > 50) {
+            if (rel_diff < convergence_thresh) && (niter > 1) {
                 break;
             }
             // increment the iteration and, if this iteration
@@ -376,16 +423,18 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
 
         // set very small abundances to 0
         prev_counts.iter_mut().for_each(|x| {
-            if x.load(Ordering::Relaxed) < 1e-8 {
+            if x.load(Ordering::Relaxed) < constants::MIN_READ_THRESH {
                 x.store(0.0, Ordering::Relaxed);
             }
         });
+
         // perform one more EM round, since we just zeroed out
         // very small abundances
         m_step_par(
             &eq_iterates,
             tinfo,
             fops.model_coverage,
+            density_fn,
             &mut prev_counts,
             &mut curr_counts,
         );

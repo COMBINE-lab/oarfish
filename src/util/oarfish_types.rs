@@ -2,6 +2,7 @@ use serde::Deserialize;
 use std::fmt;
 use std::num::NonZeroUsize;
 
+use kders::kde::KDEModel;
 use std::iter::FromIterator;
 use tabled::builder::Builder;
 use tabled::settings::Style;
@@ -106,7 +107,7 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     // perform the EM
     pub eq_map: &'eqm InMemoryAlignmentStore<'h>,
     // relevant information about each target transcript
-    pub txp_info: &'tinfo mut Vec<TranscriptInfo>,
+    pub txp_info: &'tinfo Vec<TranscriptInfo>,
     // maximum number of iterations the EM will run
     // before returning an estimate.
     pub max_iter: u32,
@@ -118,13 +119,16 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     // to initalize the EM, otherwise, a default
     // uniform initalization is used.
     pub init_abundances: Option<Vec<f64>>,
+    /// holds the KDE model if we will be using one
+    /// and [None] otherwise
+    pub kde_model: Option<KDEModel>,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct TranscriptInfo {
     pub len: NonZeroUsize,
     pub total_weight: f64,
-    coverage_bins: Vec<f64>,
+    pub coverage_bins: Vec<f64>,
     pub coverage_prob: Vec<f64>,
     pub lenf: f64,
 }
@@ -150,11 +154,11 @@ impl TranscriptInfo {
             lenf: len.get() as f64,
         }
     }
-    pub fn with_len_and_bins(len: NonZeroUsize, bins: u32) -> Self {
+    pub fn with_len_and_bin_width(len: NonZeroUsize, bin_width: u32) -> Self {
         Self {
             len,
             total_weight: 0.0_f64,
-            coverage_bins: vec![0.0_f64; bins as usize],
+            coverage_bins: vec![0.0_f64; ((len.get() as f64) / (bin_width as f64).ceil()) as usize],
             coverage_prob: Vec::new(),
             lenf: len.get() as f64,
         }
@@ -174,6 +178,13 @@ impl TranscriptInfo {
             let bin_start = bidxf * bin_width;
             let bin_end = ((bidxf + 1.0) * bin_width).min(self.lenf as f32);
             widths_f32.push(bin_end - bin_start);
+            if bin_end < bin_start {
+                warn!("tlen_f: {:?}", tlen_f);
+                warn!("num_intervals_f: {:?}", num_intervals_f);
+                warn!("bin_width: {:?}", bin_width);
+                warn!("bidxf: {:?}", bidxf);
+            }
+            assert!(bin_end > bin_start);
         }
         (cov_f32, widths_f32)
     }
@@ -235,6 +246,7 @@ pub struct InMemoryAlignmentStore<'h> {
     // holds the boundaries between records for different reads
     boundaries: Vec<usize>,
     pub discard_table: DiscardTable,
+    pub num_unique_alignments: usize,
 }
 
 impl<'h> InMemoryAlignmentStore<'h> {
@@ -269,7 +281,7 @@ impl<'a, 'b, 'h> Iterator for InMemoryAlignmentStoreSamplingWithReplacementIter<
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.rand_inds.len(), Some(self.rand_inds.len()))
+        self.rand_inds.size_hint()
     }
 }
 
@@ -304,7 +316,10 @@ impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
 
     #[inline]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.store.len(), Some(self.store.len()))
+        (
+            self.store.len() - self.idx,
+            Some(self.store.len() - self.idx),
+        )
     }
 }
 
@@ -320,6 +335,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
             coverage_probabilities: vec![],
             boundaries: vec![0],
             discard_table: DiscardTable::new(),
+            num_unique_alignments: 0,
         }
     }
 
@@ -367,16 +383,24 @@ impl<'h> InMemoryAlignmentStore<'h> {
         }
     }
 
+    #[inline(always)]
     pub fn total_len(&self) -> usize {
         self.alignments.len()
     }
 
+    #[inline(always)]
     pub fn num_aligned_reads(&self) -> usize {
-        if !self.boundaries.is_empty() {
-            self.len()
-        } else {
-            0
-        }
+        self.len().saturating_sub(1)
+    }
+
+    #[inline(always)]
+    pub fn inc_unique_alignments(&mut self) {
+        self.num_unique_alignments += 1;
+    }
+
+    #[inline(always)]
+    pub fn unique_alignments(&self) -> usize {
+        self.num_unique_alignments
     }
 }
 
@@ -406,10 +430,9 @@ pub struct AlignmentFilters {
     /// must be aligned under this alignment in
     /// order for this alignment to be  retained
     min_aligned_len: u32,
-    /// Determines if we should allow alignments to the
-    /// antisense strand; true if we should and false
-    /// otherwise.
-    allow_rc: bool,
+    /// Determines which alignments we should consider
+    /// as valid during quantificationwhich_strand.
+    which_strand: bio_types::strand::Strand,
     // True if we are enabling our coverage model and
     // false otherwise.
     pub model_coverage: bool,
@@ -593,11 +616,24 @@ impl AlignmentFilters {
                     .expect("alignment record should have flags")
                     .is_reverse_complemented();
 
-                // filter this alignment out if we are not permitting
-                // antisense alignments.
-                if is_rc && !self.allow_rc {
-                    discard_table.discard_ori += 1;
-                    return false;
+                // if we are keeping only forward strand alignments
+                // filter this alignment if it is rc
+                match (is_rc, self.which_strand) {
+                    (_, bio_types::strand::Strand::Unknown) => { /*do nothing*/ }
+                    // is rc and we want rc
+                    (true, bio_types::strand::Strand::Reverse) => { /*do nothing*/ }
+                    // is fw and we want fw
+                    (false, bio_types::strand::Strand::Forward) => { /*do nothing*/ }
+                    // is fw and we want rc
+                    (false, bio_types::strand::Strand::Reverse) => {
+                        discard_table.discard_ori += 1;
+                        return false;
+                    }
+                    // is rc and we want fw
+                    (true, bio_types::strand::Strand::Forward) => {
+                        discard_table.discard_ori += 1;
+                        return false;
+                    }
                 }
 
                 // the alignment is supplementary
@@ -694,11 +730,14 @@ impl AlignmentFilters {
             })
             .collect();
 
+        let _min_allowed_score = self.score_threshold * mscore;
+
         for (i, score) in scores.iter_mut().enumerate() {
-            const SCORE_PROB_DENOM: f32 = 10.0;
+            const SCORE_PROB_DENOM: f32 = 5.0;
             let fscore = *score as f32;
             let score_ok = (fscore * inv_max_score) >= self.score_threshold; //>= thresh_score;
             if score_ok {
+                //let f = ((fscore - mscore) / (mscore - min_allowed_score)) * SCORE_PROB_DENOM;
                 let f = (fscore - mscore) / SCORE_PROB_DENOM;
                 probabilities.push(f.exp());
 
@@ -729,11 +768,9 @@ impl AlignmentFilters {
             }
         }
 
-        let mut index = 0;
-        ag.retain(|_| {
-            index += 1;
-            scores[index - 1] > i32::MIN
-        });
+        let mut score_it = scores.iter();
+        ag.retain(|_| *score_it.next().unwrap() > i32::MIN);
+        assert_eq!(ag.len(), probabilities.len());
 
         (
             ag.iter()

@@ -25,7 +25,7 @@ pub fn read_and_verify_header<R: io::BufRead>(
     let mut progs = vec![];
     // explicitly check that alignment was done with a supported
     // aligner (right now, just minimap2).
-    for (prog, _pmap) in header.programs().iter() {
+    for (prog, _pmap) in header.programs().roots() {
         if prog == "minimap2" {
             saw_minimap2 = true;
             break;
@@ -88,6 +88,9 @@ pub fn parse_alignments<R: io::BufRead>(
                 // previous read record.
                 if !prev_read.is_empty() {
                     store.add_group(txps, &mut records_for_read);
+                    if records_for_read.len() == 1 {
+                        store.inc_unique_alignments();
+                    }
                     records_for_read.clear();
                 }
                 // the new "prev_read" name is the current read name
@@ -104,6 +107,9 @@ pub fn parse_alignments<R: io::BufRead>(
     // add that group.
     if !records_for_read.is_empty() {
         store.add_group(txps, &mut records_for_read);
+        if records_for_read.len() == 1 {
+            store.inc_unique_alignments();
+        }
         records_for_read.clear();
     }
 
