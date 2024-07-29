@@ -153,7 +153,7 @@ fn get_filter_opts(args: &Args) -> AlignmentFilters {
                 .score_threshold(0_f32)
                 .min_aligned_fraction(0_f32)
                 .min_aligned_len(1_u32)
-                .which_strand(bio_types::strand::Strand::Unknown)
+                .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
                 .build()
         }
