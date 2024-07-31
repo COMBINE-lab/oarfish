@@ -8,6 +8,9 @@ It optionally employs many filters to help discard alignments that may reduce qu
 
 Additionally, `oarfish` provides options to make use of coverage profiles derived from the aligned reads to improve quantification accuracy.  The use of this coverage model is enabled with the `--model-coverage` flag. You can read more about `oarfish`[^preprint] in the [preprint](https://www.biorxiv.org/content/10.1101/2024.02.28.582591v1). Please cite the preprint if you use `oarfish` in your work or analysis.
 
+Also, please note that `oarfish` is scientific software in active development.  Therefore, please check the [GitHub Release](https://github.com/COMBINE-lab/oarfish/releases) page to make sure that you are using the latest version 
+(also, the `dev` branch should compile from source at all times so feel free to use it, but let us know if you run into any issues).
+
 The usage can be provided by passing `-h` at the command line.
 ```
 A fast, accurate and versatile tool for long-read transcript quantification.
@@ -45,23 +48,14 @@ filters:
           fraction of a query that must be mapped within an alignemnt to consider the alignemnt valid [default: 0.5]
   -l, --min-aligned-len <MIN_ALIGNED_LEN>
           minimum number of nucleotides in the aligned portion of a read [default: 50]
-  -n, --allow-negative-strand
-          allow both forward-strand and reverse-complement alignments
-
-coverage model:
-      --model-coverage  apply the coverage model
-  -b, --bins <BINS>     number of bins to use in coverage model [default: 10]
-
-EM:
-      --max-em-iter <MAX_EM_ITER>
-          maximum number of iterations for which to run the EM algorithm [default: 1000]
-      --convergence-thresh <CONVERGENCE_THRESH>
-          maximum number of iterations for which to run the EM algorithm [default: 0.001]
-  -q, --short-quant <SHORT_QUANT>
-          location of short read quantification (if provided)
+  -d, --strand-filter <STRAND_FILTER>
+          only alignments to this strand will be allowed; options are (fw /+, rc/-, or both/.) [default: .]
 ```
 
-The input should be a `bam` format file, with reads aligned using [`minimap2`](https://github.com/lh3/minimap2) against the _transcriptome_. That is, `oarfish` does not currently handle spliced alignment to the genome.  Further, the output alignments should be name sorted (the default order produced by `minimap2` should be fine). _Specifically_, `oarfish` relies on the existence of the `AS` tag in the `bam` records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read.
+The input should be a `bam` format file, with reads aligned using [`minimap2`](https://github.com/lh3/minimap2) against the _transcriptome_. That is, `oarfish` does not currently handle spliced alignment to the genome.  Further, the output alignments should be name sorted (the default order produced by `minimap2` should be fine). _Specifically_, `oarfish` relies on the existence of the `AS` tag in the `bam` records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read.  The parameters above should be explained by their relevant help option, but the 
+`-d`/`--strand-filter` is worth noting explicitly. By default, alignments to both strands of a transcript will be considered valid.  You can use this option to allow only alignments in the specified orientation; for example 
+`-d fw` will allow only alignments in the forward orientation and `-d rc` will allow only alignments in the reverse-complement orientation and `-d both` (the default) will allow both.  The `-d` filter, if explicitly provided, overrides 
+the orientation filter in any provided "filter group" so e.g. passing `--filter-group no-filters -d fw` will disable other filters, but will still only admit alignments in the forward orientation.
 
 ### Inferential Replicates
 
