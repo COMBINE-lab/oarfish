@@ -57,6 +57,22 @@ The input should be a `bam` format file, with reads aligned using [`minimap2`](h
 `-d fw` will allow only alignments in the forward orientation and `-d rc` will allow only alignments in the reverse-complement orientation and `-d both` (the default) will allow both.  The `-d` filter, if explicitly provided, overrides 
 the orientation filter in any provided "filter group" so e.g. passing `--filter-group no-filters -d fw` will disable other filters, but will still only admit alignments in the forward orientation.
 
+### Choosing `minimap2` alignment options
+
+Since the purpose of `oarfish` is to estimate transcript abundance from a collection of alignments to the target transcriptome, it is important that the alignments are generated 
+in a fashion that is compatible with this goal.  Primarily, this means that the aligner should be configured to report as many optimal (and near-optimal) alignments as exist, so that 
+`oarfish` can observe all of this information and determine how to allocate reads to transcripts.  We recommend using the following options with `minimap2` when aligning data for 
+later processing by `oarfish`
+
+  * For ONT data (either dRNA or cDNA): please use the flags `--eqx -N 100 -ax map-ont`
+  * For PacBio data: please use the flags `--eqx -N 100 -ax pacbio`
+
+**Note (1)**: It may be worthwile using an even larger `N` value (e.g. the [TranSigner manuscript](https://www.biorxiv.org/content/10.1101/2024.04.13.589356v1.full) recommends `-N 181`). A larger value should not diminish the 
+accuracy of `oarfish`, but it may make alignment take longer and produce a larger `bam` file.
+
+**Note (2)**: For very high quality PacBio data, it may be most appropriate to use the `-ax map-hifi` flag in place of `-ax pacbio`.  We are currently evaluating the effect of this option, and also welcome feedback if you 
+have experiences to share on the use of data aligned with these different flags with `oarfish`.
+
 ### Inferential Replicates
 
 `oarfish` has the ability to compute [_inferential replicates_](https://academic.oup.com/nar/article/47/18/e105/5542870) of its quantification estimates. This is performed by bootstrap sampling of the original read mappings, and subsequently performing inference under each resampling.  These inferential replicates allow assessing the variance of the point estimate of transcript abundance, and can lead to improved differential analysis at the transcript level, if using a differential testing tool that takes advantage of this information. The generation of inferential replicates is controlled by the `--num-bootstraps` argument to `oarfish`.  The default value is `0`, meaning that no inferential replicates are generated.  If you set this to some value greater than `0`, the the requested number of inferential replicates will be generated. It is recommended, if generating inferential replicates, to run `oarfish` with multiple threads, since replicate generation is highly-parallelized. Finally, if replicates are generated, they are written to a [`Parquet`](https://parquet.apache.org/), starting with the specified output stem and ending with `infreps.pq`.
