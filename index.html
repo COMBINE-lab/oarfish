@@ -278,6 +278,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#choosing-minimap2-alignment-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Choosing minimap2 alignment options
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#inferential-replicates" class="md-nav__link">
     <span class="md-ellipsis">
       Inferential Replicates
@@ -342,6 +351,15 @@
   <a href="#basic-usage" class="md-nav__link">
     <span class="md-ellipsis">
       Basic usage
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choosing-minimap2-alignment-options" class="md-nav__link">
+    <span class="md-ellipsis">
+      Choosing minimap2 alignment options
     </span>
   </a>
   
@@ -439,6 +457,19 @@ filters:
 <code>-d</code>/<code>--strand-filter</code> is worth noting explicitly. By default, alignments to both strands of a transcript will be considered valid.  You can use this option to allow only alignments in the specified orientation; for example 
 <code>-d fw</code> will allow only alignments in the forward orientation and <code>-d rc</code> will allow only alignments in the reverse-complement orientation and <code>-d both</code> (the default) will allow both.  The <code>-d</code> filter, if explicitly provided, overrides 
 the orientation filter in any provided "filter group" so e.g. passing <code>--filter-group no-filters -d fw</code> will disable other filters, but will still only admit alignments in the forward orientation.</p>
+<h3 id="choosing-minimap2-alignment-options">Choosing <code>minimap2</code> alignment options</h3>
+<p>Since the purpose of <code>oarfish</code> is to estimate transcript abundance from a collection of alignments to the target transcriptome, it is important that the alignments are generated 
+in a fashion that is compatible with this goal.  Primarily, this means that the aligner should be configured to report as many optimal (and near-optimal) alignments as exist, so that 
+<code>oarfish</code> can observe all of this information and determine how to allocate reads to transcripts.  We recommend using the following options with <code>minimap2</code> when aligning data for 
+later processing by <code>oarfish</code></p>
+<ul>
+<li>For ONT data (either dRNA or cDNA): please use the flags <code>--eqx -N 100 -ax map-ont</code></li>
+<li>For PacBio data: please use the flags <code>--eqx -N 100 -ax pacbio</code></li>
+</ul>
+<p><strong>Note (1)</strong>: It may be worthwile using an even larger <code>N</code> value (e.g. the <a href="https://www.biorxiv.org/content/10.1101/2024.04.13.589356v1.full">TranSigner manuscript</a> recommends <code>-N 181</code>). A larger value should not diminish the 
+accuracy of <code>oarfish</code>, but it may make alignment take longer and produce a larger <code>bam</code> file.</p>
+<p><strong>Note (2)</strong>: For very high quality PacBio data, it may be most appropriate to use the <code>-ax map-hifi</code> flag in place of <code>-ax pacbio</code>.  We are currently evaluating the effect of this option, and also welcome feedback if you 
+have experiences to share on the use of data aligned with these different flags with <code>oarfish</code>.</p>
 <h3 id="inferential-replicates">Inferential Replicates</h3>
 <p><code>oarfish</code> has the ability to compute <a href="https://academic.oup.com/nar/article/47/18/e105/5542870"><em>inferential replicates</em></a> of its quantification estimates. This is performed by bootstrap sampling of the original read mappings, and subsequently performing inference under each resampling.  These inferential replicates allow assessing the variance of the point estimate of transcript abundance, and can lead to improved differential analysis at the transcript level, if using a differential testing tool that takes advantage of this information. The generation of inferential replicates is controlled by the <code>--num-bootstraps</code> argument to <code>oarfish</code>.  The default value is <code>0</code>, meaning that no inferential replicates are generated.  If you set this to some value greater than <code>0</code>, the the requested number of inferential replicates will be generated. It is recommended, if generating inferential replicates, to run <code>oarfish</code> with multiple threads, since replicate generation is highly-parallelized. Finally, if replicates are generated, they are written to a <a href="https://parquet.apache.org/"><code>Parquet</code></a>, starting with the specified output stem and ending with <code>infreps.pq</code>.</p>
 <h3 id="output">Output</h3>
