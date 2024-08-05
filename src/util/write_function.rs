@@ -79,11 +79,8 @@ pub fn write_output(
         .expect("Couldn't create output file");
     let mut writer = BufWriter::new(write);
 
-    writeln!(
-        writer,
-        "unique_reads\texpected_reads\tambig_reads\ttotal_reads"
-    )
-    .expect("Couldn't write to output file.");
+    writeln!(writer, "unique_reads\tambig_reads\ttotal_reads")
+        .expect("Couldn't write to output file.");
     // loop over the transcripts in the header and fill in the relevant
     // information here.
 

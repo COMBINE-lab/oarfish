@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::num::NonZeroUsize;
 
 use anyhow::Context;
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
@@ -16,6 +17,7 @@ use tracing::info;
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 
 use noodles_bam as bam;
+use noodles_bgzf as bgzf;
 
 mod alignment_parser;
 mod bootstrap;
@@ -241,10 +243,11 @@ fn main() -> anyhow::Result<()> {
 
     let filter_opts = get_filter_opts(&args);
 
-    let mut reader = File::open(&args.alignments)
-        .map(BufReader::new)
-        .map(bam::io::Reader::new)?;
-
+    let afile = File::open(&args.alignments)?;
+    let worker_count = NonZeroUsize::new(1.max(args.threads.saturating_sub(1)))
+        .expect("decompression threads >= 1");
+    let decoder = bgzf::MultithreadedReader::with_worker_count(worker_count, afile);
+    let mut reader = bam::io::Reader::from(decoder);
     // parse the header, and ensure that the reads were mapped with minimap2 (as far as we
     // can tell).
     let header = alignment_parser::read_and_verify_header(&mut reader, &args.alignments)?;

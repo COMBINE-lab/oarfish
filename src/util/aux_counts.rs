@@ -19,8 +19,8 @@ impl CountInfo {
     }
 }
 
-pub fn get_aux_counts<'h>(
-    store: &InMemoryAlignmentStore<'h>,
+pub fn get_aux_counts(
+    store: &InMemoryAlignmentStore<'_>,
     txps: &[TranscriptInfo],
 ) -> anyhow::Result<Vec<CountInfo>> {
     let mut cinfo = Vec::with_capacity(txps.len());
