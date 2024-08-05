@@ -4,11 +4,7 @@ use std::num::NonZeroUsize;
 use anyhow::Context;
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 
-use std::{
-    fs::File,
-    io::{self, BufReader},
-    path::PathBuf,
-};
+use std::{fs::File, io, path::PathBuf};
 
 use num_format::{Locale, ToFormattedString};
 use serde::Serialize;
@@ -300,6 +296,9 @@ fn main() -> anyhow::Result<()> {
 
     // print discard table information in which the user might be interested.
     info!("\ndiscard_table: \n{}\n", store.discard_table.to_table());
+
+    // no longer need the reader
+    drop(reader);
 
     // if we are using the KDE, create that here.
     let kde_opt: Option<kders::kde::KDEModel> = if args.use_kde {
