@@ -1,3 +1,4 @@
+pub mod aux_counts;
 pub mod binomial_probability;
 pub mod constants;
 pub mod count_function;

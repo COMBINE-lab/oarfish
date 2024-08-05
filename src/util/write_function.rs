@@ -23,6 +23,7 @@ pub fn write_output(
     info: serde_json::Value,
     header: &noodles_sam::header::Header,
     counts: &[f64],
+    aux_counts: &[crate::util::aux_counts::CountInfo],
 ) -> io::Result<()> {
     // if there is a parent directory
     if let Some(p) = output.parent() {
@@ -63,6 +64,35 @@ pub fn write_output(
 
     for (i, (rseq, rmap)) in header.reference_sequences().iter().enumerate() {
         writeln!(writer, "{}\t{}\t{}", rseq, rmap.length(), counts[i])
+            .expect("Couldn't write to output file.");
+    }
+
+    // write the auxiliary count info
+    let out_path = output.with_additional_extension(".aux");
+    File::create(&out_path)?;
+
+    let write = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(out_path)
+        .expect("Couldn't create output file");
+    let mut writer = BufWriter::new(write);
+
+    writeln!(
+        writer,
+        "unique_reads\texpected_reads\tambig_reads\ttotal_reads"
+    )
+    .expect("Couldn't write to output file.");
+    // loop over the transcripts in the header and fill in the relevant
+    // information here.
+
+    for (i, (_rseq, _rmap)) in header.reference_sequences().iter().enumerate() {
+        let total = aux_counts[i].total_count;
+        let unique = aux_counts[i].unique_count;
+        let ambig = total.saturating_sub(unique);
+        let expected = counts[i];
+        writeln!(writer, "{}\t{}\t{}\t{}", unique, expected, ambig, total)
             .expect("Couldn't write to output file.");
     }
 

@@ -363,12 +363,14 @@ fn main() -> anyhow::Result<()> {
         em::em(&emi, args.threads)
     };
 
+    let aux_txp_counts = crate::util::aux_counts::get_aux_counts(&store, &txps)?;
+
     // prepare the JSON object we'll write
     // to meta_info.json
     let json_info = get_json_info(&args, &emi, &seqcol_digest);
 
     // write the output
-    write_output(&args.output, json_info, &header, &counts)?;
+    write_output(&args.output, json_info, &header, &counts, &aux_txp_counts)?;
 
     // if the user requested bootstrap replicates,
     // compute and write those out now.
