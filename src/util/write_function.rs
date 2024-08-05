@@ -68,7 +68,7 @@ pub fn write_output(
     }
 
     // write the auxiliary count info
-    let out_path = output.with_additional_extension(".aux");
+    let out_path = output.with_additional_extension(".ambig_info.tsv");
     File::create(&out_path)?;
 
     let write = OpenOptions::new()
