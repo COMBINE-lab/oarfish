@@ -91,8 +91,7 @@ pub fn write_output(
         let total = aux_counts[i].total_count;
         let unique = aux_counts[i].unique_count;
         let ambig = total.saturating_sub(unique);
-        let expected = counts[i];
-        writeln!(writer, "{}\t{}\t{}\t{}", unique, expected, ambig, total)
+        writeln!(writer, "{}\t{}\t{}", unique, ambig, total)
             .expect("Couldn't write to output file.");
     }
 
