@@ -406,7 +406,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
 
 /// The parameters controling the filters that will
 /// be applied to alignments
-#[derive(TypedBuilder, Debug, Serialize)]
+#[derive(TypedBuilder, Clone, Debug, Serialize)]
 pub struct AlignmentFilters {
     /// How far an alignment can start from the
     /// 5' end of the transcript and still be

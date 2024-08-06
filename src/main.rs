@@ -113,6 +113,9 @@ struct Args {
         value_parser = parse_strand
     )]
     strand_filter: bio_types::strand::Strand,
+    /// input is assumed to be a single-cell BAM and to have the `CB:z` tag for all read records
+    #[arg(long)]
+    single_cell: bool,
     /// apply the coverage model
     #[arg(long, help_heading = "coverage model", value_parser)]
     model_coverage: bool,
@@ -200,6 +203,7 @@ fn get_json_info(args: &Args, emi: &EMInfo, seqcol_digest: &str) -> serde_json::
         "alignments": &args.alignments,
         "output": &args.output,
         "verbose": &args.verbose,
+        "single_cell": &args.single_cell,
         "quiet": &args.quiet,
         "em_max_iter": &args.max_em_iter,
         "em_convergence_thresh": &args.convergence_thresh,
@@ -209,6 +213,47 @@ fn get_json_info(args: &Args, emi: &EMInfo, seqcol_digest: &str) -> serde_json::
         "num_bootstraps": &args.num_bootstraps,
         "seqcol_digest": seqcol_digest
     })
+}
+
+use noodles_sam::alignment::record::data::field::Value;
+
+pub fn get_while<'a, R: io::BufRead>(
+    filter_opts: &AlignmentFilters,
+    header: &'a noodles_sam::Header,
+    iter: &mut core::iter::Peekable<noodles_bam::io::reader::RecordBufs<R>>,
+    barcode: &[u8],
+) -> anyhow::Result<InMemoryAlignmentStore<'a>> {
+    let mut astore = InMemoryAlignmentStore::new(filter_opts.clone(), header);
+
+    Ok(astore)
+}
+
+pub fn quantify_single_cell_from_collated_bam<R: io::BufRead>(
+    header: &noodles_sam::Header,
+    filter_opts: &AlignmentFilters,
+    reader: &mut bam::io::Reader<R>,
+    txps: &mut [TranscriptInfo],
+) -> anyhow::Result<()> {
+    // get the data for the next cell
+    let mut peekable_bam_iter = reader.record_bufs(header).peekable();
+    const CB_TAG: [u8; 2] = [b'C', b'B'];
+
+    while let Some(next_res) = peekable_bam_iter.peek() {
+        let rec = next_res.as_ref().unwrap();
+        let barcode = match rec.data().get(&CB_TAG) {
+            None => anyhow::bail!("could not get CB tag value"),
+            Some(v) => match v {
+                noodles_sam::alignment::record_buf::data::field::Value::String(x) => {
+                    x.to_ascii_uppercase()
+                }
+                _ => anyhow::bail!("CB tag value had unexpected type!"),
+            },
+        };
+
+        let mut astore = get_while(filter_opts, header, &mut peekable_bam_iter, &barcode)?;
+    }
+
+    Ok(())
 }
 
 fn main() -> anyhow::Result<()> {
@@ -289,109 +334,113 @@ fn main() -> anyhow::Result<()> {
         txps.len()
     );
 
-    // now parse the actual alignments for the reads and store the results
-    // in our in-memory stor
-    let mut store = InMemoryAlignmentStore::new(filter_opts, &header);
-    alignment_parser::parse_alignments(&mut store, &header, &mut reader, &mut txps)?;
-
-    // print discard table information in which the user might be interested.
-    info!("\ndiscard_table: \n{}\n", store.discard_table.to_table());
-
-    // no longer need the reader
-    drop(reader);
-
-    // if we are using the KDE, create that here.
-    let kde_opt: Option<kders::kde::KDEModel> = if args.use_kde {
-        Some(kde_utils::get_kde_model(&txps, &store)?)
+    if args.single_cell {
+        quantify_single_cell_from_collated_bam(&header, &filter_opts, &mut reader, &mut txps)?;
     } else {
-        None
-    };
+        // now parse the actual alignments for the reads and store the results
+        // in our in-memory stor
+        let mut store = InMemoryAlignmentStore::new(filter_opts, &header);
+        alignment_parser::parse_alignments(&mut store, &header, &mut reader, &mut txps)?;
 
-    if store.filter_opts.model_coverage {
-        //obtaining the Cumulative Distribution Function (CDF) for each transcript
-        binomial_continuous_prob(&mut txps, &args.bin_width, args.threads);
-        //Normalize the probabilities for the records of each read
-        normalize_read_probs(&mut store, &txps, &args.bin_width);
-    }
+        // print discard table information in which the user might be interested.
+        info!("\ndiscard_table: \n{}\n", store.discard_table.to_table());
 
-    info!(
-        "Total number of alignment records : {}",
-        store.total_len().to_formatted_string(&Locale::en)
-    );
-    info!(
-        "number of aligned reads : {}",
-        store.num_aligned_reads().to_formatted_string(&Locale::en)
-    );
-    info!(
-        "number of unique alignments : {}",
-        store.unique_alignments().to_formatted_string(&Locale::en)
-    );
+        // no longer need the reader
+        drop(reader);
 
-    // if we are seeding the quantification estimates with short read
-    // abundances, then read those in here.
-    let init_abundances = args.short_quant.as_ref().map(|sr_path| {
-        read_short_quant_vec(sr_path, &txps_name).unwrap_or_else(|e| panic!("{}", e))
-    });
+        // if we are using the KDE, create that here.
+        let kde_opt: Option<kders::kde::KDEModel> = if args.use_kde {
+            Some(kde_utils::get_kde_model(&txps, &store)?)
+        } else {
+            None
+        };
 
-    // wrap up all of the relevant information we need for estimation
-    // in an EMInfo struct and then call the EM algorithm.
-    let emi = EMInfo {
-        eq_map: &store,
-        txp_info: &txps,
-        max_iter: args.max_em_iter,
-        convergence_thresh: args.convergence_thresh,
-        init_abundances,
-        kde_model: kde_opt,
-    };
-
-    if args.use_kde {
-        /*
-        // run EM for model train iterations
-        let orig_iter = emi.max_iter;
-        emi.max_iter = 10;
-        let counts = em::em(&emi, args.threads);
-        // relearn the kde
-        let new_model =
-            kde_utils::refresh_kde_model(&txps, &store, &emi.kde_model.unwrap(), &counts);
-        info!("refreshed KDE model");
-        emi.kde_model = Some(new_model?);
-        emi.max_iter = orig_iter;
-        */
-    }
-
-    let counts = if args.threads > 4 {
-        em::em_par(&emi, args.threads)
-    } else {
-        em::em(&emi, args.threads)
-    };
-
-    let aux_txp_counts = crate::util::aux_counts::get_aux_counts(&store, &txps)?;
-
-    // prepare the JSON object we'll write
-    // to meta_info.json
-    let json_info = get_json_info(&args, &emi, &seqcol_digest);
-
-    // write the output
-    write_output(&args.output, json_info, &header, &counts, &aux_txp_counts)?;
-
-    // if the user requested bootstrap replicates,
-    // compute and write those out now.
-    if args.num_bootstraps > 0 {
-        let breps = em::bootstrap(&emi, args.num_bootstraps, args.threads);
-
-        let mut new_arrays = vec![];
-        let mut bs_fields = vec![];
-        for (i, b) in breps.into_iter().enumerate() {
-            let bs_array = Float64Array::from_vec(b);
-            bs_fields.push(Field::new(
-                format!("bootstrap.{}", i),
-                bs_array.data_type().clone(),
-                false,
-            ));
-            new_arrays.push(bs_array.boxed());
+        if store.filter_opts.model_coverage {
+            //obtaining the Cumulative Distribution Function (CDF) for each transcript
+            binomial_continuous_prob(&mut txps, &args.bin_width, args.threads);
+            //Normalize the probabilities for the records of each read
+            normalize_read_probs(&mut store, &txps, &args.bin_width);
         }
-        let chunk = Chunk::new(new_arrays);
-        write_infrep_file(&args.output, bs_fields, chunk)?;
+
+        info!(
+            "Total number of alignment records : {}",
+            store.total_len().to_formatted_string(&Locale::en)
+        );
+        info!(
+            "number of aligned reads : {}",
+            store.num_aligned_reads().to_formatted_string(&Locale::en)
+        );
+        info!(
+            "number of unique alignments : {}",
+            store.unique_alignments().to_formatted_string(&Locale::en)
+        );
+
+        // if we are seeding the quantification estimates with short read
+        // abundances, then read those in here.
+        let init_abundances = args.short_quant.as_ref().map(|sr_path| {
+            read_short_quant_vec(sr_path, &txps_name).unwrap_or_else(|e| panic!("{}", e))
+        });
+
+        // wrap up all of the relevant information we need for estimation
+        // in an EMInfo struct and then call the EM algorithm.
+        let emi = EMInfo {
+            eq_map: &store,
+            txp_info: &txps,
+            max_iter: args.max_em_iter,
+            convergence_thresh: args.convergence_thresh,
+            init_abundances,
+            kde_model: kde_opt,
+        };
+
+        if args.use_kde {
+            /*
+            // run EM for model train iterations
+            let orig_iter = emi.max_iter;
+            emi.max_iter = 10;
+            let counts = em::em(&emi, args.threads);
+            // relearn the kde
+            let new_model =
+            kde_utils::refresh_kde_model(&txps, &store, &emi.kde_model.unwrap(), &counts);
+            info!("refreshed KDE model");
+            emi.kde_model = Some(new_model?);
+            emi.max_iter = orig_iter;
+            */
+        }
+
+        let counts = if args.threads > 4 {
+            em::em_par(&emi, args.threads)
+        } else {
+            em::em(&emi, args.threads)
+        };
+
+        let aux_txp_counts = crate::util::aux_counts::get_aux_counts(&store, &txps)?;
+
+        // prepare the JSON object we'll write
+        // to meta_info.json
+        let json_info = get_json_info(&args, &emi, &seqcol_digest);
+
+        // write the output
+        write_output(&args.output, json_info, &header, &counts, &aux_txp_counts)?;
+
+        // if the user requested bootstrap replicates,
+        // compute and write those out now.
+        if args.num_bootstraps > 0 {
+            let breps = em::bootstrap(&emi, args.num_bootstraps, args.threads);
+
+            let mut new_arrays = vec![];
+            let mut bs_fields = vec![];
+            for (i, b) in breps.into_iter().enumerate() {
+                let bs_array = Float64Array::from_vec(b);
+                bs_fields.push(Field::new(
+                    format!("bootstrap.{}", i),
+                    bs_array.data_type().clone(),
+                    false,
+                ));
+                new_arrays.push(bs_array.boxed());
+            }
+            let chunk = Chunk::new(new_arrays);
+            write_infrep_file(&args.output, bs_fields, chunk)?;
+        }
     }
 
     Ok(())
