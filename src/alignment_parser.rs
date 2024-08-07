@@ -42,6 +42,123 @@ pub fn read_and_verify_header<R: io::BufRead>(
     Ok(header)
 }
 
+pub enum NextAction {
+    SkipUnmapped,
+    ProcessSameBarcode,
+    NewBarcode,
+    EndOfFile,
+}
+
+#[inline(always)]
+pub fn parse_alignments_for_barcode<R: io::BufRead>(
+    store: &mut InMemoryAlignmentStore,
+    txps: &mut [TranscriptInfo],
+    iter: &mut core::iter::Peekable<noodles_bam::io::reader::RecordBufs<R>>,
+    current_cb: &[u8],
+    records_for_read: &mut Vec<noodles_sam::alignment::record_buf::RecordBuf>,
+) -> anyhow::Result<usize> {
+    records_for_read.clear();
+    let mut prev_read = String::new();
+    let mut records_processed = 0_usize;
+    const CB_TAG: [u8; 2] = [b'C', b'B'];
+
+    // Parse the input alignemnt file, gathering the alignments aggregated
+    // by their source read. **Note**: this requires that we have a
+    // name-sorted input bam file (currently, aligned against the transcriptome).
+    //
+    // *NOTE*: this had to be changed from `records` to `record_bufs` or
+    // critical information was missing from the records. This happened when
+    // moving to the new version of noodles. Track `https://github.com/zaeleus/noodles/issues/230`
+    // to see if it's clear why this is the case
+
+    loop {
+        let action = if let Some(result) = iter.peek() {
+            if let Ok(record) = result {
+                // unmapped reads don't contribute to quantification
+                // but we track them.
+                if record.flags().is_unmapped() {
+                    records_processed += 1;
+                    NextAction::SkipUnmapped
+                } else {
+                    let same_barcode = match record.data().get(&CB_TAG) {
+                        None => anyhow::bail!("could not get CB tag value"),
+                        Some(v) => match v {
+                            noodles_sam::alignment::record_buf::data::field::Value::String(x) => {
+                                x.as_slice() == current_cb
+                            }
+                            _ => anyhow::bail!("CB tag value had unexpected type!"),
+                        },
+                    };
+
+                    if !same_barcode {
+                        NextAction::NewBarcode
+                    } else {
+                        NextAction::ProcessSameBarcode
+                    }
+                }
+            } else {
+                anyhow::bail!("error parsing record");
+            }
+        } else {
+            NextAction::EndOfFile
+        };
+
+        match action {
+            NextAction::SkipUnmapped => {
+                info!("hi mom!");
+                iter.next().unwrap()?;
+            }
+            NextAction::ProcessSameBarcode => {
+                let record = iter.next().unwrap()?;
+
+                if let Some(rname) = record.name() {
+                    let record_copy = record.clone();
+                    records_processed += 1;
+                    let rstring: String = String::from_utf8_lossy(rname.as_ref()).into_owned();
+                    // if this is an alignment for the same read, then
+                    // push it onto our temporary vector.
+                    if prev_read == rstring {
+                        if let Some(_ref_id) = record.reference_sequence_id() {
+                            records_for_read.push(record_copy);
+                        }
+                    } else {
+                        // otherwise, record the alignment range for the
+                        // previous read record.
+                        if !prev_read.is_empty() {
+                            store.add_group(txps, records_for_read);
+                            if records_for_read.len() == 1 {
+                                store.inc_unique_alignments();
+                            }
+                            records_for_read.clear();
+                        }
+                        // the new "prev_read" name is the current read name
+                        // so it becomes the first on the new alignment range
+                        // vector.
+                        prev_read = rstring;
+                        if let Some(_ref_id) = record.reference_sequence_id() {
+                            records_for_read.push(record_copy);
+                        }
+                    }
+                }
+            }
+            NextAction::NewBarcode | NextAction::EndOfFile => {
+                break;
+            }
+        };
+    }
+    // if we end with a non-empty alignment range vector, then
+    // add that group.
+    if !records_for_read.is_empty() {
+        store.add_group(txps, records_for_read);
+        if records_for_read.len() == 1 {
+            store.inc_unique_alignments();
+        }
+        records_for_read.clear();
+    }
+
+    Ok(records_processed)
+}
+
 pub fn parse_alignments<R: io::BufRead>(
     store: &mut InMemoryAlignmentStore,
     header: &Header,

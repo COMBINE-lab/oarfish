@@ -1,4 +1,5 @@
 use clap::Parser;
+use core::str;
 use std::num::NonZeroUsize;
 
 use anyhow::Context;
@@ -220,11 +221,25 @@ use noodles_sam::alignment::record::data::field::Value;
 pub fn get_while<'a, R: io::BufRead>(
     filter_opts: &AlignmentFilters,
     header: &'a noodles_sam::Header,
+    txps: &mut [TranscriptInfo],
+    records_for_read: &mut Vec<noodles_sam::alignment::record_buf::RecordBuf>,
     iter: &mut core::iter::Peekable<noodles_bam::io::reader::RecordBufs<R>>,
     barcode: &[u8],
 ) -> anyhow::Result<InMemoryAlignmentStore<'a>> {
     let mut astore = InMemoryAlignmentStore::new(filter_opts.clone(), header);
-
+    let num_rec_processed = alignment_parser::parse_alignments_for_barcode(
+        &mut astore,
+        txps,
+        iter,
+        barcode,
+        records_for_read,
+    )?;
+    println!(
+        "records for cell {:?} = (# records = {}, astore size = {})",
+        str::from_utf8(barcode)?,
+        num_rec_processed,
+        astore.len()
+    );
     Ok(astore)
 }
 
@@ -235,6 +250,7 @@ pub fn quantify_single_cell_from_collated_bam<R: io::BufRead>(
     txps: &mut [TranscriptInfo],
 ) -> anyhow::Result<()> {
     // get the data for the next cell
+    let mut records_for_read: Vec<noodles_sam::alignment::RecordBuf> = Vec::new();
     let mut peekable_bam_iter = reader.record_bufs(header).peekable();
     const CB_TAG: [u8; 2] = [b'C', b'B'];
 
@@ -250,7 +266,14 @@ pub fn quantify_single_cell_from_collated_bam<R: io::BufRead>(
             },
         };
 
-        let mut astore = get_while(filter_opts, header, &mut peekable_bam_iter, &barcode)?;
+        let mut astore = get_while(
+            filter_opts,
+            header,
+            txps,
+            &mut records_for_read,
+            &mut peekable_bam_iter,
+            &barcode,
+        )?;
     }
 
     Ok(())
