@@ -107,7 +107,7 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     // perform the EM
     pub eq_map: &'eqm InMemoryAlignmentStore<'h>,
     // relevant information about each target transcript
-    pub txp_info: &'tinfo Vec<TranscriptInfo>,
+    pub txp_info: &'tinfo [TranscriptInfo],
     // maximum number of iterations the EM will run
     // before returning an estimate.
     pub max_iter: u32,
@@ -124,7 +124,7 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     pub kde_model: Option<KDEModel>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TranscriptInfo {
     pub len: NonZeroUsize,
     pub total_weight: f64,

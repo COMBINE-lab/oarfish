@@ -56,6 +56,8 @@ arrow2 = { version = "0.18.0", features = [
 ] }
 kders = { git = "https://github.com/COMBINE-lab/kde-rs.git", branch = "dev", version = "0.1.0" }
 noodles-bgzf = { version = "0.32.0" }
+crossbeam = { version = "0.8.4", features = ["crossbeam-queue"] }
+sprs = "0.11.1"
 
 [[bin]]
 name = "oarfish"

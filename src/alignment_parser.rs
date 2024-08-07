@@ -1,6 +1,6 @@
 use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
 use noodles_bam as bam;
-use noodles_sam::Header;
+use noodles_sam::{alignment::RecordBuf, Header};
 use num_format::{Locale, ToFormattedString};
 use std::io;
 use std::path::Path;
@@ -50,6 +50,21 @@ pub enum NextAction {
 }
 
 #[inline(always)]
+fn is_same_barcode(rec: &RecordBuf, current_barcode: &[u8]) -> anyhow::Result<bool> {
+    const CB_TAG: [u8; 2] = [b'C', b'B'];
+    let same_barcode = match rec.data().get(&CB_TAG) {
+        None => anyhow::bail!("could not get CB tag value"),
+        Some(v) => match v {
+            noodles_sam::alignment::record_buf::data::field::Value::String(x) => {
+                x.as_slice() == current_barcode
+            }
+            _ => anyhow::bail!("CB tag value had unexpected type!"),
+        },
+    };
+    Ok(same_barcode)
+}
+
+#[inline(always)]
 pub fn parse_alignments_for_barcode<R: io::BufRead>(
     store: &mut InMemoryAlignmentStore,
     txps: &mut [TranscriptInfo],
@@ -60,7 +75,6 @@ pub fn parse_alignments_for_barcode<R: io::BufRead>(
     records_for_read.clear();
     let mut prev_read = String::new();
     let mut records_processed = 0_usize;
-    const CB_TAG: [u8; 2] = [b'C', b'B'];
 
     // Parse the input alignemnt file, gathering the alignments aggregated
     // by their source read. **Note**: this requires that we have a
@@ -80,16 +94,7 @@ pub fn parse_alignments_for_barcode<R: io::BufRead>(
                     records_processed += 1;
                     NextAction::SkipUnmapped
                 } else {
-                    let same_barcode = match record.data().get(&CB_TAG) {
-                        None => anyhow::bail!("could not get CB tag value"),
-                        Some(v) => match v {
-                            noodles_sam::alignment::record_buf::data::field::Value::String(x) => {
-                                x.as_slice() == current_cb
-                            }
-                            _ => anyhow::bail!("CB tag value had unexpected type!"),
-                        },
-                    };
-
+                    let same_barcode = is_same_barcode(record, current_cb)?;
                     if !same_barcode {
                         NextAction::NewBarcode
                     } else {
@@ -105,7 +110,6 @@ pub fn parse_alignments_for_barcode<R: io::BufRead>(
 
         match action {
             NextAction::SkipUnmapped => {
-                info!("hi mom!");
                 iter.next().unwrap()?;
             }
             NextAction::ProcessSameBarcode => {
