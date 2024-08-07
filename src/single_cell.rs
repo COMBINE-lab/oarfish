@@ -84,9 +84,9 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
         let mut peekable_bam_iter = reader.record_bufs(header).peekable();
         let nthreads = args.threads;
         const CB_TAG: [u8; 2] = [b'C', b'B'];
+        type QueueElement<'a> = (InMemoryAlignmentStore<'a>, Vec<u8>);
 
-        let q: Arc<ArrayQueue<Arc<(InMemoryAlignmentStore, Vec<u8>)>>> =
-            Arc::new(ArrayQueue::new(4 * nthreads));
+        let q: Arc<ArrayQueue<Arc<QueueElement>>> = Arc::new(ArrayQueue::new(4 * nthreads));
         let done_parsing = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut thread_handles: Vec<std::thread::ScopedJoinHandle<'_, anyhow::Result<usize>>> =
             Vec::with_capacity(nthreads);
@@ -212,8 +212,8 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                 writer.vals.clone(),
             )
         };
-        let info = get_single_cell_json_info(&args, &seqcol_digest);
-        write_function::write_single_cell_output(&args.output, info, &header, &trimat)?;
+        let info = get_single_cell_json_info(args, &seqcol_digest);
+        write_function::write_single_cell_output(&args.output, info, header, &trimat)?;
         Ok(())
     })
 }
