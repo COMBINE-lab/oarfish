@@ -183,6 +183,8 @@ fn main() -> anyhow::Result<()> {
     );
 
     if args.single_cell {
+        // TODO: do this better (quiet the EM during single-cell quant)
+        reload_handle.modify(|filter| *filter = EnvFilter::new("WARN"))?;
         single_cell::quantify_single_cell_from_collated_bam(
             &header,
             &filter_opts,

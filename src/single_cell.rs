@@ -13,7 +13,7 @@ use std::fs::{create_dir_all, File};
 use std::io::{BufRead, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tracing::error;
+use tracing::{error, subscriber, Level};
 
 struct QuantOutputInfo {
     barcode_file: std::io::BufWriter<File>,
@@ -112,8 +112,8 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                         let emi = EMInfo {
                             eq_map: &astore.0,
                             txp_info: &new_txps,
-                            max_iter: 1000,
-                            convergence_thresh: 0.001,
+                            max_iter: args.max_em_iter,
+                            convergence_thresh: args.convergence_thresh,
                             init_abundances: None,
                             kde_model: None,
                         };
