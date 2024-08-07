@@ -250,8 +250,6 @@ fn get_single_cell_json_info(args: &Args, seqcol_digest: &str) -> serde_json::Va
     })
 }
 
-use noodles_sam::alignment::record::data::field::Value;
-
 pub fn get_while<'a, R: io::BufRead>(
     filter_opts: &AlignmentFilters,
     header: &'a noodles_sam::Header,
@@ -261,7 +259,7 @@ pub fn get_while<'a, R: io::BufRead>(
     barcode: &[u8],
 ) -> anyhow::Result<InMemoryAlignmentStore<'a>> {
     let mut astore = InMemoryAlignmentStore::new(filter_opts.clone(), header);
-    let num_rec_processed = alignment_parser::parse_alignments_for_barcode(
+    let _num_rec_processed = alignment_parser::parse_alignments_for_barcode(
         &mut astore,
         txps,
         iter,
@@ -282,7 +280,7 @@ struct QuantOutputInfo {
     row_index: usize,
 }
 
-pub fn quantify_single_cell_from_collated_bam<R: io::BufRead>(
+fn quantify_single_cell_from_collated_bam<R: io::BufRead>(
     header: &noodles_sam::Header,
     filter_opts: &AlignmentFilters,
     reader: &mut bam::io::Reader<R>,

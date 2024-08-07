@@ -58,7 +58,7 @@ pub fn write_single_cell_output(
         .expect("Couldn't create output file");
     let mut writer = BufWriter::new(write);
 
-    for (rseq, rmap) in header.reference_sequences().iter() {
+    for (rseq, _rmap) in header.reference_sequences().iter() {
         writeln!(writer, "{}", rseq).expect("Couldn't write to output file.");
     }
     Ok(())
