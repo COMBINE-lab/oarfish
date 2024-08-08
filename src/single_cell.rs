@@ -10,10 +10,10 @@ use noodles_bam as bam;
 use path_tools::WithAdditionalExtension;
 use serde_json::json;
 use std::fs::{create_dir_all, File};
-use std::io::{BufRead, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tracing::{error, subscriber, Level};
+use tracing::{error, info, subscriber, warn, Level};
 
 struct QuantOutputInfo {
     barcode_file: std::io::BufWriter<File>,
@@ -50,7 +50,8 @@ fn get_single_cell_json_info(args: &Args, seqcol_digest: &str) -> serde_json::Va
     })
 }
 
-pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
+pub fn quantify_single_cell_from_collated_bam<R: BufRead + noodles_bgzf::io::Read>(
+    file_len: u64,
     header: &noodles_sam::Header,
     filter_opts: &AlignmentFilters,
     reader: &mut bam::io::Reader<R>,
@@ -68,6 +69,7 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
         }
     }
 
+    let nthreads = args.threads;
     std::thread::scope(|s| {
         let bc_path = args.output.with_additional_extension(".barcodes.txt");
         let bc_file = File::create(bc_path)?;
@@ -79,14 +81,13 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
             row_index: 0usize,
         }));
 
-        // get the data for the next cell
-        let mut records_for_read: Vec<noodles_sam::alignment::RecordBuf> = Vec::new();
-        let mut peekable_bam_iter = reader.record_bufs(header).peekable();
-        let nthreads = args.threads;
-        const CB_TAG: [u8; 2] = [b'C', b'B'];
-        type QueueElement<'a> = (InMemoryAlignmentStore<'a>, Vec<u8>);
+        type QueueElement<'a> = (
+            Vec<noodles_sam::alignment::record_buf::RecordBuf>,
+            &'a [TranscriptInfo],
+            Vec<u8>,
+        );
 
-        let q: Arc<ArrayQueue<Arc<QueueElement>>> = Arc::new(ArrayQueue::new(4 * nthreads));
+        let q: Arc<ArrayQueue<QueueElement>> = Arc::new(ArrayQueue::new(4 * nthreads));
         let done_parsing = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut thread_handles: Vec<std::thread::ScopedJoinHandle<'_, anyhow::Result<usize>>> =
             Vec::with_capacity(nthreads);
@@ -94,24 +95,48 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
         for _worker_id in 0..nthreads {
             let in_q = q.clone();
             let done_parsing = done_parsing.clone();
-            let mut new_txps = Vec::with_capacity(txps.len());
-            new_txps.extend_from_slice(txps);
+            let num_txps = txps.len();
             let bc_out = bc_writer.clone();
+            let bin_width = args.bin_width;
+            let filter_opts = filter_opts.clone();
 
             let handle = s.spawn(move || {
-                let mut col_ids = Vec::with_capacity(new_txps.len());
-                let mut row_ids = Vec::with_capacity(new_txps.len());
-                let mut vals = Vec::with_capacity(new_txps.len());
+                let mut col_ids = Vec::with_capacity(num_txps);
+                let mut row_ids = Vec::with_capacity(num_txps);
+                let mut vals = Vec::with_capacity(num_txps);
                 let mut num_cells = 0_usize;
+                let mut records_for_read =
+                    Vec::<noodles_sam::alignment::record_buf::RecordBuf>::with_capacity(16);
 
                 while !done_parsing.load(std::sync::atomic::Ordering::SeqCst) {
-                    while let Some(astore) = in_q.pop() {
+                    while let Some(mut elem) = in_q.pop() {
+                        // new copy of txp info for this barcode
+                        let mut txps = Vec::with_capacity(num_txps);
+                        txps.extend_from_slice(elem.1);
+
+                        let barcode = elem.2;
+                        let mut store = InMemoryAlignmentStore::new(filter_opts.clone(), header);
+
+                        alignment_parser::sort_and_parse_barcode_records(
+                            &mut elem.0,
+                            &mut store,
+                            &mut txps,
+                            &mut records_for_read,
+                        )?;
+
+                        if store.filter_opts.model_coverage {
+                            //obtaining the Cumulative Distribution Function (CDF) for each transcript
+                            crate::binomial_continuous_prob(&mut txps, &bin_width, 1);
+                            //Normalize the probabilities for the records of each read
+                            crate::normalize_read_probs(&mut store, &txps, &bin_width);
+                        }
+
                         //println!("num_rec = {}", astore.len());
                         // wrap up all of the relevant information we need for estimation
                         // in an EMInfo struct and then call the EM algorithm.
                         let emi = EMInfo {
-                            eq_map: &astore.0,
-                            txp_info: &new_txps,
+                            eq_map: &store,
+                            txp_info: &txps,
                             max_iter: args.max_em_iter,
                             convergence_thresh: args.convergence_thresh,
                             init_abundances: None,
@@ -134,7 +159,7 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                             let writer_deref = bc_out.lock();
                             let writer = &mut *writer_deref.unwrap();
                             writeln!(&mut writer.barcode_file, "{}", unsafe {
-                                std::str::from_utf8_unchecked(&astore.1)
+                                std::str::from_utf8_unchecked(&barcode)
                             })?;
 
                             // get the row index and then increment it
@@ -153,6 +178,10 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
             thread_handles.push(handle);
         }
 
+        // get the data for the next cell
+        let mut peekable_bam_iter = reader.record_bufs(header).peekable();
+        const CB_TAG: [u8; 2] = [b'C', b'B'];
+        let mut num_cells = 0_usize;
         // parser thread
         while let Some(next_res) = peekable_bam_iter.peek() {
             let rec = next_res.as_ref().unwrap();
@@ -166,16 +195,15 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                 },
             };
 
-            let mut aln_store = InMemoryAlignmentStore::new(filter_opts.clone(), header);
-            let _num_rec_processed = alignment_parser::parse_alignments_for_barcode(
-                &mut aln_store,
-                txps,
-                &mut peekable_bam_iter,
-                &barcode,
-                &mut records_for_read,
-            )?;
+            let records_for_barcode =
+                alignment_parser::parse_alignments_for_barcode(&mut peekable_bam_iter, &barcode)?;
 
-            let mut astore = std::sync::Arc::new((aln_store, barcode));
+            num_cells += 1;
+            if num_cells > 1 && num_cells % 100 == 0 {
+                info!("Processed {} cells.", num_cells);
+            }
+
+            let mut astore = (records_for_barcode, &(*txps), barcode);
 
             // push the store on to the work queue
             while let Err(store) = q.push(astore) {

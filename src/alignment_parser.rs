@@ -64,17 +64,77 @@ fn is_same_barcode(rec: &RecordBuf, current_barcode: &[u8]) -> anyhow::Result<bo
     Ok(same_barcode)
 }
 
-#[inline(always)]
-pub fn parse_alignments_for_barcode<R: io::BufRead>(
+pub fn sort_and_parse_barcode_records(
+    records: &mut Vec<noodles_sam::alignment::record_buf::RecordBuf>,
     store: &mut InMemoryAlignmentStore,
     txps: &mut [TranscriptInfo],
-    iter: &mut core::iter::Peekable<noodles_bam::io::reader::RecordBufs<R>>,
-    current_cb: &[u8],
     records_for_read: &mut Vec<noodles_sam::alignment::record_buf::RecordBuf>,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<()> {
     records_for_read.clear();
     let mut prev_read = String::new();
-    let mut records_processed = 0_usize;
+
+    // first sort records by read name
+    records.sort_unstable_by(|x, y| x.name().partial_cmp(&y.name()).unwrap());
+
+    // Parse the input alignemnt file, gathering the alignments aggregated
+    // by their source read. **Note**: this requires that we have a
+    // name-sorted input bam file (currently, aligned against the transcriptome).
+    //
+    // *NOTE*: this had to be changed from `records` to `record_bufs` or
+    // critical information was missing from the records. This happened when
+    // moving to the new version of noodles. Track `https://github.com/zaeleus/noodles/issues/230`
+    // to see if it's clear why this is the case
+    for record in records {
+        if let Some(rname) = record.name() {
+            let record_copy = record.clone();
+            let rstring: String = String::from_utf8_lossy(rname.as_ref()).into_owned();
+            // if this is an alignment for the same read, then
+            // push it onto our temporary vector.
+            if prev_read == rstring {
+                if let Some(_ref_id) = record.reference_sequence_id() {
+                    records_for_read.push(record_copy);
+                }
+            } else {
+                // otherwise, record the alignment range for the
+                // previous read record.
+                if !prev_read.is_empty() {
+                    store.add_group(txps, records_for_read);
+                    if records_for_read.len() == 1 {
+                        store.inc_unique_alignments();
+                    }
+                    records_for_read.clear();
+                }
+                // the new "prev_read" name is the current read name
+                // so it becomes the first on the new alignment range
+                // vector.
+                prev_read = rstring;
+                if let Some(_ref_id) = record.reference_sequence_id() {
+                    records_for_read.push(record_copy);
+                }
+            }
+        }
+    }
+    // if we end with a non-empty alignment range vector, then
+    // add that group.
+    if !records_for_read.is_empty() {
+        store.add_group(txps, records_for_read);
+        if records_for_read.len() == 1 {
+            store.inc_unique_alignments();
+        }
+        records_for_read.clear();
+    }
+    Ok(())
+}
+
+#[inline(always)]
+pub fn parse_alignments_for_barcode<R: io::BufRead>(
+    iter: &mut core::iter::Peekable<noodles_bam::io::reader::RecordBufs<R>>,
+    current_cb: &[u8],
+) -> anyhow::Result<Vec<noodles_sam::alignment::record_buf::RecordBuf>> {
+    //records_for_read.clear();
+    let mut records_for_barcode =
+        Vec::<noodles_sam::alignment::record_buf::RecordBuf>::with_capacity(2048);
+    let mut _records_processed = 0_usize;
 
     // Parse the input alignemnt file, gathering the alignments aggregated
     // by their source read. **Note**: this requires that we have a
@@ -91,7 +151,7 @@ pub fn parse_alignments_for_barcode<R: io::BufRead>(
                 // unmapped reads don't contribute to quantification
                 // but we track them.
                 if record.flags().is_unmapped() {
-                    records_processed += 1;
+                    _records_processed += 1;
                     NextAction::SkipUnmapped
                 } else {
                     let same_barcode = is_same_barcode(record, current_cb)?;
@@ -114,53 +174,14 @@ pub fn parse_alignments_for_barcode<R: io::BufRead>(
             }
             NextAction::ProcessSameBarcode => {
                 let record = iter.next().unwrap()?;
-
-                if let Some(rname) = record.name() {
-                    let record_copy = record.clone();
-                    records_processed += 1;
-                    let rstring: String = String::from_utf8_lossy(rname.as_ref()).into_owned();
-                    // if this is an alignment for the same read, then
-                    // push it onto our temporary vector.
-                    if prev_read == rstring {
-                        if let Some(_ref_id) = record.reference_sequence_id() {
-                            records_for_read.push(record_copy);
-                        }
-                    } else {
-                        // otherwise, record the alignment range for the
-                        // previous read record.
-                        if !prev_read.is_empty() {
-                            store.add_group(txps, records_for_read);
-                            if records_for_read.len() == 1 {
-                                store.inc_unique_alignments();
-                            }
-                            records_for_read.clear();
-                        }
-                        // the new "prev_read" name is the current read name
-                        // so it becomes the first on the new alignment range
-                        // vector.
-                        prev_read = rstring;
-                        if let Some(_ref_id) = record.reference_sequence_id() {
-                            records_for_read.push(record_copy);
-                        }
-                    }
-                }
+                records_for_barcode.push(record.clone());
             }
             NextAction::NewBarcode | NextAction::EndOfFile => {
                 break;
             }
         };
     }
-    // if we end with a non-empty alignment range vector, then
-    // add that group.
-    if !records_for_read.is_empty() {
-        store.add_group(txps, records_for_read);
-        if records_for_read.len() == 1 {
-            store.inc_unique_alignments();
-        }
-        records_for_read.clear();
-    }
-
-    Ok(records_processed)
+    Ok(records_for_barcode)
 }
 
 pub fn parse_alignments<R: io::BufRead>(

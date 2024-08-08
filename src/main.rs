@@ -132,7 +132,9 @@ fn main() -> anyhow::Result<()> {
 
     let filter_opts = get_filter_opts(&args);
 
+    let flen = std::fs::metadata(&args.alignments)?.len();
     let afile = File::open(&args.alignments)?;
+
     let worker_count = NonZeroUsize::new(1.max(args.threads.saturating_sub(1)))
         .expect("decompression threads >= 1");
     let decoder = bgzf::MultithreadedReader::with_worker_count(worker_count, afile);
@@ -184,8 +186,24 @@ fn main() -> anyhow::Result<()> {
 
     if args.single_cell {
         // TODO: do this better (quiet the EM during single-cell quant)
-        reload_handle.modify(|filter| *filter = EnvFilter::new("WARN"))?;
+        reload_handle.modify(|filter| {
+            *filter = if args.quiet {
+                EnvFilter::new("WARN")
+                    .add_directive("oarfish=warn".parse().unwrap())
+                    .add_directive("oarfish::single_cell=warn".parse().unwrap())
+            } else if args.verbose {
+                EnvFilter::new("TRACE")
+                    .add_directive("oarfish=warn".parse().unwrap())
+                    .add_directive("oarfish::single_cell=trace".parse().unwrap())
+            } else {
+                EnvFilter::new("INFO")
+                    .add_directive("oarfish=warn".parse().unwrap())
+                    .add_directive("oarfish::single_cell=info".parse().unwrap())
+            }
+        })?;
+
         single_cell::quantify_single_cell_from_collated_bam(
+            flen,
             &header,
             &filter_opts,
             &mut reader,
