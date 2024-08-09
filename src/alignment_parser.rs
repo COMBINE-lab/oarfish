@@ -64,11 +64,20 @@ fn is_same_barcode(rec: &RecordBuf, current_barcode: &[u8]) -> anyhow::Result<bo
     Ok(same_barcode)
 }
 
+/// Takes a collection of [RecordBuf]s, a mutable reference to an [InMemoryAlignmentStore]
+/// as well as the relevant [TranscriptInfo].
+///
+/// This function first sorts the `records` by the read name (ensuring that any primary alignment
+/// of the read comes first), so that reads are collated by name.  Then, it processes in turn the
+/// alignments for each input read, filtering them according to the filters attached to the
+/// `store`.  Subsequently, the alignments are summarized in the `store`. If all `records` are
+/// processed successfully, [Ok]`()` is returned, otherwise the relevant [anyhow::Error] is
+/// returned.
 pub fn sort_and_parse_barcode_records(
-    records: &mut Vec<noodles_sam::alignment::record_buf::RecordBuf>,
+    records: &mut Vec<RecordBuf>,
     store: &mut InMemoryAlignmentStore,
     txps: &mut [TranscriptInfo],
-    records_for_read: &mut Vec<noodles_sam::alignment::record_buf::RecordBuf>,
+    records_for_read: &mut Vec<RecordBuf>,
 ) -> anyhow::Result<()> {
     records_for_read.clear();
     let mut prev_read = String::new();
