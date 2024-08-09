@@ -10,10 +10,10 @@ use noodles_bam as bam;
 use path_tools::WithAdditionalExtension;
 use serde_json::json;
 use std::fs::{create_dir_all, File};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use tracing::{error, info, subscriber, warn, Level};
+use tracing::{error, info};
 
 struct QuantOutputInfo {
     barcode_file: std::io::BufWriter<File>,
@@ -50,8 +50,7 @@ fn get_single_cell_json_info(args: &Args, seqcol_digest: &str) -> serde_json::Va
     })
 }
 
-pub fn quantify_single_cell_from_collated_bam<R: BufRead + noodles_bgzf::io::Read>(
-    file_len: u64,
+pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
     header: &noodles_sam::Header,
     filter_opts: &AlignmentFilters,
     reader: &mut bam::io::Reader<R>,
