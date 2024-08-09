@@ -158,6 +158,9 @@ fn main() -> anyhow::Result<()> {
                     .add_directive("oarfish=info".parse().unwrap())
                     .add_directive("oarfish::single_cell=trace".parse().unwrap())
             } else {
+                // be quiet about normal things in single-cell mode
+                // e.g. EM iterations, and only print out info for
+                // oarfish::single_cell events.
                 EnvFilter::new("INFO")
                     .add_directive("oarfish=warn".parse().unwrap())
                     .add_directive("oarfish::single_cell=info".parse().unwrap())

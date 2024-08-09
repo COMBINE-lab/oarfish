@@ -7,6 +7,7 @@ use crate::util::oarfish_types::{
 use crate::util::write_function;
 use crossbeam::queue::ArrayQueue;
 use noodles_bam as bam;
+use noodles_sam::alignment::RecordBuf;
 use path_tools::WithAdditionalExtension;
 use serde_json::json;
 use std::fs::{create_dir_all, File};
@@ -80,11 +81,11 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
             row_index: 0usize,
         }));
 
-        type QueueElement<'a> = (
-            Vec<noodles_sam::alignment::record_buf::RecordBuf>,
-            &'a [TranscriptInfo],
-            Vec<u8>,
-        );
+        // the element consists of the vector of records corresponding
+        // to this cell, a (read-only) copy of TranscriptInfo which will
+        // be copied and modified by the thread, and the barcode
+        // (represented as a Vec<u8>) for the cell.
+        type QueueElement<'a> = (Vec<RecordBuf>, &'a [TranscriptInfo], Vec<u8>);
 
         let q: Arc<ArrayQueue<QueueElement>> = Arc::new(ArrayQueue::new(4 * nthreads));
         let done_parsing = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -104,20 +105,24 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                 let mut row_ids = Vec::with_capacity(num_txps);
                 let mut vals = Vec::with_capacity(num_txps);
                 let mut num_cells = 0_usize;
-                let mut records_for_read =
-                    Vec::<noodles_sam::alignment::record_buf::RecordBuf>::with_capacity(16);
+                let mut records_for_read = Vec::<RecordBuf>::with_capacity(16);
 
+                // while the queue might still be being filled
                 while !done_parsing.load(std::sync::atomic::Ordering::SeqCst) {
-                    while let Some(mut elem) = in_q.pop() {
+                    // get the next cell
+                    while let Some(elem) = in_q.pop() {
+                        let mut recs = elem.0;
                         // new copy of txp info for this barcode
                         let mut txps = Vec::with_capacity(num_txps);
                         txps.extend_from_slice(elem.1);
-
+                        // the barcode of this cell
                         let barcode = elem.2;
+                        // where we will store the relevant alignment records
                         let mut store = InMemoryAlignmentStore::new(filter_opts.clone(), header);
 
+                        // sort by read name and then parse the records for this cell
                         alignment_parser::sort_and_parse_barcode_records(
-                            &mut elem.0,
+                            &mut recs,
                             &mut store,
                             &mut txps,
                             &mut records_for_read,
@@ -130,7 +135,6 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                             crate::normalize_read_probs(&mut store, &txps, &bin_width);
                         }
 
-                        //println!("num_rec = {}", astore.len());
                         // wrap up all of the relevant information we need for estimation
                         // in an EMInfo struct and then call the EM algorithm.
                         let emi = EMInfo {
@@ -141,7 +145,10 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                             init_abundances: None,
                             kde_model: None,
                         };
+                        // run the EM for this cell
                         let counts = em::em(&emi, 1);
+                        // clear out the vectors where we will store
+                        // the count information for this cell
                         col_ids.clear();
                         vals.clear();
                         for (col_idx, v) in counts.iter().enumerate() {
@@ -150,11 +157,18 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                                 vals.push((*v) as f32);
                             }
                         }
+                        // fill the row ids for this cell; fist
+                        // we size the vector to the correct length
+                        // and fill it with 0s and below we
+                        // fill with the appropriate number (i.e. the
+                        // cell/barcode ID).
                         row_ids.resize(col_ids.len(), 0_u32);
                         num_cells += 1;
 
                         let row_index: usize;
                         {
+                            // grab a lock and fill out the count info for
+                            // this cell.
                             let writer_deref = bc_out.lock();
                             let writer = &mut *writer_deref.unwrap();
                             writeln!(&mut writer.barcode_file, "{}", unsafe {
