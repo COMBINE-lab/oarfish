@@ -74,7 +74,18 @@ pub fn sort_and_parse_barcode_records(
     let mut prev_read = String::new();
 
     // first sort records by read name
-    records.sort_unstable_by(|x, y| x.name().partial_cmp(&y.name()).unwrap());
+    records.sort_unstable_by(|x, y| match x.name().cmp(&y.name()) {
+        std::cmp::Ordering::Equal => {
+            match (x.flags().is_secondary(), y.flags().is_secondary()) {
+                (false, true) => std::cmp::Ordering::Less,
+                (true, false) => std::cmp::Ordering::Greater,
+                (true, true) => std::cmp::Ordering::Equal,
+                // this one shouldn't happen
+                (false, false) => std::cmp::Ordering::Equal,
+            }
+        }
+        x => x,
+    });
 
     // Parse the input alignemnt file, gathering the alignments aggregated
     // by their source read. **Note**: this requires that we have a
