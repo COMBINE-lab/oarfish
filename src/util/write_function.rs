@@ -48,7 +48,7 @@ pub fn write_single_cell_output(
     let out_path = output.with_additional_extension(".count.mtx");
     sprs::io::write_matrix_market(out_path, counts)?;
 
-    let out_path = output.with_additional_extension(".rows.txt");
+    let out_path = output.with_additional_extension(".features.txt");
     File::create(&out_path)?;
     let write = OpenOptions::new()
         .write(true)
