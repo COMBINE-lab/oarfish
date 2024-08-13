@@ -6,7 +6,6 @@ use itertools::izip;
 pub struct CountInfo {
     pub unique_count: u32,
     pub total_count: u32,
-    pub expected_count: f64,
 }
 
 impl CountInfo {
@@ -14,7 +13,6 @@ impl CountInfo {
         Self {
             unique_count: 0,
             total_count: 0,
-            expected_count: 0.0,
         }
     }
 }
