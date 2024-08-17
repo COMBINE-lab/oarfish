@@ -3,6 +3,7 @@ use serde::Serialize;
 use tracing::info;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::fmt;
 
 /// These represent different "meta-options", specific settings
 /// for all of the different filters that should be applied in
@@ -44,6 +45,11 @@ impl FromStr for SequencingTech {
     }
 }
 
+/// This tells us the value of the filter argument and
+/// the type remembers if it was the default or if the
+/// user provided it explicltiy.
+/// TODO: see if there is some built-in clap functionality
+/// to avoid this song and dance.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum FilterArg{
     DefaultI64(i64),
@@ -54,9 +60,13 @@ pub enum FilterArg{
     ProvidedF32(f32),
 }
 
+/// because we have to (in the derive approach at least) round trip
+/// the default values through strings, we need some way to designate
+/// a default value from a provided one. Default values will all start
+/// with '*'
 const DEFAULT_FILTER_PREFIX: &str = "*";
 
-use std::fmt;
+/// How to convert a FilterArg to a string
 impl fmt::Display for FilterArg {
     // This trait requires `fmt` with this exact signature.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -71,7 +81,10 @@ impl fmt::Display for FilterArg {
     }
 }
 
+
+/// Necessary functions on [FilterArg]
 impl FilterArg {
+    /// If it is an i64 type, get the i64
     pub fn try_as_i64(&self) -> anyhow::Result<i64> {
         match self {
             FilterArg::DefaultI64(x) => Ok(*x),
@@ -80,6 +93,7 @@ impl FilterArg {
         }
     }
 
+    /// If it is an u32 type, get the u32 
     pub fn try_as_u32(&self) -> anyhow::Result<u32> {
         match self {
             FilterArg::DefaultU32(x) => Ok(*x),
@@ -88,6 +102,7 @@ impl FilterArg {
         }
     }
 
+    /// If it is an f32 type, get the f32 
     pub fn try_as_f32(&self) -> anyhow::Result<f32> {
         match self {
             FilterArg::DefaultF32(x) => Ok(*x),
@@ -95,7 +110,10 @@ impl FilterArg {
             _ => anyhow::bail!("Could not provide FilterArg variant as an f32")
         }
     }
-
+    
+    /// If the value is user provided, return the value, otherwise
+    /// return `other` and print the message provided in `msg` to the 
+    /// logger.
     pub fn provided_or_u32(&self, msg: &str, other: u32) -> u32 {
         match self {
             FilterArg::ProvidedU32(x) => {
@@ -106,6 +124,9 @@ impl FilterArg {
         }
     }
 
+    /// If the value is user provided, return the value, otherwise
+    /// return `other` and print the message provided in `msg` to the 
+    /// logger.
     pub fn provided_or_i64(&self, msg: &str, other: i64) -> i64 {
         match self {
             FilterArg::ProvidedI64(x) => {
@@ -116,6 +137,9 @@ impl FilterArg {
         }
     }
 
+    /// If the value is user provided, return the value, otherwise
+    /// return `other` and print the message provided in `msg` to the 
+    /// logger.
     pub fn provided_or_f32(&self, msg: &str, other: f32) -> f32 {
         match self {
             FilterArg::ProvidedF32(x) => {
@@ -127,6 +151,7 @@ impl FilterArg {
     }
 }
 
+/// Parse a string as a [FilterArg] with an i64 inner type
 fn parse_filter_i64(arg: &str) -> anyhow::Result<FilterArg> {
     if let Some(val) = arg.strip_prefix(DEFAULT_FILTER_PREFIX) {
         let v = val.parse::<i64>()?;
@@ -137,6 +162,7 @@ fn parse_filter_i64(arg: &str) -> anyhow::Result<FilterArg> {
     }
 }
 
+/// Parse a string as a [FilterArg] with a u32 inner type
 fn parse_filter_u32(arg: &str) -> anyhow::Result<FilterArg> {
     if let Some(val) = arg.strip_prefix(DEFAULT_FILTER_PREFIX) {
         let v = val.parse::<u32>()?;
@@ -147,6 +173,7 @@ fn parse_filter_u32(arg: &str) -> anyhow::Result<FilterArg> {
     }
 }
 
+/// Parse a string as a [FilterArg] with an f32 inner type
 fn parse_filter_f32(arg: &str) -> anyhow::Result<FilterArg> {
     if let Some(val) = arg.strip_prefix(DEFAULT_FILTER_PREFIX) {
         let v = val.parse::<f32>()?;
