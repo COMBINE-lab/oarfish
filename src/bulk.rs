@@ -10,6 +10,8 @@ use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::{write_infrep_file, write_output};
 use crate::{binomial_continuous_prob, normalize_read_probs};
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
+#[allow(unused_imports)]
+use minimap2_sys as mm_ffi;
 use noodles_bam as bam;
 use num_format::{Locale, ToFormattedString};
 use serde_json::json;
@@ -217,10 +219,7 @@ pub fn quantify_bulk_alignments_raw_reads(
             .map(|_| {
                 let receiver = read_receiver.clone();
                 let mut filter = filter_opts.clone();
-                let mut loc_aligner = aligner.clone();
-                loc_aligner.mapopt.clone_from(&aligner.mapopt);
-                loc_aligner = loc_aligner.with_cigar();
-                loc_aligner.mapopt.best_n = 100;
+                let mut loc_aligner = aligner.clone().with_cigar();
 
                 let my_txp_info_view = &txp_info_view;
                 let aln_group_sender = aln_group_sender.clone();
@@ -276,9 +275,8 @@ pub fn quantify_bulk_alignments_raw_reads(
         info!("Read Producer finished; parsed {} reads", total_reads);
 
         let mut discard_tables: Vec<DiscardTable> = Vec::with_capacity(map_threads);
-        for (i, consumer) in consumers.into_iter().enumerate() {
+        for consumer in consumers {
             let dt = consumer.join().expect("Consumer thread panicked");
-            info!("Read consumer {} finished", i);
             discard_tables.push(dt);
         }
 
@@ -293,8 +291,6 @@ pub fn quantify_bulk_alignments_raw_reads(
         }
         store
     });
-    //alignment_parser::parse_alignments(&mut store, header, reader, txps)?;
-    info!("THREADS: {}", aligner.threads);
     // print discard table information in which the user might be interested.
     info!("\ndiscard_table: \n{}\n", store.discard_table.to_table());
 

@@ -28,6 +28,100 @@ use crate::util::normalize_probability::normalize_read_probs;
 use crate::util::oarfish_types::{AlignmentFilters, TranscriptInfo};
 use crate::util::{binomial_probability::binomial_continuous_prob, kde_utils};
 
+fn get_aligner_from_args(
+    args: &Args,
+) -> anyhow::Result<(
+    noodles_sam::header::Header,
+    Option<bam::io::Reader<bgzf::MultithreadedReader<File>>>,
+    Option<minimap2::Aligner>,
+)> {
+    info!("read-based mode");
+    info!("reads = {:?}", &args.reads);
+    info!("reference = {:?}", &args.reference);
+
+    // set the number of indexing threads
+    let idx_threads = &args.threads.clamp(1, 8);
+
+    // if the user requested to write the output index to disk, prepare for that
+    let idx_out_as_str = args.index_out.clone().map_or(String::new(), |x| {
+        x.to_str()
+            .expect("could not convert PathBuf to &str")
+            .to_owned()
+    });
+    let idx_output = args.index_out.as_ref().map(|_| idx_out_as_str.as_str());
+
+    // create the aligner
+    let mut aligner = match args.seq_tech {
+        Some(SequencingTech::OntCDNA) | Some(SequencingTech::OntDRNA) => {
+            minimap2::Aligner::builder()
+                .with_index_threads(*idx_threads)
+                .with_cigar()
+                .map_ont()
+                .with_index(
+                    &args
+                        .reference
+                        .clone()
+                        .expect("must provide reference sequence"),
+                    idx_output,
+                )
+                .expect("could not construct minimap2 index")
+        }
+        Some(SequencingTech::PacBio) => minimap2::Aligner::builder()
+            .with_index_threads(*idx_threads)
+            .with_cigar()
+            .map_pb()
+            .with_index(
+                &args
+                    .reference
+                    .clone()
+                    .expect("must provide reference sequence"),
+                idx_output,
+            )
+            .expect("could not construct minimap2 index"),
+        None => {
+            anyhow::bail!("sequencing tech must be provided in read mode, but it was not!");
+        }
+    };
+
+    info!("created aligner index opts : {:?}", aligner.idxopt);
+    // best 100 hits
+    aligner.mapopt.best_n = 100;
+
+    let mmi: mm_ffi::mm_idx_t = unsafe { **aligner.idx.as_ref().unwrap() };
+    let n_seq = mmi.n_seq;
+    info!("index has {} sequences", n_seq);
+
+    let mut header = noodles_sam::header::Header::builder();
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct SeqMetaData {
+        pub name: String,
+        pub length: u32,
+        pub is_alt: bool,
+    }
+
+    // TODO: better creation of the header
+    for i in 0..mmi.n_seq {
+        let _seq = unsafe { *(mmi.seq).offset(i as isize) };
+        let c_str = unsafe { ffi::CStr::from_ptr(_seq.name) };
+        let rust_str = c_str.to_str().unwrap().to_string();
+        header = header.add_reference_sequence(
+            rust_str,
+            HeaderMap::<header_val::map::ReferenceSequence>::new(NonZeroUsize::try_from(
+                _seq.len as usize,
+            )?),
+        );
+    }
+
+    header = header.add_program(
+        "minimap2-rs",
+        HeaderMap::<header_val::map::Program>::default(),
+    );
+
+    let header = header.build();
+    Ok((header, None, Some(aligner)))
+}
+
 fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
     // set all of the filter options that the user
     // wants to apply.
@@ -139,82 +233,7 @@ fn main() -> anyhow::Result<()> {
     let filter_opts = get_filter_opts(&args)?;
 
     let (header, reader, aligner) = if args.alignments.is_none() {
-        info!("read-based mode");
-        info!("reads = {:?}", &args.reads);
-        info!("reference = {:?}", &args.reference);
-
-        // set the number of indexing threads
-        let idx_threads = &args.threads.clamp(1, 8);
-
-        // if the user requested to write the output index to disk, prepare for that
-        let idx_out_as_str = args.index_out.clone().map_or(String::new(), |x| {
-            x.to_str()
-                .expect("could not convert PathBuf to &str")
-                .to_owned()
-        });
-        let idx_output = args.index_out.as_ref().map(|_| idx_out_as_str.as_str());
-
-        // create the aligner
-        let aligner = minimap2::Aligner::builder()
-            .with_index_threads(*idx_threads)
-            .with_cigar();
-
-        let aligner = match args.seq_tech {
-            Some(SequencingTech::OntCDNA) | Some(SequencingTech::OntDRNA) => aligner.map_ont(),
-            Some(SequencingTech::PacBio) => aligner.map_pb(),
-            None => {
-                anyhow::bail!("sequencing tech must be provided in read mode, but it was not!");
-            }
-        };
-
-        let mut aligner = aligner
-            .map_ont()
-            .with_sam_out()
-            .with_index(
-                &args
-                    .reference
-                    .clone()
-                    .expect("must provide reference sequence"),
-                idx_output,
-            )
-            .unwrap();
-        info!("created aligner index opts : {:?}", aligner.idxopt);
-        // best 100 hits
-        aligner.mapopt.best_n = 100;
-
-        let mmi: mm_ffi::mm_idx_t = unsafe { **aligner.idx.as_ref().unwrap() };
-        let n_seq = mmi.n_seq;
-        info!("index has {} sequences", n_seq);
-
-        let mut header = noodles_sam::header::Header::builder();
-
-        #[derive(Debug, PartialEq, Eq)]
-        pub struct SeqMetaData {
-            pub name: String,
-            pub length: u32,
-            pub is_alt: bool,
-        }
-
-        // TODO: better creation of the header
-        for i in 0..mmi.n_seq {
-            let _seq = unsafe { *(mmi.seq).offset(i as isize) };
-            let c_str = unsafe { ffi::CStr::from_ptr(_seq.name) };
-            let rust_str = c_str.to_str().unwrap().to_string();
-            header = header.add_reference_sequence(
-                rust_str,
-                HeaderMap::<header_val::map::ReferenceSequence>::new(NonZeroUsize::try_from(
-                    _seq.len as usize,
-                )?),
-            );
-        }
-
-        header = header.add_program(
-            "minimap2-rs",
-            HeaderMap::<header_val::map::Program>::default(),
-        );
-
-        let header = header.build();
-        (header, None, Some(aligner))
+        get_aligner_from_args(&args)?
     } else {
         let alignments = args.alignments.clone().unwrap();
         let afile = File::open(&alignments)?;
