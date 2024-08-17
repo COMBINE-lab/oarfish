@@ -1,10 +1,11 @@
 use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
 use noodles_bam as bam;
+use noodles_sam::header::record::value::map::tag;
 use noodles_sam::{alignment::RecordBuf, Header};
 use num_format::{Locale, ToFormattedString};
 use std::io;
 use std::path::Path;
-use tracing::{info, trace};
+use tracing::{error, info, trace};
 
 pub fn read_and_verify_header<R: io::BufRead>(
     reader: &mut bam::io::Reader<R>,
@@ -20,6 +21,23 @@ pub fn read_and_verify_header<R: io::BufRead>(
             .len()
             .to_formatted_string(&Locale::en)
     );
+
+    // sort order tag
+    let so = tag::Other::try_from([b'S', b'O'])?;
+    let so_type = header
+        .header()
+        .expect("has inner header")
+        .other_fields()
+        .get(&so)
+        .expect("BAM file should have @SO field");
+
+    if so_type == "coordinate" {
+        error!("oarfish is not designed to process coordinate sorted BAM files.");
+        anyhow::bail!(
+        "You provided a coordinate-sorted BAM, but oarfish does not support processing these. 
+         You should provide a BAM file collated by record name (which is the \"natural\" minimap2 order)."
+        );
+    }
 
     let mut saw_minimap2 = false;
     let mut progs = vec![];

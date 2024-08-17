@@ -1,6 +1,8 @@
-use clap::Parser;
+use clap::{Parser, builder::ArgPredicate};
 use serde::Serialize;
+use tracing::info;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 /// These represent different "meta-options", specific settings
 /// for all of the different filters that should be applied in
@@ -20,9 +22,149 @@ fn parse_strand(arg: &str) -> anyhow::Result<bio_types::strand::Strand> {
     }
 }
 
+#[derive(Debug, Clone, clap::ValueEnum, Serialize)]
+pub enum SequencingTech {
+    OntCDNA,
+    OntDRNA,
+    PacBio,
+}
+
+impl FromStr for SequencingTech {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "ont" => Ok(SequencingTech::OntCDNA),
+            "ont-cdna" => Ok(SequencingTech::OntCDNA),
+            "ont-drna" => Ok(SequencingTech::OntDRNA),
+            "pb" => Ok(SequencingTech::PacBio),
+            "pacbio" => Ok(SequencingTech::PacBio),
+            x => Err(format!("Unknown protocol type {:}", x)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub enum FilterArg{
+    DefaultI64(i64),
+    ProvidedI64(i64),
+    DefaultU32(u32),
+    ProvidedU32(u32),
+    DefaultF32(f32),
+    ProvidedF32(f32),
+}
+
+const DEFAULT_FILTER_PREFIX: &str = "*";
+
+use std::fmt;
+impl fmt::Display for FilterArg {
+    // This trait requires `fmt` with this exact signature.
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            FilterArg::DefaultI64(x) => write!(f, "{}{}", DEFAULT_FILTER_PREFIX, x),
+            FilterArg::DefaultU32(x) => write!(f, "{}{}", DEFAULT_FILTER_PREFIX, x),
+            FilterArg::DefaultF32(x) => write!(f, "{}{}", DEFAULT_FILTER_PREFIX, x),
+            FilterArg::ProvidedI64(x) => write!(f, "{}", x),
+            FilterArg::ProvidedU32(x) => write!(f, "{}", x),
+            FilterArg::ProvidedF32(x) => write!(f, "{}", x),
+        }
+    }
+}
+
+impl FilterArg {
+    pub fn try_as_i64(&self) -> anyhow::Result<i64> {
+        match self {
+            FilterArg::DefaultI64(x) => Ok(*x),
+            FilterArg::ProvidedI64(x) => Ok(*x),
+            _ => anyhow::bail!("Could not provide FilterArg variant as an i64")
+        }
+    }
+
+    pub fn try_as_u32(&self) -> anyhow::Result<u32> {
+        match self {
+            FilterArg::DefaultU32(x) => Ok(*x),
+            FilterArg::ProvidedU32(x) => Ok(*x),
+            _ => anyhow::bail!("Could not provide FilterArg variant as a u32")
+        }
+    }
+
+    pub fn try_as_f32(&self) -> anyhow::Result<f32> {
+        match self {
+            FilterArg::DefaultF32(x) => Ok(*x),
+            FilterArg::ProvidedF32(x) => Ok(*x),
+            _ => anyhow::bail!("Could not provide FilterArg variant as an f32")
+        }
+    }
+
+    pub fn provided_or_u32(&self, msg: &str, other: u32) -> u32 {
+        match self {
+            FilterArg::ProvidedU32(x) => {
+                info!("{} {}", msg, x);
+                *x
+            }
+            _ => other
+        }
+    }
+
+    pub fn provided_or_i64(&self, msg: &str, other: i64) -> i64 {
+        match self {
+            FilterArg::ProvidedI64(x) => {
+                info!("{} {}", msg, x);
+                *x
+            }
+            _ => other
+        }
+    }
+
+    pub fn provided_or_f32(&self, msg: &str, other: f32) -> f32 {
+        match self {
+            FilterArg::ProvidedF32(x) => {
+                info!("{} {}", msg, x);
+                *x
+            }
+            _ => other
+        }
+    }
+}
+
+fn parse_filter_i64(arg: &str) -> anyhow::Result<FilterArg> {
+    if let Some(val) = arg.strip_prefix(DEFAULT_FILTER_PREFIX) {
+        let v = val.parse::<i64>()?;
+        Ok(FilterArg::DefaultI64(v))
+    } else {
+        let v = arg.parse::<i64>()?;
+        Ok(FilterArg::ProvidedI64(v))
+    }
+}
+
+fn parse_filter_u32(arg: &str) -> anyhow::Result<FilterArg> {
+    if let Some(val) = arg.strip_prefix(DEFAULT_FILTER_PREFIX) {
+        let v = val.parse::<u32>()?;
+        Ok(FilterArg::DefaultU32(v))
+    } else {
+        let v = arg.parse::<u32>()?;
+        Ok(FilterArg::ProvidedU32(v))
+    }
+}
+
+fn parse_filter_f32(arg: &str) -> anyhow::Result<FilterArg> {
+    if let Some(val) = arg.strip_prefix(DEFAULT_FILTER_PREFIX) {
+        let v = val.parse::<f32>()?;
+        Ok(FilterArg::DefaultF32(v))
+    } else {
+        let v = arg.parse::<f32>()?;
+        Ok(FilterArg::ProvidedF32(v))
+    }
+}
+
 /// accurate transcript quantification from long-read RNA-seq data
 #[derive(Parser, Debug, Serialize)]
 #[clap(author, version, about, long_about = None)]
+#[command(group(
+    clap::ArgGroup::new("input")
+    .required(true)
+    .args(["alignments", "reads"])
+))]
 pub struct Args {
     /// be quiet (i.e. don't output log messages that aren't at least warnings)
     #[arg(long, conflicts_with = "verbose")]
@@ -33,8 +175,50 @@ pub struct Args {
     pub verbose: bool,
 
     /// path to the file containing the input alignments
-    #[arg(short, long, required = true)]
-    pub alignments: PathBuf,
+    #[arg(
+        short,
+        long,
+        help_heading = "alignment mode"
+    )]
+    pub alignments: Option<PathBuf>,
+
+    /// path to the file containing the input reads
+    #[arg(
+        long,
+        help_heading = "raw read mode",
+        requires_ifs([
+            (ArgPredicate::IsPresent, "reference"),
+            (ArgPredicate::IsPresent, "seq_tech")
+        ])
+    )]
+    pub reads: Option<PathBuf>,
+
+    /// path to the file containing the reference transcriptome (or existing index) against which
+    /// to map
+    #[arg(
+        long,
+        conflicts_with = "alignments",
+        help_heading = "raw read mode",
+    )]
+    pub reference: Option<PathBuf>,
+
+    /// path where minimap2 index will be written (if provided)
+    #[arg(
+        long,
+        conflicts_with = "alignments",
+        help_heading = "raw read mode",
+    )]
+    pub index_out: Option<PathBuf>,
+
+    /// sequencing technology in which to expect reads if using mapping based mode
+    #[arg(
+        long, 
+        conflicts_with = "alignments", 
+        help_heading = "raw read mode",
+        value_parser = clap::value_parser!(SequencingTech)
+    )]
+    pub seq_tech: SequencingTech,
+
     /// location where output quantification file should be written
     #[arg(short, long, required = true)]
     pub output: PathBuf,
@@ -43,50 +227,31 @@ pub struct Args {
     pub filter_group: Option<FilterGroup>,
 
     /// maximum allowable distance of the right-most end of an alignment from the 3' transcript end
-    #[arg(short, long, conflicts_with = "filter-group", help_heading="filters", default_value_t = u32::MAX as i64)]
-    pub three_prime_clip: i64,
+    #[arg(short, long, help_heading="filters", default_value_t = FilterArg::DefaultI64(u32::MAX as i64), value_parser = parse_filter_i64)]
+    pub three_prime_clip: FilterArg,
 
     /// maximum allowable distance of the left-most end of an alignment from the 5' transcript end
-    #[arg(short, long, conflicts_with = "filter-group", help_heading="filters", default_value_t = u32::MAX)]
-    pub five_prime_clip: u32,
+    #[arg(short, long, help_heading="filters", default_value_t = FilterArg::DefaultU32(u32::MAX), value_parser = parse_filter_u32)]
+    pub five_prime_clip: FilterArg,
 
     /// fraction of the best possible alignment score that a secondary alignment must have for
     /// consideration
-    #[arg(
-        short,
-        long,
-        conflicts_with = "filter-group",
-        help_heading = "filters",
-        default_value_t = 0.95
-    )]
-    pub score_threshold: f32,
+    #[arg(short, long, help_heading = "filters", default_value_t = FilterArg::DefaultF32(0.95), value_parser = parse_filter_f32)]
+    pub score_threshold: FilterArg,
 
     /// fraction of a query that must be mapped within an alignemnt to consider the alignemnt
     /// valid
-    #[arg(
-        short,
-        long,
-        conflicts_with = "filter-group",
-        help_heading = "filters",
-        default_value_t = 0.5
-    )]
-    pub min_aligned_fraction: f32,
+    #[arg(short, long, help_heading = "filters", default_value_t = FilterArg::DefaultF32(0.5), value_parser = parse_filter_f32)]
+    pub min_aligned_fraction: FilterArg,
 
     /// minimum number of nucleotides in the aligned portion of a read
-    #[arg(
-        short = 'l',
-        long,
-        conflicts_with = "filter-group",
-        help_heading = "filters",
-        default_value_t = 50
-    )]
-    pub min_aligned_len: u32,
+    #[arg(short = 'l', long, help_heading = "filters", default_value_t = FilterArg::DefaultU32(50), value_parser = parse_filter_u32)]
+    pub min_aligned_len: FilterArg,
 
     /// only alignments to this strand will be allowed; options are (fw /+, rc/-, or both/.)
     #[arg(
         short = 'd',
         long,
-        conflicts_with = "filter-group",
         help_heading = "filters",
         default_value_t = bio_types::strand::Strand::Unknown,
         value_parser = parse_strand
