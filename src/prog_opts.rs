@@ -213,11 +213,11 @@ pub struct Args {
     /// sequencing technology in which to expect reads if using mapping based mode
     #[arg(
         long, 
-        conflicts_with = "alignments", 
         help_heading = "raw read mode",
+        required_unless_present = "alignments",
         value_parser = clap::value_parser!(SequencingTech)
     )]
-    pub seq_tech: SequencingTech,
+    pub seq_tech: Option<SequencingTech>,
 
     /// location where output quantification file should be written
     #[arg(short, long, required = true)]

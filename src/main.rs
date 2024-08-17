@@ -160,8 +160,11 @@ fn main() -> anyhow::Result<()> {
             .with_cigar();
 
         let aligner = match args.seq_tech {
-            SequencingTech::OntCDNA | SequencingTech::OntDRNA => aligner.map_ont(),
-            SequencingTech::PacBio => aligner.map_pb(),
+            Some(SequencingTech::OntCDNA) | Some(SequencingTech::OntDRNA) => aligner.map_ont(),
+            Some(SequencingTech::PacBio) => aligner.map_pb(),
+            None => {
+                anyhow::bail!("sequencing tech must be provided in read mode, but it was not!");
+            }
         };
 
         let mut aligner = aligner
