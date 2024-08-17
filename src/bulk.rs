@@ -193,8 +193,12 @@ pub fn quantify_bulk_alignments_raw_reads(
 
     type AlignmentGroupInfo = (Vec<AlnInfo>, Vec<f32>);
     let mut store = std::thread::scope(|s| {
-        let (read_sender, read_receiver): (Sender<Vec<u8>>, Receiver<Vec<u8>>) =
-            bounded(args.threads * 10);
+        const READ_CHUNK_SIZE: usize = 100;
+
+        let (read_sender, read_receiver): (
+            Sender<(Vec<u8>, Vec<usize>)>,
+            Receiver<(Vec<u8>, Vec<usize>)>,
+        ) = bounded(args.threads * 10);
         let (aln_group_sender, aln_group_receiver): (
             Sender<AlignmentGroupInfo>,
             Receiver<AlignmentGroupInfo>,
@@ -204,12 +208,39 @@ pub fn quantify_bulk_alignments_raw_reads(
         let producer = s.spawn(move || {
             let mut reader = parse_fastx_file(read_path).expect("valid path/file");
             let mut ctr = 0_usize;
+            let mut chunk_size = 0_usize;
+            let mut reads_vec: Vec<u8> = Vec::new();
+            let mut read_boundaries: Vec<usize> = Vec::new();
+            read_boundaries.push(0);
+
             while let Some(result) = reader.next() {
                 let record = result.expect("Error reading record");
-                read_sender
-                    .send(record.seq().to_vec())
-                    .expect("Error sending sequence");
+
+                chunk_size += 1;
                 ctr += 1;
+
+                // put this read on the current chunk
+                reads_vec.extend_from_slice(&record.seq());
+                read_boundaries.push(reads_vec.len());
+
+                // send off the next chunks of reads to a thread
+                if chunk_size >= READ_CHUNK_SIZE {
+                    read_sender
+                        .send((reads_vec.clone(), read_boundaries.clone()))
+                        .expect("Error sending sequence");
+                    // prepare for the next chunk
+                    reads_vec.clear();
+                    read_boundaries.clear();
+                    read_boundaries.push(0);
+                    chunk_size = 0;
+                }
+            }
+
+            // if any reads remain, send them off
+            if chunk_size > 0 {
+                read_sender
+                    .send((reads_vec, read_boundaries))
+                    .expect("Error sending sequence");
             }
             ctr
         });
@@ -225,19 +256,29 @@ pub fn quantify_bulk_alignments_raw_reads(
                 let aln_group_sender = aln_group_sender.clone();
                 s.spawn(move || {
                     let mut discard_table = DiscardTable::new();
-                    for seq in receiver {
-                        let map_res_opt = loc_aligner.map(&seq, true, false, None, None);
-                        let map_res = map_res_opt.ok();
-                        if let Some(mut mappings) = map_res {
-                            let (ag, aprobs) = filter.filter(
-                                &mut discard_table,
-                                header,
-                                my_txp_info_view,
-                                &mut mappings,
+                    // get the next chunk of reads
+                    for (seq, boundaries) in receiver {
+                        // iterate over every read
+                        for window in boundaries.windows(2) {
+                            let map_res_opt = loc_aligner.map(
+                                &seq[window[0]..window[1]],
+                                true,
+                                false,
+                                None,
+                                None,
                             );
-                            aln_group_sender
-                                .send((ag, aprobs))
-                                .expect("Error sending alignment group");
+                            let map_res = map_res_opt.ok();
+                            if let Some(mut mappings) = map_res {
+                                let (ag, aprobs) = filter.filter(
+                                    &mut discard_table,
+                                    header,
+                                    my_txp_info_view,
+                                    &mut mappings,
+                                );
+                                aln_group_sender
+                                    .send((ag, aprobs))
+                                    .expect("Error sending alignment group");
+                            }
                         }
                     }
                     // NOTE: because `clone()` clones the raw pointer, if it is

@@ -86,6 +86,7 @@ fn get_aligner_from_args(
     info!("created aligner index opts : {:?}", aligner.idxopt);
     // best 100 hits
     aligner.mapopt.best_n = 100;
+    aligner.mapopt.seed = 11;
 
     let mmi: mm_ffi::mm_idx_t = unsafe { **aligner.idx.as_ref().unwrap() };
     let n_seq = mmi.n_seq;
