@@ -582,7 +582,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
 
     #[inline(always)]
     pub fn num_aligned_reads(&self) -> usize {
-        self.len().saturating_sub(1)
+        self.len()
     }
 
     #[inline(always)]
