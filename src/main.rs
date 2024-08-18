@@ -5,6 +5,7 @@ use anyhow::Context;
 
 use core::ffi;
 use minimap2_sys as mm_ffi;
+use num_format::{Locale, ToFormattedString};
 use std::{fs::File, io};
 
 use tracing::info;
@@ -28,19 +29,17 @@ use crate::util::normalize_probability::normalize_read_probs;
 use crate::util::oarfish_types::{AlignmentFilters, TranscriptInfo};
 use crate::util::{binomial_probability::binomial_continuous_prob, kde_utils};
 
-fn get_aligner_from_args(
-    args: &Args,
-) -> anyhow::Result<(
+type HeaderReaderAligner = (
     noodles_sam::header::Header,
     Option<bam::io::Reader<bgzf::MultithreadedReader<File>>>,
     Option<minimap2::Aligner>,
-)> {
+);
+
+fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
     info!("read-based mode");
-    info!("reads = {:?}", &args.reads);
-    info!("reference = {:?}", &args.reference);
 
     // set the number of indexing threads
-    let idx_threads = &args.threads.clamp(1, 8);
+    let idx_threads = &args.threads.max(1);
 
     // if the user requested to write the output index to disk, prepare for that
     let idx_out_as_str = args.index_out.clone().map_or(String::new(), |x| {
@@ -84,13 +83,17 @@ fn get_aligner_from_args(
     };
 
     info!("created aligner index opts : {:?}", aligner.idxopt);
-    // best 100 hits
+    // get the best 100 hits
     aligner.mapopt.best_n = 100;
     aligner.mapopt.seed = 11;
 
     let mmi: mm_ffi::mm_idx_t = unsafe { **aligner.idx.as_ref().unwrap() };
     let n_seq = mmi.n_seq;
-    info!("index has {} sequences", n_seq);
+
+    info!(
+        "index contains {} sequences",
+        n_seq.to_formatted_string(&Locale::en)
+    );
 
     let mut header = noodles_sam::header::Header::builder();
 
@@ -288,7 +291,7 @@ fn main() -> anyhow::Result<()> {
     }
     info!(
         "parsed reference information for {} transcripts.",
-        txps.len()
+        txps.len().to_formatted_string(&Locale::en)
     );
 
     if args.single_cell {
