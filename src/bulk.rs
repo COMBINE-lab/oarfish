@@ -33,8 +33,15 @@ fn get_json_info(args: &Args, emi: &EMInfo, seqcol_digest: &str) -> serde_json::
         "no_coverage"
     };
 
+    let source = if args.alignments.is_some() {
+        "from_bam"
+    } else {
+        "from_raw_reads"
+    };
+
     json!({
         "prob_model" : prob,
+        "alignment_source" : source,
         "bin_width" : args.bin_width,
         "filter_options" : &emi.eq_map.filter_opts,
         "discard_table" : &emi.eq_map.discard_table,
