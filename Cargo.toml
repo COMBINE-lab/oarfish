@@ -64,7 +64,7 @@ sprs = "0.11.1"
 minimap2-sys = { version = "0.1.19", features = ["simde"] }
 minimap2 = { version = "0.1.20", features = [
   "simde",
-], git = "https://github.com/rob-p/minimap2-rs.git", branch = "alignment-score" }
+], git = "https://github.com/jguhlin/minimap2-rs.git", branch = "alignment-score" }
 needletail = "0.5.1"
 negative-impl = "0.1.5"
 
