@@ -12,7 +12,7 @@
       
       
       <link rel="icon" href="assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.5.7">
+      <meta name="generator" content="mkdocs-1.6.0, mkdocs-material-9.5.32">
     
     
       
@@ -20,7 +20,7 @@
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.f2e4d321.min.css">
+      <link rel="stylesheet" href="assets/stylesheets/main.3cba04c6.min.css">
       
         
         <link rel="stylesheet" href="assets/stylesheets/palette.06af60db.min.css">
@@ -167,7 +167,7 @@
       
     </form>
     <div class="md-search__output">
-      <div class="md-search__scrollwrap" data-md-scrollfix>
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
         <div class="md-search-result" data-md-component="search-result">
           <div class="md-search-result__meta">
             Initializing search
@@ -278,9 +278,27 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#input-to-oarfish" class="md-nav__link">
+    <span class="md-ellipsis">
+      Input to oarfish
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#choosing-minimap2-alignment-options" class="md-nav__link">
     <span class="md-ellipsis">
       Choosing minimap2 alignment options
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-notes-on-oarfish-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Other notes on oarfish parameters
     </span>
   </a>
   
@@ -357,9 +375,27 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#input-to-oarfish" class="md-nav__link">
+    <span class="md-ellipsis">
+      Input to oarfish
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#choosing-minimap2-alignment-options" class="md-nav__link">
     <span class="md-ellipsis">
       Choosing minimap2 alignment options
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-notes-on-oarfish-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      Other notes on oarfish parameters
     </span>
   </a>
   
@@ -453,10 +489,15 @@ filters:
   -d, --strand-filter &lt;STRAND_FILTER&gt;
           only alignments to this strand will be allowed; options are (fw /+, rc/-, or both/.) [default: .]
 </code></pre>
-<p>The input should be a <code>bam</code> format file, with reads aligned using <a href="https://github.com/lh3/minimap2"><code>minimap2</code></a> against the <em>transcriptome</em>. That is, <code>oarfish</code> does not currently handle spliced alignment to the genome.  Further, the output alignments should be name sorted (the default order produced by <code>minimap2</code> should be fine). <em>Specifically</em>, <code>oarfish</code> relies on the existence of the <code>AS</code> tag in the <code>bam</code> records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read.  The parameters above should be explained by their relevant help option, but the 
-<code>-d</code>/<code>--strand-filter</code> is worth noting explicitly. By default, alignments to both strands of a transcript will be considered valid.  You can use this option to allow only alignments in the specified orientation; for example 
-<code>-d fw</code> will allow only alignments in the forward orientation and <code>-d rc</code> will allow only alignments in the reverse-complement orientation and <code>-d both</code> (the default) will allow both.  The <code>-d</code> filter, if explicitly provided, overrides 
-the orientation filter in any provided "filter group" so e.g. passing <code>--filter-group no-filters -d fw</code> will disable other filters, but will still only admit alignments in the forward orientation.</p>
+<h3 id="input-to-oarfish">Input to <code>oarfish</code></h3>
+<p>The input should be a <code>bam</code> format file, with reads aligned using
+<a href="https://github.com/lh3/minimap2"><code>minimap2</code></a> against the <em>transcriptome</em>. That
+is, <code>oarfish</code> does not currently handle spliced alignment to the genome.
+Further, the output alignments should be name sorted (the default order
+produced by <code>minimap2</code> should be fine). <em>Specifically</em>, <code>oarfish</code> relies on the
+existence of the <code>AS</code> tag in the <code>bam</code> records that encodes the alignment score
+in order to obtain the score for each alignment (which is used in probabilistic
+read assignment), and the score of the best alignment, overall, for each read.</p>
 <h3 id="choosing-minimap2-alignment-options">Choosing <code>minimap2</code> alignment options</h3>
 <p>Since the purpose of <code>oarfish</code> is to estimate transcript abundance from a collection of alignments to the target transcriptome, it is important that the alignments are generated 
 in a fashion that is compatible with this goal.  Primarily, this means that the aligner should be configured to report as many optimal (and near-optimal) alignments as exist, so that 
@@ -470,6 +511,20 @@ later processing by <code>oarfish</code></p>
 accuracy of <code>oarfish</code>, but it may make alignment take longer and produce a larger <code>bam</code> file.</p>
 <p><strong>Note (2)</strong>: For very high quality PacBio data, it may be most appropriate to use the <code>-ax map-hifi</code> flag in place of <code>-ax pacbio</code>.  We are currently evaluating the effect of this option, and also welcome feedback if you 
 have experiences to share on the use of data aligned with these different flags with <code>oarfish</code>.</p>
+<h3 id="other-notes-on-oarfish-parameters">Other notes on <code>oarfish</code> parameters</h3>
+<p>The parameters above should be explained by their relevant help option, but the
+<code>-d</code>/<code>--strand-filter</code> is worth noting explicitly. By default, alignments to
+both strands of a transcript will be considered valid.  You can use this option
+to allow only alignments in the specified orientation; for example <code>-d fw</code> will
+allow only alignments in the forward orientation and <code>-d rc</code> will allow only
+alignments in the reverse-complement orientation and <code>-d both</code> (the default)
+will allow both.  The <code>-d</code> filter, if explicitly provided, overrides the
+orientation filter in any provided "filter group" so e.g. passing
+<code>--filter-group no-filters -d fw</code> will disable other filters, but will still
+only admit alignments in the forward orientation.</p>
+<p><strong>In general</strong>, if you apply a <code>filter-group</code>, the group options will be applied first
+and then any explicitly provided options given will override the corresponding option 
+in the <code>filter-group</code>.</p>
 <h3 id="inferential-replicates">Inferential Replicates</h3>
 <p><code>oarfish</code> has the ability to compute <a href="https://academic.oup.com/nar/article/47/18/e105/5542870"><em>inferential replicates</em></a> of its quantification estimates. This is performed by bootstrap sampling of the original read mappings, and subsequently performing inference under each resampling.  These inferential replicates allow assessing the variance of the point estimate of transcript abundance, and can lead to improved differential analysis at the transcript level, if using a differential testing tool that takes advantage of this information. The generation of inferential replicates is controlled by the <code>--num-bootstraps</code> argument to <code>oarfish</code>.  The default value is <code>0</code>, meaning that no inferential replicates are generated.  If you set this to some value greater than <code>0</code>, the the requested number of inferential replicates will be generated. It is recommended, if generating inferential replicates, to run <code>oarfish</code> with multiple threads, since replicate generation is highly-parallelized. Finally, if replicates are generated, they are written to a <a href="https://parquet.apache.org/"><code>Parquet</code></a>, starting with the specified output stem and ending with <code>infreps.pq</code>.</p>
 <h3 id="output">Output</h3>
@@ -540,7 +595,7 @@ have experiences to share on the use of data aligned with these different flags 
     <script id="__config" type="application/json">{"base": ".", "features": [], "search": "assets/javascripts/workers/search.b8dbb3d2.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
-      <script src="assets/javascripts/bundle.caa56a14.min.js"></script>
+      <script src="assets/javascripts/bundle.471ce7a9.min.js"></script>
       
         <script src="javascripts/mathjax.js"></script>
       
