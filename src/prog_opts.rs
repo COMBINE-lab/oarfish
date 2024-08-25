@@ -28,6 +28,7 @@ pub enum SequencingTech {
     OntCDNA,
     OntDRNA,
     PacBio,
+    PacBioHifi,
 }
 
 impl FromStr for SequencingTech {
@@ -40,6 +41,8 @@ impl FromStr for SequencingTech {
             "ont-drna" => Ok(SequencingTech::OntDRNA),
             "pb" => Ok(SequencingTech::PacBio),
             "pacbio" => Ok(SequencingTech::PacBio),
+            "pb-hifi" => Ok(SequencingTech::PacBioHifi),
+            "pacbio-hifi" => Ok(SequencingTech::PacBioHifi),
             x => Err(format!("Unknown protocol type {:}", x)),
         }
     }
@@ -245,6 +248,10 @@ pub struct Args {
         value_parser = clap::value_parser!(SequencingTech)
     )]
     pub seq_tech: Option<SequencingTech>,
+
+    /// maximum number of secondary mappings to consider when mapping reads to the transcriptome
+    #[arg(long, default_value_t = 100, requires = "reads")]
+    pub best_n: usize,
 
     /// location where output quantification file should be written
     #[arg(short, long, required = true)]

@@ -77,6 +77,18 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
                 idx_output,
             )
             .expect("could not construct minimap2 index"),
+        Some(SequencingTech::PacBioHifi) => minimap2::Aligner::builder()
+            .with_index_threads(*idx_threads)
+            .with_cigar()
+            .map_hifi()
+            .with_index(
+                &args
+                    .reference
+                    .clone()
+                    .expect("must provide reference sequence"),
+                idx_output,
+            )
+            .expect("could not construct minimap2 index"),
         None => {
             anyhow::bail!("sequencing tech must be provided in read mode, but it was not!");
         }
@@ -84,7 +96,7 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
 
     info!("created aligner index opts : {:?}", aligner.idxopt);
     // get the best 100 hits
-    aligner.mapopt.best_n = 100;
+    aligner.mapopt.best_n = args.best_n as i32;
     aligner.mapopt.seed = 11;
 
     let mmi: mm_ffi::mm_idx_t = unsafe { **aligner.idx.as_ref().unwrap() };
