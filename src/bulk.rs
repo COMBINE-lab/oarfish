@@ -183,6 +183,82 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
     perform_inference_and_write_output(header, &mut store, txps, txps_name, seqcol_digest, args)
 }
 
+#[derive(Clone)]
+struct ReadChunkWithNames {
+    read_seq: Vec<u8>,
+    read_names: Vec<u8>,
+    seq_sep: Vec<usize>,
+    name_sep: Vec<usize>,
+}
+
+impl ReadChunkWithNames {
+    pub fn new() -> Self {
+        Self {
+            read_seq: Vec::new(),
+            read_names: Vec::new(),
+            seq_sep: vec![0usize],
+            name_sep: vec![0usize],
+        }
+    }
+
+    #[inline(always)]
+    pub fn add_id_and_read(&mut self, id: &[u8], read: &[u8]) {
+        self.read_names.extend_from_slice(id);
+        self.read_names.push(b'\0');
+        self.read_seq.extend_from_slice(read);
+        self.name_sep.push(self.read_names.len());
+        self.seq_sep.push(self.read_seq.len());
+    }
+
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.read_names.clear();
+        self.read_seq.clear();
+        self.name_sep.clear();
+        self.name_sep.push(0);
+        self.seq_sep.clear();
+        self.seq_sep.push(0);
+    }
+
+    pub fn iter(&self) -> ReadChunkIter {
+        ReadChunkIter {
+            chunk: self,
+            pos: 0,
+        }
+    }
+}
+
+struct ReadChunkIter<'a> {
+    chunk: &'a ReadChunkWithNames,
+    pos: usize,
+}
+
+impl<'a> Iterator for ReadChunkIter<'a> {
+    type Item = (&'a [u8], &'a [u8]);
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos < self.chunk.seq_sep.len() - 1 {
+            let i = self.pos;
+            let name: &[u8] =
+                &self.chunk.read_names[self.chunk.name_sep[i]..self.chunk.name_sep[i + 1]];
+            let seq: &[u8] = &self.chunk.read_seq[self.chunk.seq_sep[i]..self.chunk.seq_sep[i + 1]];
+            self.pos += 1;
+            Some((name, seq))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let rem = (self.chunk.seq_sep.len() - 1) - self.pos;
+        (rem, Some(rem))
+    }
+}
+
+impl<'a> ExactSizeIterator for ReadChunkIter<'a> {}
+
 #[allow(clippy::too_many_arguments)]
 pub fn quantify_bulk_alignments_raw_reads(
     header: &noodles_sam::Header,
@@ -207,7 +283,7 @@ pub fn quantify_bulk_alignments_raw_reads(
     // and the in memory alignment store populator
     let map_threads = args.threads.saturating_sub(2).max(1);
 
-    type ReadGroup = (Vec<u8>, Vec<usize>);
+    type ReadGroup = ReadChunkWithNames;
     type AlignmentGroupInfo = (Vec<AlnInfo>, Vec<f32>, Vec<usize>);
     let mut store = std::thread::scope(|s| {
         const READ_CHUNK_SIZE: usize = 200;
@@ -222,12 +298,11 @@ pub fn quantify_bulk_alignments_raw_reads(
 
         // Producer thread: reads sequences and sends them to the channel
         let producer = s.spawn(move || {
-            let mut reader = parse_fastx_file(read_path).expect("valid path/file");
+            let mut reader =
+                parse_fastx_file(read_path).expect("valid path/file to read sequences");
             let mut ctr = 0_usize;
             let mut chunk_size = 0_usize;
-            let mut reads_vec: Vec<u8> = Vec::new();
-            let mut read_boundaries: Vec<usize> = Vec::new();
-            read_boundaries.push(0);
+            let mut read_chunk = ReadChunkWithNames::new();
 
             while let Some(result) = reader.next() {
                 let record = result.expect("Error reading record");
@@ -236,18 +311,15 @@ pub fn quantify_bulk_alignments_raw_reads(
                 ctr += 1;
 
                 // put this read on the current chunk
-                reads_vec.extend_from_slice(&record.seq());
-                read_boundaries.push(reads_vec.len());
+                read_chunk.add_id_and_read(record.id(), &record.seq());
 
                 // send off the next chunks of reads to a thread
                 if chunk_size >= READ_CHUNK_SIZE {
                     read_sender
-                        .send((reads_vec.clone(), read_boundaries.clone()))
+                        .send(read_chunk.clone())
                         .expect("Error sending sequence");
                     // prepare for the next chunk
-                    reads_vec.clear();
-                    read_boundaries.clear();
-                    read_boundaries.push(0);
+                    read_chunk.clear();
                     chunk_size = 0;
                 }
             }
@@ -255,7 +327,7 @@ pub fn quantify_bulk_alignments_raw_reads(
             // if any reads remain, send them off
             if chunk_size > 0 {
                 read_sender
-                    .send((reads_vec, read_boundaries))
+                    .send(read_chunk)
                     .expect("Error sending sequence");
             }
             ctr
@@ -280,17 +352,12 @@ pub fn quantify_bulk_alignments_raw_reads(
                     aln_group_boundaries.push(0);
 
                     // get the next chunk of reads
-                    for (seq, boundaries) in receiver {
+                    for read_chunk in receiver {
                         // iterate over every read
-                        for window in boundaries.windows(2) {
+                        for (name, seq) in read_chunk.iter() {
                             // map the next read, with cigar string
-                            let map_res_opt = loc_aligner.map(
-                                &seq[window[0]..window[1]],
-                                true,
-                                false,
-                                None,
-                                None,
-                            );
+                            let map_res_opt =
+                                loc_aligner.map_with_name(name, seq, true, false, None, None);
                             if let Ok(mut mappings) = map_res_opt {
                                 let (ag, aprobs) = filter.filter(
                                     &mut discard_table,

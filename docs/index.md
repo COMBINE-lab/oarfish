@@ -52,10 +52,18 @@ filters:
           only alignments to this strand will be allowed; options are (fw /+, rc/-, or both/.) [default: .]
 ```
 
-The input should be a `bam` format file, with reads aligned using [`minimap2`](https://github.com/lh3/minimap2) against the _transcriptome_. That is, `oarfish` does not currently handle spliced alignment to the genome.  Further, the output alignments should be name sorted (the default order produced by `minimap2` should be fine). _Specifically_, `oarfish` relies on the existence of the `AS` tag in the `bam` records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read.  The parameters above should be explained by their relevant help option, but the 
-`-d`/`--strand-filter` is worth noting explicitly. By default, alignments to both strands of a transcript will be considered valid.  You can use this option to allow only alignments in the specified orientation; for example 
-`-d fw` will allow only alignments in the forward orientation and `-d rc` will allow only alignments in the reverse-complement orientation and `-d both` (the default) will allow both.  The `-d` filter, if explicitly provided, overrides 
-the orientation filter in any provided "filter group" so e.g. passing `--filter-group no-filters -d fw` will disable other filters, but will still only admit alignments in the forward orientation.
+
+### Input to `oarfish`
+
+The input should be a `bam` format file, with reads aligned using
+[`minimap2`](https://github.com/lh3/minimap2) against the _transcriptome_. That
+is, `oarfish` does not currently handle spliced alignment to the genome.
+Further, the output alignments should be name sorted (the default order
+produced by `minimap2` should be fine). _Specifically_, `oarfish` relies on the
+existence of the `AS` tag in the `bam` records that encodes the alignment score
+in order to obtain the score for each alignment (which is used in probabilistic
+read assignment), and the score of the best alignment, overall, for each read.
+
 
 ### Choosing `minimap2` alignment options
 
@@ -72,6 +80,23 @@ accuracy of `oarfish`, but it may make alignment take longer and produce a large
 
 **Note (2)**: For very high quality PacBio data, it may be most appropriate to use the `-ax map-hifi` flag in place of `-ax pacbio`.  We are currently evaluating the effect of this option, and also welcome feedback if you 
 have experiences to share on the use of data aligned with these different flags with `oarfish`.
+
+### Other notes on `oarfish` parameters
+
+The parameters above should be explained by their relevant help option, but the
+`-d`/`--strand-filter` is worth noting explicitly. By default, alignments to
+both strands of a transcript will be considered valid.  You can use this option
+to allow only alignments in the specified orientation; for example `-d fw` will
+allow only alignments in the forward orientation and `-d rc` will allow only
+alignments in the reverse-complement orientation and `-d both` (the default)
+will allow both.  The `-d` filter, if explicitly provided, overrides the
+orientation filter in any provided "filter group" so e.g. passing
+`--filter-group no-filters -d fw` will disable other filters, but will still
+only admit alignments in the forward orientation.
+
+**In general**, if you apply a `filter-group`, the group options will be applied first
+and then any explicitly provided options given will override the corresponding option 
+in the `filter-group`.
 
 ### Inferential Replicates
 
