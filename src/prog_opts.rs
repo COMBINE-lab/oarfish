@@ -250,7 +250,7 @@ pub struct Args {
     pub seq_tech: Option<SequencingTech>,
 
     /// maximum number of secondary mappings to consider when mapping reads to the transcriptome
-    #[arg(long, default_value_t = 100, requires = "reads")]
+    #[arg(long, default_value_t = 100, requires = "reads", help_heading = "raw read mode")]
     pub best_n: usize,
 
     /// location where output quantification file should be written
