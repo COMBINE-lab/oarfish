@@ -177,7 +177,7 @@ pub fn binomial_probability(
     normalized_prob
 }
 
-pub fn binomial_continuous_prob(txps: &mut Vec<TranscriptInfo>, bins: &u32, threads: usize) {
+pub fn binomial_continuous_prob(txps: &mut [TranscriptInfo], bins: &u32, threads: usize) {
     use tracing::info;
     use tracing::info_span;
 

@@ -11,11 +11,202 @@ use serde::Serialize;
 use typed_builder::TypedBuilder;
 
 use bio_types::strand::Strand;
+use minimap2_temp as minimap2;
 use noodles_sam as sam;
 use sam::{alignment::record::data::field::tag::Tag as AlnTag, Header};
 
 #[allow(unused_imports)]
 use tracing::{error, info, warn};
+
+pub trait AlnRecordLike {
+    fn opt_sequence_len(&self) -> Option<usize>;
+    fn is_reverse_complemented(&self) -> bool;
+    fn is_unmapped(&self) -> bool;
+    fn ref_id(&self, header: &Header) -> anyhow::Result<usize>;
+    fn aln_span(&self) -> Option<usize>;
+    fn aln_score(&self) -> Option<i64>;
+    fn aln_start(&self) -> u32;
+    fn aln_end(&self) -> u32;
+    fn is_supp(&self) -> bool;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CigarOp {
+    Match,
+    Insertion,
+    Deletion,
+    Skip,
+    SoftClip,
+    HardClip,
+    Pad,
+    SequenceMatch,
+    SequenceMismatch,
+}
+
+impl From<u8> for CigarOp {
+    fn from(e: u8) -> Self {
+        match e {
+            0 => CigarOp::Match,
+            1 => CigarOp::Insertion,
+            2 => CigarOp::Deletion,
+            3 => CigarOp::Skip,
+            4 => CigarOp::SoftClip,
+            5 => CigarOp::HardClip,
+            6 => CigarOp::Pad,
+            7 => CigarOp::SequenceMatch,
+            8 => CigarOp::SequenceMismatch,
+            x => {
+                error!("invalid cigar code {}", x);
+                CigarOp::Skip
+            }
+        }
+    }
+}
+
+/// from noodles: https://docs.rs/noodles-sam/latest/src/noodles_sam/alignment/record/cigar/op/kind.rs.html
+impl CigarOp {
+    #[allow(dead_code)]
+    pub fn consumes_read(&self) -> bool {
+        matches!(
+            self,
+            Self::Match
+                | Self::Insertion
+                | Self::SoftClip
+                | Self::SequenceMatch
+                | Self::SequenceMismatch
+        )
+    }
+
+    pub fn consumes_reference(&self) -> bool {
+        matches!(
+            self,
+            Self::Match
+                | Self::Deletion
+                | Self::Skip
+                | Self::SequenceMatch
+                | Self::SequenceMismatch
+        )
+    }
+}
+
+impl AlnRecordLike for minimap2::Mapping {
+    fn opt_sequence_len(&self) -> Option<usize> {
+        self.query_len.map(|x| x.get() as usize)
+    }
+
+    fn is_reverse_complemented(&self) -> bool {
+        self.strand == minimap2::Strand::Reverse
+    }
+
+    fn is_unmapped(&self) -> bool {
+        self.target_name.is_none()
+    }
+
+    fn ref_id(&self, _header: &Header) -> anyhow::Result<usize> {
+        if let Some(ref tgt_name) = self.target_name {
+            let tgt_str = tgt_name.as_bytes();
+            if let Some(id) = _header.reference_sequences().get_index_of(tgt_str) {
+                return Ok(id);
+            }
+            anyhow::bail!("Could not get ref_id of target {}", tgt_name);
+        }
+        anyhow::bail!("Could not get ref_id of mapping without target name")
+    }
+
+    fn aln_span(&self) -> Option<usize> {
+        if let Some(ref aln) = self.alignment {
+            if let Some(ref cigar) = aln.cigar {
+                let mut span = 0_usize;
+                for (len, op) in cigar.iter() {
+                    let co: CigarOp = (*op).into();
+                    if co.consumes_reference() {
+                        span += *len as usize;
+                    }
+                }
+                return Some(span);
+            }
+            error!("Had an alignment but no CIGAR!");
+            return None;
+        }
+        None
+    }
+
+    fn aln_score(&self) -> Option<i64> {
+        if let Some(ref aln) = self.alignment {
+            aln.alignment_score.map(|x| x as i64)
+        } else {
+            None
+        }
+    }
+
+    fn aln_start(&self) -> u32 {
+        self.target_start.saturating_add(1) as u32
+    }
+    fn aln_end(&self) -> u32 {
+        self.target_end.saturating_add(1) as u32
+    }
+    fn is_supp(&self) -> bool {
+        self.is_supplementary
+    }
+}
+
+pub trait NoodlesAlignmentLike {}
+impl NoodlesAlignmentLike for noodles_sam::alignment::record_buf::RecordBuf {}
+
+/// implement the AlnRecordLike trait for the underlying noodles Record type
+impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for T {
+    fn opt_sequence_len(&self) -> Option<usize> {
+        Some(self.sequence().len())
+    }
+
+    fn is_reverse_complemented(&self) -> bool {
+        self.flags().expect("valid flags").is_reverse_complemented()
+    }
+
+    fn is_unmapped(&self) -> bool {
+        self.flags()
+            .expect("alignment record should have flags")
+            .is_unmapped()
+    }
+
+    fn ref_id(&self, header: &Header) -> anyhow::Result<usize> {
+        self.reference_sequence_id(header)
+            .unwrap()
+            .map_err(anyhow::Error::from)
+    }
+
+    fn aln_span(&self) -> Option<usize> {
+        self.alignment_span().expect("valid span")
+    }
+
+    fn aln_score(&self) -> Option<i64> {
+        self.data()
+            .get(&AlnTag::ALIGNMENT_SCORE)
+            .unwrap()
+            .expect("could not get value")
+            .as_int()
+    }
+
+    fn aln_start(&self) -> u32 {
+        self.alignment_start()
+            .unwrap()
+            .expect("valid aln start")
+            .get() as u32
+    }
+
+    fn aln_end(&self) -> u32 {
+        self.alignment_end()
+            .unwrap()
+            .expect("valid aln start")
+            .get() as u32
+    }
+
+    fn is_supp(&self) -> bool {
+        self.flags()
+            .expect("alignment record should have flags")
+            .is_supplementary()
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AlnInfo {
@@ -34,23 +225,13 @@ impl AlnInfo {
 }
 
 impl AlnInfo {
-    fn from_noodles_record<T: sam::alignment::record::Record>(
-        aln: &T,
-        aln_header: &Header,
-    ) -> Self {
+    fn from_aln_rec_like<T: AlnRecordLike>(aln: &T, aln_header: &Header) -> Self {
         Self {
-            ref_id: aln
-                .reference_sequence_id(aln_header)
-                .unwrap()
-                .expect("valid reference id") as u32,
-            start: aln
-                .alignment_start()
-                .unwrap()
-                .expect("valid aln start")
-                .get() as u32,
-            end: aln.alignment_end().unwrap().expect("valid aln end").get() as u32,
+            ref_id: aln.ref_id(aln_header).expect("valid ref_id") as u32,
+            start: aln.aln_start(),
+            end: aln.aln_end(),
             prob: 0.0_f64,
-            strand: if aln.flags().expect("valid flags").is_reverse_complemented() {
+            strand: if aln.is_reverse_complemented() {
                 Strand::Reverse
             } else {
                 Strand::Forward
@@ -107,7 +288,7 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     // perform the EM
     pub eq_map: &'eqm InMemoryAlignmentStore<'h>,
     // relevant information about each target transcript
-    pub txp_info: &'tinfo Vec<TranscriptInfo>,
+    pub txp_info: &'tinfo [TranscriptInfo],
     // maximum number of iterations the EM will run
     // before returning an estimate.
     pub max_iter: u32,
@@ -124,7 +305,7 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     pub kde_model: Option<KDEModel>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TranscriptInfo {
     pub len: NonZeroUsize,
     pub total_weight: f64,
@@ -254,6 +435,10 @@ impl<'h> InMemoryAlignmentStore<'h> {
     pub fn len(&self) -> usize {
         self.boundaries.len().saturating_sub(1)
     }
+
+    pub fn aggregate_discard_table(&mut self, table: &DiscardTable) {
+        self.discard_table.aggregate(table);
+    }
 }
 
 pub struct InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'h, 'b> {
@@ -359,7 +544,8 @@ impl<'h> InMemoryAlignmentStore<'h> {
         }
     }
 
-    pub fn add_group<T: sam::alignment::record::Record + std::fmt::Debug>(
+    #[inline(always)]
+    pub fn add_group<T: NoodlesAlignmentLike + sam::alignment::record::Record + std::fmt::Debug>(
         &mut self,
         txps: &mut [TranscriptInfo],
         ag: &mut Vec<T>,
@@ -367,19 +553,26 @@ impl<'h> InMemoryAlignmentStore<'h> {
         let (alns, as_probs) =
             self.filter_opts
                 .filter(&mut self.discard_table, self.aln_header, txps, ag);
+        self.add_filtered_group(&alns, &as_probs, txps);
+    }
+
+    #[inline(always)]
+    pub fn add_filtered_group(
+        &mut self,
+        alns: &[AlnInfo],
+        as_probs: &[f32],
+        txps: &mut [TranscriptInfo],
+    ) {
         if !alns.is_empty() {
-            self.alignments.extend_from_slice(&alns);
-            self.as_probabilities.extend_from_slice(&as_probs);
+            for a in alns.iter() {
+                let tid = a.ref_id as usize;
+                txps[tid].add_interval(a.start, a.end, 1.0_f64);
+            }
+            self.alignments.extend_from_slice(alns);
+            self.as_probabilities.extend_from_slice(as_probs);
             self.coverage_probabilities
                 .extend(vec![0.0_f64; alns.len()]);
             self.boundaries.push(self.alignments.len());
-            // @Susan-Zare : this is making things unreasonably slow. Perhaps
-            // we should avoid pushing actual ranges, and just compute the
-            // contribution of each range to the coverage online.
-            //for a in alns {
-            //    txps[a.ref_id as usize].ranges.push(a.start..a.end);
-            //}
-            //
         }
     }
 
@@ -390,7 +583,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
 
     #[inline(always)]
     pub fn num_aligned_reads(&self) -> usize {
-        self.len().saturating_sub(1)
+        self.len()
     }
 
     #[inline(always)]
@@ -406,7 +599,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
 
 /// The parameters controling the filters that will
 /// be applied to alignments
-#[derive(TypedBuilder, Debug, Serialize)]
+#[derive(TypedBuilder, Clone, Debug, Serialize)]
 pub struct AlignmentFilters {
     /// How far an alignment can start from the
     /// 5' end of the transcript and still be
@@ -454,7 +647,7 @@ pub struct DiscardTable {
 }
 
 impl DiscardTable {
-    fn new() -> Self {
+    pub fn new() -> Self {
         DiscardTable {
             discard_5p: 0,
             discard_3p: 0,
@@ -465,6 +658,17 @@ impl DiscardTable {
             discard_supp: 0,
             valid_best_aln: 0,
         }
+    }
+
+    pub fn aggregate(&mut self, other: &Self) {
+        self.discard_5p += other.discard_5p;
+        self.discard_3p += other.discard_3p;
+        self.discard_score += other.discard_score;
+        self.discard_aln_frac += other.discard_aln_frac;
+        self.discard_aln_len += other.discard_aln_len;
+        self.discard_ori += other.discard_ori;
+        self.discard_supp += other.discard_supp;
+        self.valid_best_aln += other.valid_best_aln;
     }
 }
 
@@ -552,11 +756,11 @@ impl AlignmentFilters {
     ///
     /// This function returns a vector of the `AlnInfo` structs for alignments
     /// that pass the filter, and the associated probabilities for each.
-    fn filter<T: sam::alignment::record::Record + std::fmt::Debug>(
+    pub fn filter<T: AlnRecordLike + std::fmt::Debug>(
         &mut self,
         discard_table: &mut DiscardTable,
         aln_header: &Header,
-        txps: &mut [TranscriptInfo],
+        txps: &[TranscriptInfo],
         ag: &mut Vec<T>,
     ) -> (Vec<AlnInfo>, Vec<f32>) {
         // track the best score of any alignment we've seen
@@ -575,46 +779,23 @@ impl AlignmentFilters {
         // so, here we explicitly look for a non-zero sequence.
         let seq_len = ag
             .iter()
-            .find_map(|x| {
-                let l = x.sequence().len();
-                if l > 0 {
-                    Some(l as u32)
-                } else {
-                    None
-                }
-            })
+            .find_map(|x| x.opt_sequence_len().map(|y| y as u32))
             .unwrap_or(0_u32);
 
         // apply the filter criteria to determine what alignments to retain
         ag.retain(|x| {
             // we ony want to retain mapped reads
-            if !x
-                .flags()
-                .expect("alignment record should have flags")
-                .is_unmapped()
-            {
-                let tid = x
-                    .reference_sequence_id(aln_header)
-                    .unwrap()
-                    .expect("valid tid");
+            if !x.is_unmapped() {
+                let tid = x.ref_id(aln_header).expect("valid ref id");
 
                 // get the alignment span
-                let aln_span = x.alignment_span().expect("valid span").unwrap() as u32;
+                let aln_span = x.aln_span().unwrap() as u32;
 
                 // get the alignment score, as computed by the aligner
-                let score = x
-                    .data()
-                    .get(&AlnTag::ALIGNMENT_SCORE)
-                    .unwrap()
-                    .expect("could not get value")
-                    .as_int()
-                    .unwrap_or(i32::MIN as i64) as i32;
+                let score = x.aln_score().unwrap_or(i32::MIN as i64) as i32;
 
                 // the alignment is to the - strand
-                let is_rc = x
-                    .flags()
-                    .expect("alignment record should have flags")
-                    .is_reverse_complemented();
+                let is_rc = x.is_reverse_complemented();
 
                 // if we are keeping only forward strand alignments
                 // filter this alignment if it is rc
@@ -639,10 +820,7 @@ impl AlignmentFilters {
                 // the alignment is supplementary
                 // *NOTE*: this removes "supplementary" alignments, *not*
                 // "secondary" alignments.
-                let is_supp = x
-                    .flags()
-                    .expect("alignment record should have flags")
-                    .is_supplementary();
+                let is_supp = x.is_supp();
                 if is_supp {
                     discard_table.discard_supp += 1;
                     return false;
@@ -656,24 +834,15 @@ impl AlignmentFilters {
                 }
 
                 // not too far from the 3' end
-                let filt_3p = (x
-                    .alignment_end()
-                    .unwrap()
-                    .expect("alignment record should have end position")
-                    .get() as i64)
-                    <= (txps[tid].len.get() as i64 - self.three_prime_clip);
+                let filt_3p =
+                    (x.aln_end() as i64) <= (txps[tid].len.get() as i64 - self.three_prime_clip);
                 if filt_3p {
                     discard_table.discard_3p += 1;
                     return false;
                 }
 
                 // not too far from the 5' end
-                let filt_5p = (x
-                    .alignment_start()
-                    .unwrap()
-                    .expect("alignment record should have a start position")
-                    .get() as u32)
-                    >= self.five_prime_clip;
+                let filt_5p = x.aln_start() >= self.five_prime_clip;
                 if filt_5p {
                     discard_table.discard_5p += 1;
                     return false;
@@ -720,19 +889,12 @@ impl AlignmentFilters {
         // get a vector of all of the scores
         let mut scores: Vec<i32> = ag
             .iter_mut()
-            .map(|a| {
-                a.data()
-                    .get(&AlnTag::ALIGNMENT_SCORE)
-                    .unwrap()
-                    .expect("could not get value")
-                    .as_int()
-                    .unwrap_or(0) as i32
-            })
+            .map(|a| a.aln_score().unwrap_or(0) as i32)
             .collect();
 
         let _min_allowed_score = self.score_threshold * mscore;
 
-        for (i, score) in scores.iter_mut().enumerate() {
+        for score in scores.iter_mut() {
             const SCORE_PROB_DENOM: f32 = 5.0;
             let fscore = *score as f32;
             let score_ok = (fscore * inv_max_score) >= self.score_threshold; //>= thresh_score;
@@ -740,28 +902,6 @@ impl AlignmentFilters {
                 //let f = ((fscore - mscore) / (mscore - min_allowed_score)) * SCORE_PROB_DENOM;
                 let f = (fscore - mscore) / SCORE_PROB_DENOM;
                 probabilities.push(f.exp());
-
-                let tid = ag[i]
-                    .reference_sequence_id(aln_header)
-                    .unwrap()
-                    .expect("valid transcript id");
-
-                // since we are retaining this alignment, then
-                // add it to the coverage of the the corresponding
-                // transcript.
-                txps[tid].add_interval(
-                    ag[i]
-                        .alignment_start()
-                        .unwrap()
-                        .expect("valid alignment start")
-                        .get() as u32,
-                    ag[i]
-                        .alignment_end()
-                        .unwrap()
-                        .expect("valid alignment end")
-                        .get() as u32,
-                    1.0_f64,
-                );
             } else {
                 *score = i32::MIN;
                 discard_table.discard_score += 1;
@@ -774,7 +914,7 @@ impl AlignmentFilters {
 
         (
             ag.iter()
-                .map(|x| AlnInfo::from_noodles_record(x, aln_header))
+                .map(|x| AlnInfo::from_aln_rec_like(x, aln_header))
                 .collect(),
             probabilities,
         )

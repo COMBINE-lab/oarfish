@@ -146,7 +146,7 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
 ) -> Vec<f64> {
     let eq_map = em_info.eq_map;
     let fops = &eq_map.filter_opts;
-    let tinfo: &Vec<TranscriptInfo> = em_info.txp_info;
+    let tinfo: &[TranscriptInfo] = em_info.txp_info;
     let max_iter = em_info.max_iter;
     let convergence_thresh = em_info.convergence_thresh;
     let total_weight: f64 = eq_map.num_aligned_reads() as f64;
@@ -327,7 +327,7 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
 
     let eq_map = em_info.eq_map;
     let fops = &eq_map.filter_opts;
-    let tinfo: &Vec<TranscriptInfo> = em_info.txp_info;
+    let tinfo: &[TranscriptInfo] = em_info.txp_info;
     let max_iter = em_info.max_iter;
     let convergence_thresh = em_info.convergence_thresh;
     let total_weight: f64 = eq_map.num_aligned_reads() as f64;

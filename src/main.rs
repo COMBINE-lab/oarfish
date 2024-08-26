@@ -2,213 +2,223 @@ use clap::Parser;
 use std::num::NonZeroUsize;
 
 use anyhow::Context;
-use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 
-use std::{fs::File, io, path::PathBuf};
-
+use core::ffi;
+use minimap2_sys as mm_ffi;
+use minimap2_temp as minimap2;
 use num_format::{Locale, ToFormattedString};
-use serde::Serialize;
-use serde_json::json;
+use std::{fs::File, io};
+
 use tracing::info;
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 
 use noodles_bam as bam;
 use noodles_bgzf as bgzf;
+use noodles_sam::header::record::value as header_val;
+use noodles_sam::header::record::value::Map as HeaderMap;
 
 mod alignment_parser;
 mod bootstrap;
+mod bulk;
 mod em;
+mod prog_opts;
+mod single_cell;
 mod util;
 
+use crate::prog_opts::{Args, FilterGroup, SequencingTech};
 use crate::util::normalize_probability::normalize_read_probs;
-use crate::util::oarfish_types::{
-    AlignmentFilters, EMInfo, InMemoryAlignmentStore, TranscriptInfo,
-};
-use crate::util::read_function::read_short_quant_vec;
-use crate::util::write_function::{write_infrep_file, write_output};
+use crate::util::oarfish_types::{AlignmentFilters, TranscriptInfo};
 use crate::util::{binomial_probability::binomial_continuous_prob, kde_utils};
 
-/// These represent different "meta-options", specific settings
-/// for all of the different filters that should be applied in
-/// different cases.
-#[derive(Clone, Debug, clap::ValueEnum, Serialize)]
-enum FilterGroup {
-    NoFilters,
-    NanocountFilters,
-}
+type HeaderReaderAligner = (
+    noodles_sam::header::Header,
+    Option<bam::io::Reader<bgzf::MultithreadedReader<File>>>,
+    Option<minimap2::Aligner>,
+);
 
-fn parse_strand(arg: &str) -> anyhow::Result<bio_types::strand::Strand> {
-    match arg {
-        "+" | "fw" | "FW" | "f" | "F" => Ok(bio_types::strand::Strand::Forward),
-        "-" | "rc" | "RC" | "r" | "R" => Ok(bio_types::strand::Strand::Reverse),
-        "." | "both" | "either" => Ok(bio_types::strand::Strand::Unknown),
-        _ => anyhow::bail!("Cannot parse {} as a valid strand type", arg),
+fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
+    info!("read-based mode");
+
+    // set the number of indexing threads
+    let idx_threads = &args.threads.max(1);
+
+    // if the user requested to write the output index to disk, prepare for that
+    let idx_out_as_str = args.index_out.clone().map_or(String::new(), |x| {
+        x.to_str()
+            .expect("could not convert PathBuf to &str")
+            .to_owned()
+    });
+    let idx_output = args.index_out.as_ref().map(|_| idx_out_as_str.as_str());
+
+    // create the aligner
+    let mut aligner = match args.seq_tech {
+        Some(SequencingTech::OntCDNA) | Some(SequencingTech::OntDRNA) => {
+            minimap2::Aligner::builder()
+                .with_index_threads(*idx_threads)
+                .with_cigar()
+                .map_ont()
+                .with_index(
+                    &args
+                        .reference
+                        .clone()
+                        .expect("must provide reference sequence"),
+                    idx_output,
+                )
+                .expect("could not construct minimap2 index")
+        }
+        Some(SequencingTech::PacBio) => minimap2::Aligner::builder()
+            .with_index_threads(*idx_threads)
+            .with_cigar()
+            .map_pb()
+            .with_index(
+                &args
+                    .reference
+                    .clone()
+                    .expect("must provide reference sequence"),
+                idx_output,
+            )
+            .expect("could not construct minimap2 index"),
+        Some(SequencingTech::PacBioHifi) => minimap2::Aligner::builder()
+            .with_index_threads(*idx_threads)
+            .with_cigar()
+            .map_hifi()
+            .with_index(
+                &args
+                    .reference
+                    .clone()
+                    .expect("must provide reference sequence"),
+                idx_output,
+            )
+            .expect("could not construct minimap2 index"),
+        None => {
+            anyhow::bail!("sequencing tech must be provided in read mode, but it was not!");
+        }
+    };
+
+    info!("created aligner index opts : {:?}", aligner.idxopt);
+    // get the best 100 hits
+    aligner.mapopt.best_n = args.best_n as i32;
+    aligner.mapopt.seed = 11;
+
+    let mmi: mm_ffi::mm_idx_t = unsafe { **aligner.idx.as_ref().unwrap() };
+    let n_seq = mmi.n_seq;
+
+    info!(
+        "index contains {} sequences",
+        n_seq.to_formatted_string(&Locale::en)
+    );
+
+    let mut header = noodles_sam::header::Header::builder();
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct SeqMetaData {
+        pub name: String,
+        pub length: u32,
+        pub is_alt: bool,
     }
+
+    // TODO: better creation of the header
+    for i in 0..mmi.n_seq {
+        let _seq = unsafe { *(mmi.seq).offset(i as isize) };
+        let c_str = unsafe { ffi::CStr::from_ptr(_seq.name) };
+        let rust_str = c_str.to_str().unwrap().to_string();
+        header = header.add_reference_sequence(
+            rust_str,
+            HeaderMap::<header_val::map::ReferenceSequence>::new(NonZeroUsize::try_from(
+                _seq.len as usize,
+            )?),
+        );
+    }
+
+    header = header.add_program(
+        "minimap2-rs",
+        HeaderMap::<header_val::map::Program>::default(),
+    );
+
+    let header = header.build();
+    Ok((header, None, Some(aligner)))
 }
 
-/// accurate transcript quantification from long-read RNA-seq data
-#[derive(Parser, Debug, Serialize)]
-#[clap(author, version, about, long_about = None)]
-struct Args {
-    /// be quiet (i.e. don't output log messages that aren't at least warnings)
-    #[arg(long, conflicts_with = "verbose")]
-    quiet: bool,
-
-    /// be verbose (i.e. output all non-developer logging messages)
-    #[arg(long)]
-    verbose: bool,
-
-    /// path to the file containing the input alignments
-    #[arg(short, long, required = true)]
-    alignments: PathBuf,
-    /// location where output quantification file should be written
-    #[arg(short, long, required = true)]
-    output: PathBuf,
-
-    #[arg(long, help_heading = "filters", value_enum)]
-    filter_group: Option<FilterGroup>,
-
-    /// maximum allowable distance of the right-most end of an alignment from the 3' transcript end
-    #[arg(short, long, conflicts_with = "filter-group", help_heading="filters", default_value_t = u32::MAX as i64)]
-    three_prime_clip: i64,
-    /// maximum allowable distance of the left-most end of an alignment from the 5' transcript end
-    #[arg(short, long, conflicts_with = "filter-group", help_heading="filters", default_value_t = u32::MAX)]
-    five_prime_clip: u32,
-    /// fraction of the best possible alignment score that a secondary alignment must have for
-    /// consideration
-    #[arg(
-        short,
-        long,
-        conflicts_with = "filter-group",
-        help_heading = "filters",
-        default_value_t = 0.95
-    )]
-    score_threshold: f32,
-    /// fraction of a query that must be mapped within an alignemnt to consider the alignemnt
-    /// valid
-    #[arg(
-        short,
-        long,
-        conflicts_with = "filter-group",
-        help_heading = "filters",
-        default_value_t = 0.5
-    )]
-    min_aligned_fraction: f32,
-    /// minimum number of nucleotides in the aligned portion of a read
-    #[arg(
-        short = 'l',
-        long,
-        conflicts_with = "filter-group",
-        help_heading = "filters",
-        default_value_t = 50
-    )]
-    min_aligned_len: u32,
-    /// only alignments to this strand will be allowed; options are (fw /+, rc/-, or both/.)
-    #[arg(
-        short = 'd',
-        long,
-        conflicts_with = "filter-group",
-        help_heading = "filters",
-        default_value_t = bio_types::strand::Strand::Unknown,
-        value_parser = parse_strand
-    )]
-    strand_filter: bio_types::strand::Strand,
-    /// apply the coverage model
-    #[arg(long, help_heading = "coverage model", value_parser)]
-    model_coverage: bool,
-    /// maximum number of iterations for which to run the EM algorithm
-    #[arg(long, help_heading = "EM", default_value_t = 1000)]
-    max_em_iter: u32,
-    /// maximum number of iterations for which to run the EM algorithm
-    #[arg(long, help_heading = "EM", default_value_t = 1e-3)]
-    convergence_thresh: f64,
-    /// maximum number of cores that the oarfish can use to obtain binomial probability
-    #[arg(short = 'j', long, default_value_t = 1)]
-    threads: usize,
-    /// location of short read quantification (if provided)
-    #[arg(short = 'q', long, help_heading = "EM")]
-    short_quant: Option<String>,
-    /// number of bootstrap replicates to produce to assess quantification uncertainty
-    #[arg(long, default_value_t = 0)]
-    num_bootstraps: u32,
-    /// width of the bins used in the coverage model
-    #[arg(short, long, help_heading = "coverage model", default_value_t = 100)]
-    bin_width: u32,
-    /// use a KDE model of the observed fragment length distribution
-    #[arg(short, long, hide = true)]
-    use_kde: bool,
-}
-
-fn get_filter_opts(args: &Args) -> AlignmentFilters {
+fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
     // set all of the filter options that the user
     // wants to apply.
     match args.filter_group {
         Some(FilterGroup::NoFilters) => {
             info!("disabling alignment filters.");
-            AlignmentFilters::builder()
-                .five_prime_clip(u32::MAX)
-                .three_prime_clip(i64::MAX)
-                .score_threshold(0_f32)
-                .min_aligned_fraction(0_f32)
-                .min_aligned_len(1_u32)
+            // override individual parameters if the user passed them in explicitly
+            let fpc = args
+                .five_prime_clip
+                .provided_or_u32("overriding 5' clip with user-provided value", u32::MAX);
+            let tpc = args
+                .three_prime_clip
+                .provided_or_i64("overriding 3' clip with user-provided value", i64::MAX);
+            let st = args
+                .score_threshold
+                .provided_or_f32("overriding score threshold with user-provided value", 0_f32);
+            let maf = args.min_aligned_fraction.provided_or_f32(
+                "overriding min aligned fraction with user-provided value",
+                0_f32,
+            );
+            let mal = args.min_aligned_len.provided_or_u32(
+                "overriding min aligned length with user-provided value",
+                1_u32,
+            );
+
+            Ok(AlignmentFilters::builder()
+                .five_prime_clip(fpc)
+                .three_prime_clip(tpc)
+                .score_threshold(st)
+                .min_aligned_fraction(maf)
+                .min_aligned_len(mal)
                 .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
-                .build()
+                .build())
         }
         Some(FilterGroup::NanocountFilters) => {
             info!("setting filters to nanocount defaults.");
-            AlignmentFilters::builder()
-                .five_prime_clip(u32::MAX)
-                .three_prime_clip(50_i64)
-                .score_threshold(0.95_f32)
-                .min_aligned_fraction(0.5_f32)
-                .min_aligned_len(50_u32)
+            // override individual parameters if the user passed them in explicitly
+            let fpc = args
+                .five_prime_clip
+                .provided_or_u32("overriding 5' clip with user-provided value", u32::MAX);
+            let tpc = args
+                .three_prime_clip
+                .provided_or_i64("overriding 3' clip with user-provided value", 50_i64);
+            let st = args.score_threshold.provided_or_f32(
+                "overriding score threshold with user-provided value",
+                0.95_f32,
+            );
+            let maf = args.min_aligned_fraction.provided_or_f32(
+                "overriding min aligned fraction with user-provided value",
+                0.5_f32,
+            );
+            let mal = args.min_aligned_len.provided_or_u32(
+                "overriding min aligned length with user-provided value",
+                50_u32,
+            );
+
+            Ok(AlignmentFilters::builder()
+                .five_prime_clip(fpc)
+                .three_prime_clip(tpc)
+                .score_threshold(st)
+                .min_aligned_fraction(maf)
+                .min_aligned_len(mal)
                 .which_strand(bio_types::strand::Strand::Forward)
                 .model_coverage(args.model_coverage)
-                .build()
+                .build())
         }
         None => {
             info!("setting user-provided filter parameters.");
-            AlignmentFilters::builder()
-                .five_prime_clip(args.five_prime_clip)
-                .three_prime_clip(args.three_prime_clip)
-                .score_threshold(args.score_threshold)
-                .min_aligned_fraction(args.min_aligned_fraction)
-                .min_aligned_len(args.min_aligned_len)
+            Ok(AlignmentFilters::builder()
+                .five_prime_clip(args.five_prime_clip.try_as_u32()?)
+                .three_prime_clip(args.three_prime_clip.try_as_i64()?)
+                .score_threshold(args.score_threshold.try_as_f32()?)
+                .min_aligned_fraction(args.min_aligned_fraction.try_as_f32()?)
+                .min_aligned_len(args.min_aligned_len.try_as_u32()?)
                 .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
-                .build()
+                .build())
         }
     }
-}
-
-/// Produce a [serde_json::Value] that encodes the relevant arguments and
-/// parameters of the run that we wish to record to file. Ultimately, this
-/// will be written to the corresponding `meta_info.json` file for this run.
-fn get_json_info(args: &Args, emi: &EMInfo, seqcol_digest: &str) -> serde_json::Value {
-    let prob = if args.model_coverage {
-        "scaled_binomial"
-    } else {
-        "no_coverage"
-    };
-
-    json!({
-        "prob_model" : prob,
-        "bin_width" : args.bin_width,
-        "filter_options" : &emi.eq_map.filter_opts,
-        "discard_table" : &emi.eq_map.discard_table,
-        "alignments": &args.alignments,
-        "output": &args.output,
-        "verbose": &args.verbose,
-        "quiet": &args.quiet,
-        "em_max_iter": &args.max_em_iter,
-        "em_convergence_thresh": &args.convergence_thresh,
-        "threads": &args.threads,
-        "filter_group": &args.filter_group,
-        "short_quant": &args.short_quant,
-        "num_bootstraps": &args.num_bootstraps,
-        "seqcol_digest": seqcol_digest
-    })
 }
 
 fn main() -> anyhow::Result<()> {
@@ -237,16 +247,24 @@ fn main() -> anyhow::Result<()> {
         reload_handle.modify(|filter| *filter = EnvFilter::new("TRACE"))?;
     }
 
-    let filter_opts = get_filter_opts(&args);
+    let filter_opts = get_filter_opts(&args)?;
 
-    let afile = File::open(&args.alignments)?;
-    let worker_count = NonZeroUsize::new(1.max(args.threads.saturating_sub(1)))
-        .expect("decompression threads >= 1");
-    let decoder = bgzf::MultithreadedReader::with_worker_count(worker_count, afile);
-    let mut reader = bam::io::Reader::from(decoder);
-    // parse the header, and ensure that the reads were mapped with minimap2 (as far as we
-    // can tell).
-    let header = alignment_parser::read_and_verify_header(&mut reader, &args.alignments)?;
+    let (header, reader, aligner) = if args.alignments.is_none() {
+        get_aligner_from_args(&args)?
+    } else {
+        let alignments = args.alignments.clone().unwrap();
+        let afile = File::open(&alignments)?;
+
+        let worker_count = NonZeroUsize::new(1.max(args.threads.saturating_sub(1)))
+            .expect("decompression threads >= 1");
+        let decoder = bgzf::MultithreadedReader::with_worker_count(worker_count, afile);
+        let mut reader = bam::io::Reader::from(decoder);
+        // parse the header, and ensure that the reads were mapped with minimap2 (as far as we
+        // can tell).
+        let header = alignment_parser::read_and_verify_header(&mut reader, &alignments)?;
+        (header, Some(reader), None)
+    };
+
     let seqcol_digest = {
         info!("calculating seqcol digest");
         let sc = seqcol_rs::SeqCol::from_sam_header(
@@ -286,112 +304,59 @@ fn main() -> anyhow::Result<()> {
     }
     info!(
         "parsed reference information for {} transcripts.",
-        txps.len()
+        txps.len().to_formatted_string(&Locale::en)
     );
 
-    // now parse the actual alignments for the reads and store the results
-    // in our in-memory stor
-    let mut store = InMemoryAlignmentStore::new(filter_opts, &header);
-    alignment_parser::parse_alignments(&mut store, &header, &mut reader, &mut txps)?;
+    if args.single_cell {
+        // TODO: do this better (quiet the EM during single-cell quant)
+        reload_handle.modify(|filter| {
+            *filter = if args.quiet {
+                EnvFilter::new("WARN")
+                    .add_directive("oarfish=warn".parse().unwrap())
+                    .add_directive("oarfish::single_cell=warn".parse().unwrap())
+            } else if args.verbose {
+                EnvFilter::new("TRACE")
+                    .add_directive("oarfish=info".parse().unwrap())
+                    .add_directive("oarfish::single_cell=trace".parse().unwrap())
+            } else {
+                // be quiet about normal things in single-cell mode
+                // e.g. EM iterations, and only print out info for
+                // oarfish::single_cell events.
+                EnvFilter::new("INFO")
+                    .add_directive("oarfish=warn".parse().unwrap())
+                    .add_directive("oarfish::single_cell=info".parse().unwrap())
+            }
+        })?;
 
-    // print discard table information in which the user might be interested.
-    info!("\ndiscard_table: \n{}\n", store.discard_table.to_table());
-
-    // no longer need the reader
-    drop(reader);
-
-    // if we are using the KDE, create that here.
-    let kde_opt: Option<kders::kde::KDEModel> = if args.use_kde {
-        Some(kde_utils::get_kde_model(&txps, &store)?)
+        single_cell::quantify_single_cell_from_collated_bam(
+            &header,
+            &filter_opts,
+            &mut reader.unwrap(),
+            &mut txps,
+            &args,
+            seqcol_digest,
+        )?;
+    } else if args.alignments.is_some() {
+        bulk::quantify_bulk_alignments_from_bam(
+            &header,
+            filter_opts,
+            &mut reader.unwrap(),
+            &mut txps,
+            &txps_name,
+            &args,
+            seqcol_digest,
+        )?;
     } else {
-        None
-    };
-
-    if store.filter_opts.model_coverage {
-        //obtaining the Cumulative Distribution Function (CDF) for each transcript
-        binomial_continuous_prob(&mut txps, &args.bin_width, args.threads);
-        //Normalize the probabilities for the records of each read
-        normalize_read_probs(&mut store, &txps, &args.bin_width);
-    }
-
-    info!(
-        "Total number of alignment records : {}",
-        store.total_len().to_formatted_string(&Locale::en)
-    );
-    info!(
-        "number of aligned reads : {}",
-        store.num_aligned_reads().to_formatted_string(&Locale::en)
-    );
-    info!(
-        "number of unique alignments : {}",
-        store.unique_alignments().to_formatted_string(&Locale::en)
-    );
-
-    // if we are seeding the quantification estimates with short read
-    // abundances, then read those in here.
-    let init_abundances = args.short_quant.as_ref().map(|sr_path| {
-        read_short_quant_vec(sr_path, &txps_name).unwrap_or_else(|e| panic!("{}", e))
-    });
-
-    // wrap up all of the relevant information we need for estimation
-    // in an EMInfo struct and then call the EM algorithm.
-    let emi = EMInfo {
-        eq_map: &store,
-        txp_info: &txps,
-        max_iter: args.max_em_iter,
-        convergence_thresh: args.convergence_thresh,
-        init_abundances,
-        kde_model: kde_opt,
-    };
-
-    if args.use_kde {
-        /*
-        // run EM for model train iterations
-        let orig_iter = emi.max_iter;
-        emi.max_iter = 10;
-        let counts = em::em(&emi, args.threads);
-        // relearn the kde
-        let new_model =
-            kde_utils::refresh_kde_model(&txps, &store, &emi.kde_model.unwrap(), &counts);
-        info!("refreshed KDE model");
-        emi.kde_model = Some(new_model?);
-        emi.max_iter = orig_iter;
-        */
-    }
-
-    let counts = if args.threads > 4 {
-        em::em_par(&emi, args.threads)
-    } else {
-        em::em(&emi, args.threads)
-    };
-
-    let aux_txp_counts = crate::util::aux_counts::get_aux_counts(&store, &txps)?;
-
-    // prepare the JSON object we'll write
-    // to meta_info.json
-    let json_info = get_json_info(&args, &emi, &seqcol_digest);
-
-    // write the output
-    write_output(&args.output, json_info, &header, &counts, &aux_txp_counts)?;
-
-    // if the user requested bootstrap replicates,
-    // compute and write those out now.
-    if args.num_bootstraps > 0 {
-        let breps = em::bootstrap(&emi, args.num_bootstraps, args.threads);
-
-        let mut new_arrays = vec![];
-        let mut bs_fields = vec![];
-        for (i, b) in breps.into_iter().enumerate() {
-            let bs_array = Float64Array::from_vec(b);
-            bs_fields.push(Field::new(
-                format!("bootstrap.{}", i),
-                bs_array.data_type().clone(),
-                false,
-            ));
-            new_arrays.push(bs_array.boxed());
-        }
-        let chunk = Chunk::new(new_arrays);
-        write_infrep_file(&args.output, bs_fields, chunk)?;
+        bulk::quantify_bulk_alignments_raw_reads(
+            &header,
+            aligner.expect("need valid alinger to align reads"),
+            filter_opts,
+            &args.reads.clone().expect("expected read file(s)"),
+            &mut txps,
+            &txps_name,
+            &args,
+            seqcol_digest,
+        )?;
     }
 
     Ok(())
