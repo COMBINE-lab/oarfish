@@ -12,20 +12,21 @@ Also, please note that `oarfish` is scientific software in active development.  
 (also, the `dev` branch should compile from source at all times so feel free to use it, but let us know if you run into any issues).
 
 The usage can be provided by passing `-h` at the command line.
+
 ```
 A fast, accurate and versatile tool for long-read transcript quantification.
 
-Usage: oarfish [OPTIONS] --alignments <ALIGNMENTS> --output <OUTPUT>
+Usage: oarfish [OPTIONS] --output <OUTPUT> <--alignments <ALIGNMENTS>|--reads <READS>>
 
 Options:
       --quiet
           be quiet (i.e. don't output log messages that aren't at least warnings)
       --verbose
           be verbose (i.e. output all non-developer logging messages)
-  -a, --alignments <ALIGNMENTS>
-          path to the file containing the input alignments
   -o, --output <OUTPUT>
           location where output quantification file should be written
+      --single-cell
+          input is assumed to be a single-cell BAM and to have the `CB:z` tag for all read records
   -j, --threads <THREADS>
           maximum number of cores that the oarfish can use to obtain binomial probability [default: 1]
       --num-bootstraps <NUM_BOOTSTRAPS>
@@ -35,21 +36,43 @@ Options:
   -V, --version
           Print version
 
+alignment mode:
+  -a, --alignments <ALIGNMENTS>  path to the file containing the input alignments
+
+raw read mode:
+      --reads <READS>          path to the file containing the input reads
+      --reference <REFERENCE>  path to the file containing the reference transcriptome (or existing index) against which to map
+      --index-out <INDEX_OUT>  path where minimap2 index will be written (if provided)
+      --seq-tech <SEQ_TECH>    sequencing technology in which to expect reads if using mapping based mode [possible values: ont-cdna, ont-drna, pac-bio, pac-bio-hifi]
+      --best-n <BEST_N>        maximum number of secondary mappings to consider when mapping reads to the transcriptome [default: 100]
+
 filters:
       --filter-group <FILTER_GROUP>
           [possible values: no-filters, nanocount-filters]
   -t, --three-prime-clip <THREE_PRIME_CLIP>
-          maximum allowable distance of the right-most end of an alignment from the 3' transcript end [default: 4294967295]
+          maximum allowable distance of the right-most end of an alignment from the 3' transcript end [default: *4294967295]
   -f, --five-prime-clip <FIVE_PRIME_CLIP>
-          maximum allowable distance of the left-most end of an alignment from the 5' transcript end [default: 4294967295]
+          maximum allowable distance of the left-most end of an alignment from the 5' transcript end [default: *4294967295]
   -s, --score-threshold <SCORE_THRESHOLD>
-          fraction of the best possible alignment score that a secondary alignment must have for consideration [default: 0.95]
+          fraction of the best possible alignment score that a secondary alignment must have for consideration [default: *0.95]
   -m, --min-aligned-fraction <MIN_ALIGNED_FRACTION>
-          fraction of a query that must be mapped within an alignemnt to consider the alignemnt valid [default: 0.5]
+          fraction of a query that must be mapped within an alignemnt to consider the alignemnt valid [default: *0.5]
   -l, --min-aligned-len <MIN_ALIGNED_LEN>
-          minimum number of nucleotides in the aligned portion of a read [default: 50]
+          minimum number of nucleotides in the aligned portion of a read [default: *50]
   -d, --strand-filter <STRAND_FILTER>
           only alignments to this strand will be allowed; options are (fw /+, rc/-, or both/.) [default: .]
+
+coverage model:
+      --model-coverage         apply the coverage model
+  -b, --bin-width <BIN_WIDTH>  width of the bins used in the coverage model [default: 100]
+
+EM:
+      --max-em-iter <MAX_EM_ITER>
+          maximum number of iterations for which to run the EM algorithm [default: 1000]
+      --convergence-thresh <CONVERGENCE_THRESH>
+          maximum number of iterations for which to run the EM algorithm [default: 0.001]
+  -q, --short-quant <SHORT_QUANT>
+          location of short read quantification (if provided)
 ```
 
 
