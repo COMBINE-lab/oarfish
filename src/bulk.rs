@@ -264,7 +264,7 @@ pub fn quantify_bulk_alignments_raw_reads(
     header: &noodles_sam::Header,
     aligner: minimap2::Aligner,
     filter_opts: AlignmentFilters,
-    read_path: std::path::PathBuf,
+    read_paths: &[std::path::PathBuf],
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
     args: &Args,
@@ -298,32 +298,34 @@ pub fn quantify_bulk_alignments_raw_reads(
 
         // Producer thread: reads sequences and sends them to the channel
         let producer = s.spawn(move || {
-            let mut reader =
-                parse_fastx_file(read_path).expect("valid path/file to read sequences");
             let mut ctr = 0_usize;
             let mut chunk_size = 0_usize;
             let mut read_chunk = ReadChunkWithNames::new();
 
-            while let Some(result) = reader.next() {
-                let record = result.expect("Error reading record");
+            for read_path in read_paths {
+                let mut reader =
+                    parse_fastx_file(read_path).expect("valid path/file to read sequences");
 
-                chunk_size += 1;
-                ctr += 1;
+                while let Some(result) = reader.next() {
+                    let record = result.expect("Error reading record");
 
-                // put this read on the current chunk
-                read_chunk.add_id_and_read(record.id(), &record.seq());
+                    chunk_size += 1;
+                    ctr += 1;
 
-                // send off the next chunks of reads to a thread
-                if chunk_size >= READ_CHUNK_SIZE {
-                    read_sender
-                        .send(read_chunk.clone())
-                        .expect("Error sending sequence");
-                    // prepare for the next chunk
-                    read_chunk.clear();
-                    chunk_size = 0;
+                    // put this read on the current chunk
+                    read_chunk.add_id_and_read(record.id(), &record.seq());
+
+                    // send off the next chunks of reads to a thread
+                    if chunk_size >= READ_CHUNK_SIZE {
+                        read_sender
+                            .send(read_chunk.clone())
+                            .expect("Error sending sequence");
+                        // prepare for the next chunk
+                        read_chunk.clear();
+                        chunk_size = 0;
+                    }
                 }
             }
-
             // if any reads remain, send them off
             if chunk_size > 0 {
                 read_sender

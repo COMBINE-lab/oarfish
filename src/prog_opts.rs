@@ -216,12 +216,13 @@ pub struct Args {
     #[arg(
         long,
         help_heading = "raw read mode",
+        value_delimiter = ',',
         requires_ifs([
             (ArgPredicate::IsPresent, "reference"),
             (ArgPredicate::IsPresent, "seq_tech")
         ])
     )]
-    pub reads: Option<PathBuf>,
+    pub reads: Option<Vec<PathBuf>>,
 
     /// path to the file containing the reference transcriptome (or existing index) against which
     /// to map

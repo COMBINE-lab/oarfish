@@ -350,7 +350,7 @@ fn main() -> anyhow::Result<()> {
             &header,
             aligner.expect("need valid alinger to align reads"),
             filter_opts,
-            args.reads.clone().expect("expected read file"),
+            &args.reads.clone().expect("expected read file(s)"),
             &mut txps,
             &txps_name,
             &args,
