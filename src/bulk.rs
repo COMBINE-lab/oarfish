@@ -16,6 +16,7 @@ use crossbeam::channel::Receiver;
 use crossbeam::channel::Sender;
 #[allow(unused_imports)]
 use minimap2_sys as mm_ffi;
+use minimap2_temp as minimap2;
 use needletail::parse_fastx_file;
 use noodles_bam as bam;
 use num_format::{Locale, ToFormattedString};

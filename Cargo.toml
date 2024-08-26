@@ -59,7 +59,9 @@ crossbeam = { version = "0.8.4", features = [
 ] }
 sprs = "0.11.1"
 minimap2-sys = { version = "0.1.19" }
-minimap2 = { version = "0.1.20", git = "https://github.com/rob-p/minimap2-rs.git", branch = "alignment-score" }
+# rely on minimap2-temp until upstream version is pushed
+minimap2-temp = { version = "0.1.30" }
+#git = "https://github.com/rob-p/minimap2-rs.git", branch = "alignment-score" }
 #git = "https://github.com/jguhlin/minimap2-rs.git", branch = "alignment-score" }
 needletail = "0.5.1"
 indicatif = "0.17.8"
