@@ -17,6 +17,53 @@ use std::{
     io::{self, BufWriter, Write},
 };
 
+pub fn write_single_cell_output(
+    output: &PathBuf,
+    info: serde_json::Value,
+    header: &noodles_sam::header::Header,
+    counts: &sprs::TriMatI<f32, u32>,
+) -> io::Result<()> {
+    // if there is a parent directory
+    if let Some(p) = output.parent() {
+        // unless this was a relative path with one component,
+        // which we should treat as the file prefix, then grab
+        // the non-empty parent and create it.
+        if p != Path::new("") {
+            create_dir_all(p)?;
+        }
+    }
+
+    {
+        let info_path = output.with_additional_extension(".meta_info.json");
+        let write = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(info_path)
+            .expect("Couldn't create output file");
+
+        serde_json::ser::to_writer_pretty(write, &info)?;
+    }
+
+    let out_path = output.with_additional_extension(".count.mtx");
+    sprs::io::write_matrix_market(out_path, counts)?;
+
+    let out_path = output.with_additional_extension(".features.txt");
+    File::create(&out_path)?;
+    let write = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(out_path)
+        .expect("Couldn't create output file");
+    let mut writer = BufWriter::new(write);
+
+    for (rseq, _rmap) in header.reference_sequences().iter() {
+        writeln!(writer, "{}", rseq).expect("Couldn't write to output file.");
+    }
+    Ok(())
+}
+
 //this part is taken from dev branch
 pub fn write_output(
     output: &PathBuf,

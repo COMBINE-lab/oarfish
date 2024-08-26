@@ -52,26 +52,43 @@ filters:
           only alignments to this strand will be allowed; options are (fw /+, rc/-, or both/.) [default: .]
 ```
 
-The input should be a `bam` format file, with reads aligned using [`minimap2`](https://github.com/lh3/minimap2) against the _transcriptome_. That is, `oarfish` does not currently handle spliced alignment to the genome.  Further, the output alignments should be name sorted (the default order produced by `minimap2` should be fine). _Specifically_, `oarfish` relies on the existence of the `AS` tag in the `bam` records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read.  The parameters above should be explained by their relevant help option, but the 
-`-d`/`--strand-filter` is worth noting explicitly. By default, alignments to both strands of a transcript will be considered valid.  You can use this option to allow only alignments in the specified orientation; for example 
-`-d fw` will allow only alignments in the forward orientation and `-d rc` will allow only alignments in the reverse-complement orientation and `-d both` (the default) will allow both.  The `-d` filter, if explicitly provided, overrides 
-the orientation filter in any provided "filter group" so e.g. passing `--filter-group no-filters -d fw` will disable other filters, but will still only admit alignments in the forward orientation.
 
-### Choosing `minimap2` alignment options
+## Input to `oarfish`
 
-Since the purpose of `oarfish` is to estimate transcript abundance from a collection of alignments to the target transcriptome, it is important that the alignments are generated 
-in a fashion that is compatible with this goal.  Primarily, this means that the aligner should be configured to report as many optimal (and near-optimal) alignments as exist, so that 
-`oarfish` can observe all of this information and determine how to allocate reads to transcripts.  We recommend using the following options with `minimap2` when aligning data for 
-later processing by `oarfish`
+`Oarfish` can accept as input either a `bam` file containing reads aligned to the transcriptome as specified [below](index.md#alignment-based-input), or
+raw sequencing reads themselves (along with a reference transcriptome), which are then mapped to the reference using [minimap2-rs](https://github.com/jguhlin/minimap2-rs)
+and subsequently processed with `oarfish`.  With equivalent alignment options, the results of these input modes should be equivalent, so which to use is therefore
+based on the preference of the user.
 
-  * For ONT data (either dRNA or cDNA): please use the flags `--eqx -N 100 -ax map-ont`
-  * For PacBio data: please use the flags `--eqx -N 100 -ax pacbio`
 
-**Note (1)**: It may be worthwile using an even larger `N` value (e.g. the [TranSigner manuscript](https://www.biorxiv.org/content/10.1101/2024.04.13.589356v1.full) recommends `-N 181`). A larger value should not diminish the 
-accuracy of `oarfish`, but it may make alignment take longer and produce a larger `bam` file.
+### Read-based input
 
-**Note (2)**: For very high quality PacBio data, it may be most appropriate to use the `-ax map-hifi` flag in place of `-ax pacbio`.  We are currently evaluating the effect of this option, and also welcome feedback if you 
-have experiences to share on the use of data aligned with these different flags with `oarfish`.
+The read-based input mode takes as input a reference (specified with the `--reference` argument), which can be either a `FASTA` file containing a transcriptome reference
+or an pre-build `minimap2` index, as well as a set of reads (specified with the `--reads` argument), and a `--seq-tech` argument specifying the sequencing technology 
+type of the reads to be mapped.
+
+The mapping between the potential values that can be passed to `oarfish`'s `--seq-tech` argument and the `minimap2` presets is as follows:
+
+  - `oarfish` seq-tech `ont-cdna` corresponds to `minimap2` preset `map-ont`
+  - `oarfish` seq-tech `ont-drna` corresponds to `minimap2` preset `map-ont`
+  - `oarfish` seq-tech `pac-bio` corresponds to `minimap2` preset `map-pb`
+  - `oarfish` seq-tech `pac-bio-hifi` corresponds to `minimap2` preset `map-hifi`
+
+Given these inputs, `oarfish` will either load the pre-built `minimap2` index, or build one according to the parameter specified by `--seq-tech`, and will then align
+the reads to this index using [`minimap2-rs`](https://github.com/jguhlin/minimap2-rs).  Optionally, the maximum multimapping rate (i.e. the number of secondary alignments 
+corresponding to the `minimap2` parameter `-N`) can be specified with the command line parameter `--best-n`. The default value of this parameter is 100.
+
+### Alignmment-based input
+
+In alignment-based mode, `oarfish` processes pre-computed alignments of hte read to the transcriptome. The input should be a `bam` format file, with reads aligned using [`minimap2`](https://github.com/lh3/minimap2) against the _transcriptome_. That is, `oarfish` does not currently handle spliced alignment to the genome. Further, the output alignments should be name sorted (the default order produced by `minimap2` should be fine). _Specifically_, `oarfish` relies on the existence of the `AS` tag in the `bam` records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read. ### Choosing `minimap2` alignment options Since the purpose of `oarfish` is to estimate transcript abundance from a collection of alignments to the target transcriptome, it is important that the alignments are generated in a fashion that is compatible with this goal.  Primarily, this means that the aligner should be configured to report as many optimal (and near-optimal) alignments as exist, so that `oarfish` can observe all of this information and determine how to allocate reads to transcripts.  We recommend using the following options with `minimap2` when aligning data for later processing by `oarfish` * For ONT data (either dRNA or cDNA): please use the flags `--eqx -N 100 -ax map-ont` For PacBio data: please use the flags `--eqx -N 100 -ax pacbio` **Note (1)**: It may be worthwile using an even larger `N` value (e.g. the [TranSigner manuscript](https://www.biorxiv.org/content/10.1101/2024.04.13.589356v1.full) recommends `-N 181`). A larger value should not diminish the accuracy of `oarfish`, but it may make alignment take longer and produce a larger `bam` file.
+
+**Note (2)**: For very high quality PacBio data, it may be most appropriate to use the `-ax map-hifi` flag in place of `-ax pacbio`.  We are currently evaluating the effect of this option, and also welcome feedback if you have experiences to share on the use of data aligned with these different flags with `oarfish`.
+
+### Other notes on `oarfish` parameters
+
+The parameters above should be explained by their relevant help option, but the `-d`/`--strand-filter` is worth noting explicitly. By default, alignments to both strands of a transcript will be considered valid.  You can use this option to allow only alignments in the specified orientation; for example `-d fw` will allow only alignments in the forward orientation and `-d rc` will allow only alignments in the reverse-complement orientation and `-d both` (the default) will allow both.  The `-d` filter, if explicitly provided, overrides the orientation filter in any provided "filter group" so e.g. passing `--filter-group no-filters -d fw` will disable other filters, but will still only admit alignments in the forward orientation.
+
+**In general**, if you apply a `filter-group`, the group options will be applied first and then any explicitly provided options given will override the corresponding option in the `filter-group`.
 
 ### Inferential Replicates
 
