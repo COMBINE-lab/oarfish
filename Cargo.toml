@@ -1,6 +1,6 @@
 [package]
 name = "oarfish"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 authors = [
   "Zahra Zare Jousheghani <zzare@umd.edu>",
@@ -60,7 +60,8 @@ crossbeam = { version = "0.8.4", features = [
 sprs = "0.11.1"
 minimap2-sys = { version = "0.1.19" }
 # rely on minimap2-temp until upstream version is pushed
-minimap2-temp = { version = "0.1.30" }
+# make sure relevant changes are in upstream PR
+minimap2-temp = { version = "0.1.31" }
 # alternative sources for dev
 #git = "https://github.com/rob-p/minimap2-rs.git", branch = "alignment-score" }
 #git = "https://github.com/jguhlin/minimap2-rs.git", branch = "alignment-score" }
@@ -84,7 +85,7 @@ lto = "thin"
 # Config for 'cargo dist'
 [workspace.metadata.dist]
 # The preferred cargo-dist version to use in CI (Cargo.toml SemVer syntax)
-cargo-dist-version = "0.19.1"
+cargo-dist-version = "0.21.1"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
@@ -95,7 +96,7 @@ targets = [
   "x86_64-apple-darwin",
   "x86_64-unknown-linux-gnu",
 ]
-# Publish jobs to run in CI
+# Which actions to run on pull requests
 pr-run-mode = "plan"
 # Whether to install an updater program
 install-updater = false
@@ -104,3 +105,5 @@ install-path = "CARGO_HOME"
 
 [workspace.metadata.dist.github-custom-runners]
 aarch64-apple-darwin = "macos-14"
+# don't have linux arm builders on GitHub yet
+# aarch64-unknown-linux-gnu = "buildjet-8vcpu-ubuntu-2204-arm"

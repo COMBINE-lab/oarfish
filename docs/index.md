@@ -1,15 +1,46 @@
 # oarfish: transcript quantification from long-read RNA-seq data
 
-### Basic usage
+`oarfish` is a program, written in Rust (https://www.rust-lang.org/), for quantifying transcript-level expression from long-read (i.e. Oxford nanopore cDNA and direct RNA and PacBio) sequencing technologies. `oarfish` requires a sample of sequencing reads aligned to the _transcriptome_ (currntly not to the genome). It handles multi-mapping reads through the use of probabilistic allocation via an expectation-maximization (EM) algorithm.
 
-`oarfish` is a program, written in [`rust`](https://www.rust-lang.org/), for quantifying transcript-level expression from long-read (i.e. Oxford nanopore cDNA and direct RNA and PacBio) sequencing technologies. `oarfish` requires a sample of sequencing reads aligned to the *transcriptome* (currntly not to the genome). It handles multi-mapping reads through the use of probabilistic allocation via an expectation-maximization (EM) algorithm.  
+It optionally employs many filters to help discard alignments that may reduce quantification accuracy. Currently, the set of filters applied in `oarfish` are directly derived from the [`NanoCount`](https://github.com/a-slide/NanoCount)[^Gleeson] tool; both the filters that exist, and the way their values are set (with the exception of the `--three-prime-clip` filter, which is not set by default in `oarfish` but is in `NanoCount`).
 
-It optionally employs many filters to help discard alignments that may reduce quantification accuracy.  Currently, the set of filters applied in `oarfish` are directly derived from the [`NanoCount`](https://github.com/a-slide/NanoCount)[^Gleeson] tool; both the filters that exist, and the way their values are set (with the exception of the `--three-prime-clip` filter, which is not set by default in `oarfish` but is in `NanoCount`).
+Additionally, `oarfish` provides options to make use of coverage profiles derived from the aligned reads to improve quantification accuracy. The use of this coverage model is enabled with the `--model-coverage` flag. You can read more about `oarfish`[^preprint] in the [preprint](https://www.biorxiv.org/content/10.1101/2024.02.28.582591v1). Please cite the preprint if you use `oarfish` in your work or analysis.
 
-Additionally, `oarfish` provides options to make use of coverage profiles derived from the aligned reads to improve quantification accuracy.  The use of this coverage model is enabled with the `--model-coverage` flag. You can read more about `oarfish`[^preprint] in the [preprint](https://www.biorxiv.org/content/10.1101/2024.02.28.582591v1). Please cite the preprint if you use `oarfish` in your work or analysis.
+Also, please note that `oarfish` is scientific software in active development. Therefore, please check the [GitHub Release](https://github.com/COMBINE-lab/oarfish/releases) page to make sure that you are using the latest version
 
-Also, please note that `oarfish` is scientific software in active development.  Therefore, please check the [GitHub Release](https://github.com/COMBINE-lab/oarfish/releases) page to make sure that you are using the latest version 
-(also, the `dev` branch should compile from source at all times so feel free to use it, but let us know if you run into any issues).
+## Installation
+
+`oarfish` can be installed in a variety of ways.
+
+### Precompiled binaries
+
+Binaries are available via [GitHub Releases](https://github.com/COMBINE-lab/oarfish/releases).
+
+You can quickly install the latest release using the following helper script:
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/COMBINE-lab/oarfish/releases/latest/download/oarfish-installer.sh | sh
+```
+
+### Using `cargo`
+
+If you have `cargo` installed, you can install `oarfish` directly from the source code:
+
+```sh
+cargo install oarfish
+```
+
+You can find the crate on [crates.io](https://crates.io/crates/oarfish).
+
+### Bioconda
+
+`oarfish` is available via [Bioconda](https://anaconda.org/bioconda/oarfish):
+
+```sh
+conda install -c bioconda oarfish
+```
+
+## Basic usage
 
 The usage can be provided by passing `-h` at the command line.
 
@@ -75,7 +106,6 @@ EM:
           location of short read quantification (if provided)
 ```
 
-
 ## Input to `oarfish`
 
 `Oarfish` can accept as input either a `bam` file containing reads aligned to the transcriptome as specified [below](index.md#alignment-based-input), or
@@ -113,11 +143,11 @@ The parameters above should be explained by their relevant help option, but the 
 
 **In general**, if you apply a `filter-group`, the group options will be applied first and then any explicitly provided options given will override the corresponding option in the `filter-group`.
 
-### Inferential Replicates
+## Inferential Replicates
 
 `oarfish` has the ability to compute [_inferential replicates_](https://academic.oup.com/nar/article/47/18/e105/5542870) of its quantification estimates. This is performed by bootstrap sampling of the original read mappings, and subsequently performing inference under each resampling.  These inferential replicates allow assessing the variance of the point estimate of transcript abundance, and can lead to improved differential analysis at the transcript level, if using a differential testing tool that takes advantage of this information. The generation of inferential replicates is controlled by the `--num-bootstraps` argument to `oarfish`.  The default value is `0`, meaning that no inferential replicates are generated.  If you set this to some value greater than `0`, the the requested number of inferential replicates will be generated. It is recommended, if generating inferential replicates, to run `oarfish` with multiple threads, since replicate generation is highly-parallelized. Finally, if replicates are generated, they are written to a [`Parquet`](https://parquet.apache.org/), starting with the specified output stem and ending with `infreps.pq`.
 
-### Output
+## Output
 
 The `--output` option passed to `oarfish` corresponds to a path prefix (this prefix can contain the path separator character and if it refers to a directory that does not yeat exist, that directory will be created). Based on this path prefix, say `P`, `oarfish` will create 2 files:
 
@@ -125,7 +155,7 @@ The `--output` option passed to `oarfish` corresponds to a path prefix (this pre
   * `P.quant` - a tab separated file listing the quantified targets, as well as information about their length and other metadata. The `num_reads` column provides the estimate of the number of reads originating from each target.
   * `P.infreps.pq` - a [`Parquet`](https://parquet.apache.org/) table where each row is a transcript and each column is an inferential replicate, containing the estimated counts for each transcript under each computed inferential replicate.
 
-### References
+## References
 
 [^Gleeson]: Josie Gleeson, Adrien Leger, Yair D J Prawer, Tracy A Lane, Paul J Harrison, Wilfried Haerty, Michael B Clark, Accurate expression quantification from nanopore direct RNA sequencing with NanoCount, Nucleic Acids Research, Volume 50, Issue 4, 28 February 2022, Page e19, [https://doi.org/10.1093/nar/gkab1129](https://doi.org/10.1093/nar/gkab1129)
 

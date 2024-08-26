@@ -262,8 +262,11 @@ impl<T: sam::alignment::record::Record> From<&T> for AlnInfo {
 #[serde(rename_all = "PascalCase")]
 pub struct ShortReadRecord {
     pub name: String,
+    #[allow(dead_code)]
     pub length: i32,
+    #[allow(dead_code)]
     pub effective_length: f64,
+    #[allow(dead_code)]
     #[serde(rename = "TPM")]
     pub tpm: f64,
     pub num_reads: f64,
