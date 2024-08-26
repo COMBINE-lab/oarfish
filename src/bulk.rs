@@ -417,15 +417,25 @@ pub fn quantify_bulk_alignments_raw_reads(
         let filter_opts_store = filter_opts.clone();
         let aln_group_consumer = s.spawn(move || {
             let mut store = InMemoryAlignmentStore::new(filter_opts_store, header);
-            let mut ng = 0_usize;
+            //let mut ng = 0_usize;
+            let pb = if args.quiet {
+                indicatif::ProgressBar::hidden()
+            } else {
+                indicatif::ProgressBar::new_spinner().with_message("Number of reads mapped")
+            };
+
+            pb.set_style(
+                indicatif::ProgressStyle::with_template(
+                    "[{elapsed_precise}] {spinner:4.green/blue} {msg} {human_pos:>10}",
+                )
+                .unwrap()
+                .tick_chars("⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈⠈"),
+            );
+            pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
+
             for (ags, aprobs, aln_boundaries) in aln_group_receiver {
                 for window in aln_boundaries.windows(2) {
-                    if ng > 0 && (ng % 100000 == 1) {
-                        info!(
-                            "processed {} mapped reads",
-                            ng.to_formatted_string(&Locale::en)
-                        );
-                    }
+                    pb.inc(1);
                     let group_start = window[0];
                     let group_end = window[1];
                     let ag = &ags[group_start..group_end];
@@ -434,19 +444,14 @@ pub fn quantify_bulk_alignments_raw_reads(
                         store.inc_unique_alignments();
                     }
                     store.add_filtered_group(ag, as_probs, txps_mut);
-                    ng += 1;
                 }
             }
-            info!("Finished aligning reads.");
+            pb.finish_with_message("Finished aligning reads.");
             store
         });
 
         // Wait for the producer to finish reading
         let total_reads = producer.join().expect("Producer thread panicked");
-        info!(
-            "Read Producer finished; parsed {} reads",
-            total_reads.to_formatted_string(&Locale::en)
-        );
 
         let mut discard_tables: Vec<DiscardTable> = Vec::with_capacity(map_threads);
         for consumer in consumers {
@@ -459,6 +464,11 @@ pub fn quantify_bulk_alignments_raw_reads(
         let mut store = aln_group_consumer
             .join()
             .expect("Alignment group consumer panicked");
+
+        info!(
+            "Parsed {} total reads",
+            total_reads.to_formatted_string(&Locale::en)
+        );
 
         for dt in &discard_tables {
             store.aggregate_discard_table(dt);
