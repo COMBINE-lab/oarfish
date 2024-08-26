@@ -5,7 +5,7 @@ use noodles_sam::{alignment::RecordBuf, Header};
 use num_format::{Locale, ToFormattedString};
 use std::io;
 use std::path::Path;
-use tracing::{error, info, trace};
+use tracing::{error, info};
 
 pub fn read_and_verify_header<R: io::BufRead>(
     reader: &mut bam::io::Reader<R>,
@@ -227,12 +227,28 @@ pub fn parse_alignments<R: io::BufRead>(
     header: &Header,
     reader: &mut bam::io::Reader<R>,
     txps: &mut [TranscriptInfo],
+    quiet: bool,
 ) -> anyhow::Result<()> {
     // we'll need these to keep track of which alignments belong
     // to which reads.
     let mut prev_read = String::new();
     let mut num_unmapped = 0_u64;
     let mut records_for_read = vec![];
+
+    let pb = if quiet {
+        indicatif::ProgressBar::hidden()
+    } else {
+        indicatif::ProgressBar::new_spinner().with_message("Number of reads mapped")
+    };
+
+    pb.set_style(
+        indicatif::ProgressStyle::with_template(
+            "[{elapsed_precise}] {spinner:4.green/blue} {msg} {human_pos:>12}",
+        )
+        .unwrap()
+        .tick_chars("⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈⠈"),
+    );
+    pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
 
     // Parse the input alignemnt file, gathering the alignments aggregated
     // by their source read. **Note**: this requires that we have a
@@ -242,12 +258,10 @@ pub fn parse_alignments<R: io::BufRead>(
     // critical information was missing from the records. This happened when
     // moving to the new version of noodles. Track `https://github.com/zaeleus/noodles/issues/230`
     // to see if it's clear why this is the case
-    for (i, result) in reader.record_bufs(header).enumerate() {
+    for result in reader.record_bufs(header) {
         let record = result?;
+        pb.inc(1);
 
-        if i % 100_000 == 1 {
-            trace!("processed {i} alignment records");
-        }
         // unmapped reads don't contribute to quantification
         // but we track them.
         if record.flags().is_unmapped() {

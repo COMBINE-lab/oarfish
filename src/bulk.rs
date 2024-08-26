@@ -179,7 +179,7 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
     // now parse the actual alignments for the reads and store the results
     // in our in-memory stor
     let mut store = InMemoryAlignmentStore::new(filter_opts, header);
-    alignment_parser::parse_alignments(&mut store, header, reader, txps)?;
+    alignment_parser::parse_alignments(&mut store, header, reader, txps, args.quiet)?;
     perform_inference_and_write_output(header, &mut store, txps, txps_name, seqcol_digest, args)
 }
 
@@ -417,7 +417,6 @@ pub fn quantify_bulk_alignments_raw_reads(
         let filter_opts_store = filter_opts.clone();
         let aln_group_consumer = s.spawn(move || {
             let mut store = InMemoryAlignmentStore::new(filter_opts_store, header);
-            //let mut ng = 0_usize;
             let pb = if args.quiet {
                 indicatif::ProgressBar::hidden()
             } else {
@@ -426,7 +425,7 @@ pub fn quantify_bulk_alignments_raw_reads(
 
             pb.set_style(
                 indicatif::ProgressStyle::with_template(
-                    "[{elapsed_precise}] {spinner:4.green/blue} {msg} {human_pos:>10}",
+                    "[{elapsed_precise}] {spinner:4.green/blue} {msg} {human_pos:>12}",
                 )
                 .unwrap()
                 .tick_chars("⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈⠈"),
