@@ -1,6 +1,6 @@
 [package]
 name = "oarfish"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 authors = [
   "Zahra Zare Jousheghani <zzare@umd.edu>",
@@ -60,7 +60,7 @@ crossbeam = { version = "0.8.4", features = [
 sprs = "0.11.1"
 minimap2-sys = { version = "0.1.19" }
 # rely on minimap2-temp until upstream version is pushed
-minimap2-temp = { version = "0.1.30" }
+minimap2-temp = { version = "0.1.31" }
 # alternative sources for dev
 #git = "https://github.com/rob-p/minimap2-rs.git", branch = "alignment-score" }
 #git = "https://github.com/jguhlin/minimap2-rs.git", branch = "alignment-score" }

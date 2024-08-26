@@ -6,6 +6,7 @@ use itertools::izip;
 pub struct CountInfo {
     pub unique_count: u32,
     pub total_count: u32,
+    #[allow(dead_code)]
     pub expected_count: f64,
 }
 
