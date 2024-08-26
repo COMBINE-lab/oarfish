@@ -12,7 +12,7 @@
       
       
       <link rel="icon" href="assets/images/favicon.png">
-      <meta name="generator" content="mkdocs-1.6.0, mkdocs-material-9.5.32">
+      <meta name="generator" content="mkdocs-1.5.3, mkdocs-material-9.5.9">
     
     
       
@@ -20,7 +20,7 @@
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.3cba04c6.min.css">
+      <link rel="stylesheet" href="assets/stylesheets/main.f2e4d321.min.css">
       
         
         <link rel="stylesheet" href="assets/stylesheets/palette.06af60db.min.css">
@@ -167,7 +167,7 @@
       
     </form>
     <div class="md-search__output">
-      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+      <div class="md-search__scrollwrap" data-md-scrollfix>
         <div class="md-search-result" data-md-component="search-result">
           <div class="md-search-result__meta">
             Initializing search
@@ -284,18 +284,28 @@
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#choosing-minimap2-alignment-options" class="md-nav__link">
+    <nav class="md-nav" aria-label="Input to oarfish">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read-based-input" class="md-nav__link">
     <span class="md-ellipsis">
-      Choosing minimap2 alignment options
+      Read-based input
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
+  <a href="#alignmment-based-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      Alignmment-based input
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#other-notes-on-oarfish-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       Other notes on oarfish parameters
@@ -303,8 +313,8 @@
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
   <a href="#inferential-replicates" class="md-nav__link">
     <span class="md-ellipsis">
       Inferential Replicates
@@ -312,8 +322,8 @@
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
   <a href="#output" class="md-nav__link">
     <span class="md-ellipsis">
       Output
@@ -321,13 +331,18 @@
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
   <a href="#references" class="md-nav__link">
     <span class="md-ellipsis">
       References
     </span>
   </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -381,18 +396,28 @@
     </span>
   </a>
   
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#choosing-minimap2-alignment-options" class="md-nav__link">
+    <nav class="md-nav" aria-label="Input to oarfish">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read-based-input" class="md-nav__link">
     <span class="md-ellipsis">
-      Choosing minimap2 alignment options
+      Read-based input
     </span>
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
+  <a href="#alignmment-based-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      Alignmment-based input
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#other-notes-on-oarfish-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       Other notes on oarfish parameters
@@ -400,8 +425,8 @@
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
   <a href="#inferential-replicates" class="md-nav__link">
     <span class="md-ellipsis">
       Inferential Replicates
@@ -409,8 +434,8 @@
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
   <a href="#output" class="md-nav__link">
     <span class="md-ellipsis">
       Output
@@ -418,13 +443,18 @@
   </a>
   
 </li>
-      
-        <li class="md-nav__item">
+        
+          <li class="md-nav__item">
   <a href="#references" class="md-nav__link">
     <span class="md-ellipsis">
       References
     </span>
   </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -453,17 +483,17 @@
 <p>The usage can be provided by passing <code>-h</code> at the command line.</p>
 <pre><code>A fast, accurate and versatile tool for long-read transcript quantification.
 
-Usage: oarfish [OPTIONS] --alignments &lt;ALIGNMENTS&gt; --output &lt;OUTPUT&gt;
+Usage: oarfish [OPTIONS] --output &lt;OUTPUT&gt; &lt;--alignments &lt;ALIGNMENTS&gt;|--reads &lt;READS&gt;&gt;
 
 Options:
       --quiet
           be quiet (i.e. don't output log messages that aren't at least warnings)
       --verbose
           be verbose (i.e. output all non-developer logging messages)
-  -a, --alignments &lt;ALIGNMENTS&gt;
-          path to the file containing the input alignments
   -o, --output &lt;OUTPUT&gt;
           location where output quantification file should be written
+      --single-cell
+          input is assumed to be a single-cell BAM and to have the `CB:z` tag for all read records
   -j, --threads &lt;THREADS&gt;
           maximum number of cores that the oarfish can use to obtain binomial probability [default: 1]
       --num-bootstraps &lt;NUM_BOOTSTRAPS&gt;
@@ -473,58 +503,69 @@ Options:
   -V, --version
           Print version
 
+alignment mode:
+  -a, --alignments &lt;ALIGNMENTS&gt;  path to the file containing the input alignments
+
+raw read mode:
+      --reads &lt;READS&gt;          path to the file containing the input reads
+      --reference &lt;REFERENCE&gt;  path to the file containing the reference transcriptome (or existing index) against which to map
+      --index-out &lt;INDEX_OUT&gt;  path where minimap2 index will be written (if provided)
+      --seq-tech &lt;SEQ_TECH&gt;    sequencing technology in which to expect reads if using mapping based mode [possible values: ont-cdna, ont-drna, pac-bio, pac-bio-hifi]
+      --best-n &lt;BEST_N&gt;        maximum number of secondary mappings to consider when mapping reads to the transcriptome [default: 100]
+
 filters:
       --filter-group &lt;FILTER_GROUP&gt;
           [possible values: no-filters, nanocount-filters]
   -t, --three-prime-clip &lt;THREE_PRIME_CLIP&gt;
-          maximum allowable distance of the right-most end of an alignment from the 3' transcript end [default: 4294967295]
+          maximum allowable distance of the right-most end of an alignment from the 3' transcript end [default: *4294967295]
   -f, --five-prime-clip &lt;FIVE_PRIME_CLIP&gt;
-          maximum allowable distance of the left-most end of an alignment from the 5' transcript end [default: 4294967295]
+          maximum allowable distance of the left-most end of an alignment from the 5' transcript end [default: *4294967295]
   -s, --score-threshold &lt;SCORE_THRESHOLD&gt;
-          fraction of the best possible alignment score that a secondary alignment must have for consideration [default: 0.95]
+          fraction of the best possible alignment score that a secondary alignment must have for consideration [default: *0.95]
   -m, --min-aligned-fraction &lt;MIN_ALIGNED_FRACTION&gt;
-          fraction of a query that must be mapped within an alignemnt to consider the alignemnt valid [default: 0.5]
+          fraction of a query that must be mapped within an alignemnt to consider the alignemnt valid [default: *0.5]
   -l, --min-aligned-len &lt;MIN_ALIGNED_LEN&gt;
-          minimum number of nucleotides in the aligned portion of a read [default: 50]
+          minimum number of nucleotides in the aligned portion of a read [default: *50]
   -d, --strand-filter &lt;STRAND_FILTER&gt;
           only alignments to this strand will be allowed; options are (fw /+, rc/-, or both/.) [default: .]
+
+coverage model:
+      --model-coverage         apply the coverage model
+  -b, --bin-width &lt;BIN_WIDTH&gt;  width of the bins used in the coverage model [default: 100]
+
+EM:
+      --max-em-iter &lt;MAX_EM_ITER&gt;
+          maximum number of iterations for which to run the EM algorithm [default: 1000]
+      --convergence-thresh &lt;CONVERGENCE_THRESH&gt;
+          maximum number of iterations for which to run the EM algorithm [default: 0.001]
+  -q, --short-quant &lt;SHORT_QUANT&gt;
+          location of short read quantification (if provided)
 </code></pre>
-<h3 id="input-to-oarfish">Input to <code>oarfish</code></h3>
-<p>The input should be a <code>bam</code> format file, with reads aligned using
-<a href="https://github.com/lh3/minimap2"><code>minimap2</code></a> against the <em>transcriptome</em>. That
-is, <code>oarfish</code> does not currently handle spliced alignment to the genome.
-Further, the output alignments should be name sorted (the default order
-produced by <code>minimap2</code> should be fine). <em>Specifically</em>, <code>oarfish</code> relies on the
-existence of the <code>AS</code> tag in the <code>bam</code> records that encodes the alignment score
-in order to obtain the score for each alignment (which is used in probabilistic
-read assignment), and the score of the best alignment, overall, for each read.</p>
-<h3 id="choosing-minimap2-alignment-options">Choosing <code>minimap2</code> alignment options</h3>
-<p>Since the purpose of <code>oarfish</code> is to estimate transcript abundance from a collection of alignments to the target transcriptome, it is important that the alignments are generated 
-in a fashion that is compatible with this goal.  Primarily, this means that the aligner should be configured to report as many optimal (and near-optimal) alignments as exist, so that 
-<code>oarfish</code> can observe all of this information and determine how to allocate reads to transcripts.  We recommend using the following options with <code>minimap2</code> when aligning data for 
-later processing by <code>oarfish</code></p>
+<h2 id="input-to-oarfish">Input to <code>oarfish</code></h2>
+<p><code>Oarfish</code> can accept as input either a <code>bam</code> file containing reads aligned to the transcriptome as specified <a href="./#alignment-based-input">below</a>, or
+raw sequencing reads themselves (along with a reference transcriptome), which are then mapped to the reference using <a href="https://github.com/jguhlin/minimap2-rs">minimap2-rs</a>
+and subsequently processed with <code>oarfish</code>.  With equivalent alignment options, the results of these input modes should be equivalent, so which to use is therefore
+based on the preference of the user.</p>
+<h3 id="read-based-input">Read-based input</h3>
+<p>The read-based input mode takes as input a reference (specified with the <code>--reference</code> argument), which can be either a <code>FASTA</code> file containing a transcriptome reference
+or an pre-build <code>minimap2</code> index, as well as a set of reads (specified with the <code>--reads</code> argument), and a <code>--seq-tech</code> argument specifying the sequencing technology 
+type of the reads to be mapped.</p>
+<p>The mapping between the potential values that can be passed to <code>oarfish</code>'s <code>--seq-tech</code> argument and the <code>minimap2</code> presets is as follows:</p>
 <ul>
-<li>For ONT data (either dRNA or cDNA): please use the flags <code>--eqx -N 100 -ax map-ont</code></li>
-<li>For PacBio data: please use the flags <code>--eqx -N 100 -ax pacbio</code></li>
+<li><code>oarfish</code> seq-tech <code>ont-cdna</code> corresponds to <code>minimap2</code> preset <code>map-ont</code></li>
+<li><code>oarfish</code> seq-tech <code>ont-drna</code> corresponds to <code>minimap2</code> preset <code>map-ont</code></li>
+<li><code>oarfish</code> seq-tech <code>pac-bio</code> corresponds to <code>minimap2</code> preset <code>map-pb</code></li>
+<li><code>oarfish</code> seq-tech <code>pac-bio-hifi</code> corresponds to <code>minimap2</code> preset <code>map-hifi</code></li>
 </ul>
-<p><strong>Note (1)</strong>: It may be worthwile using an even larger <code>N</code> value (e.g. the <a href="https://www.biorxiv.org/content/10.1101/2024.04.13.589356v1.full">TranSigner manuscript</a> recommends <code>-N 181</code>). A larger value should not diminish the 
-accuracy of <code>oarfish</code>, but it may make alignment take longer and produce a larger <code>bam</code> file.</p>
-<p><strong>Note (2)</strong>: For very high quality PacBio data, it may be most appropriate to use the <code>-ax map-hifi</code> flag in place of <code>-ax pacbio</code>.  We are currently evaluating the effect of this option, and also welcome feedback if you 
-have experiences to share on the use of data aligned with these different flags with <code>oarfish</code>.</p>
+<p>Given these inputs, <code>oarfish</code> will either load the pre-built <code>minimap2</code> index, or build one according to the parameter specified by <code>--seq-tech</code>, and will then align
+the reads to this index using <a href="https://github.com/jguhlin/minimap2-rs"><code>minimap2-rs</code></a>.  Optionally, the maximum multimapping rate (i.e. the number of secondary alignments 
+corresponding to the <code>minimap2</code> parameter <code>-N</code>) can be specified with the command line parameter <code>--best-n</code>. The default value of this parameter is 100.</p>
+<h3 id="alignmment-based-input">Alignmment-based input</h3>
+<p>In alignment-based mode, <code>oarfish</code> processes pre-computed alignments of hte read to the transcriptome. The input should be a <code>bam</code> format file, with reads aligned using <a href="https://github.com/lh3/minimap2"><code>minimap2</code></a> against the <em>transcriptome</em>. That is, <code>oarfish</code> does not currently handle spliced alignment to the genome. Further, the output alignments should be name sorted (the default order produced by <code>minimap2</code> should be fine). <em>Specifically</em>, <code>oarfish</code> relies on the existence of the <code>AS</code> tag in the <code>bam</code> records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read. ### Choosing <code>minimap2</code> alignment options Since the purpose of <code>oarfish</code> is to estimate transcript abundance from a collection of alignments to the target transcriptome, it is important that the alignments are generated in a fashion that is compatible with this goal.  Primarily, this means that the aligner should be configured to report as many optimal (and near-optimal) alignments as exist, so that <code>oarfish</code> can observe all of this information and determine how to allocate reads to transcripts.  We recommend using the following options with <code>minimap2</code> when aligning data for later processing by <code>oarfish</code> * For ONT data (either dRNA or cDNA): please use the flags <code>--eqx -N 100 -ax map-ont</code> For PacBio data: please use the flags <code>--eqx -N 100 -ax pacbio</code> <strong>Note (1)</strong>: It may be worthwile using an even larger <code>N</code> value (e.g. the <a href="https://www.biorxiv.org/content/10.1101/2024.04.13.589356v1.full">TranSigner manuscript</a> recommends <code>-N 181</code>). A larger value should not diminish the accuracy of <code>oarfish</code>, but it may make alignment take longer and produce a larger <code>bam</code> file.</p>
+<p><strong>Note (2)</strong>: For very high quality PacBio data, it may be most appropriate to use the <code>-ax map-hifi</code> flag in place of <code>-ax pacbio</code>.  We are currently evaluating the effect of this option, and also welcome feedback if you have experiences to share on the use of data aligned with these different flags with <code>oarfish</code>.</p>
 <h3 id="other-notes-on-oarfish-parameters">Other notes on <code>oarfish</code> parameters</h3>
-<p>The parameters above should be explained by their relevant help option, but the
-<code>-d</code>/<code>--strand-filter</code> is worth noting explicitly. By default, alignments to
-both strands of a transcript will be considered valid.  You can use this option
-to allow only alignments in the specified orientation; for example <code>-d fw</code> will
-allow only alignments in the forward orientation and <code>-d rc</code> will allow only
-alignments in the reverse-complement orientation and <code>-d both</code> (the default)
-will allow both.  The <code>-d</code> filter, if explicitly provided, overrides the
-orientation filter in any provided "filter group" so e.g. passing
-<code>--filter-group no-filters -d fw</code> will disable other filters, but will still
-only admit alignments in the forward orientation.</p>
-<p><strong>In general</strong>, if you apply a <code>filter-group</code>, the group options will be applied first
-and then any explicitly provided options given will override the corresponding option 
-in the <code>filter-group</code>.</p>
+<p>The parameters above should be explained by their relevant help option, but the <code>-d</code>/<code>--strand-filter</code> is worth noting explicitly. By default, alignments to both strands of a transcript will be considered valid.  You can use this option to allow only alignments in the specified orientation; for example <code>-d fw</code> will allow only alignments in the forward orientation and <code>-d rc</code> will allow only alignments in the reverse-complement orientation and <code>-d both</code> (the default) will allow both.  The <code>-d</code> filter, if explicitly provided, overrides the orientation filter in any provided "filter group" so e.g. passing <code>--filter-group no-filters -d fw</code> will disable other filters, but will still only admit alignments in the forward orientation.</p>
+<p><strong>In general</strong>, if you apply a <code>filter-group</code>, the group options will be applied first and then any explicitly provided options given will override the corresponding option in the <code>filter-group</code>.</p>
 <h3 id="inferential-replicates">Inferential Replicates</h3>
 <p><code>oarfish</code> has the ability to compute <a href="https://academic.oup.com/nar/article/47/18/e105/5542870"><em>inferential replicates</em></a> of its quantification estimates. This is performed by bootstrap sampling of the original read mappings, and subsequently performing inference under each resampling.  These inferential replicates allow assessing the variance of the point estimate of transcript abundance, and can lead to improved differential analysis at the transcript level, if using a differential testing tool that takes advantage of this information. The generation of inferential replicates is controlled by the <code>--num-bootstraps</code> argument to <code>oarfish</code>.  The default value is <code>0</code>, meaning that no inferential replicates are generated.  If you set this to some value greater than <code>0</code>, the the requested number of inferential replicates will be generated. It is recommended, if generating inferential replicates, to run <code>oarfish</code> with multiple threads, since replicate generation is highly-parallelized. Finally, if replicates are generated, they are written to a <a href="https://parquet.apache.org/"><code>Parquet</code></a>, starting with the specified output stem and ending with <code>infreps.pq</code>.</p>
 <h3 id="output">Output</h3>
@@ -595,7 +636,7 @@ in the <code>filter-group</code>.</p>
     <script id="__config" type="application/json">{"base": ".", "features": [], "search": "assets/javascripts/workers/search.b8dbb3d2.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
     
     
-      <script src="assets/javascripts/bundle.471ce7a9.min.js"></script>
+      <script src="assets/javascripts/bundle.8fd75fb4.min.js"></script>
       
         <script src="javascripts/mathjax.js"></script>
       
