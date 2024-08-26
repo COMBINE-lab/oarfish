@@ -25,7 +25,7 @@ categories = ["command-line-utilities", "science"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-seqcol_rs = { version = "0.1.0" }
+seqcol_rs = { git = "https://github.com/COMBINE-lab/seqcol_rs", branch = "dev", version = "0.1.0" }
 anyhow = "1.0.86"
 bio-types = { version = "1.0.4", features = ["serde"] }
 clap = { version = "4.5.16", features = ["derive"] }
@@ -51,7 +51,7 @@ arrow2 = { version = "0.18.0", features = [
   "io_parquet_zstd",
   "io_parquet_snappy",
 ] }
-kders = { version = "0.1.0" }
+kders = { git = "https://github.com/COMBINE-lab/kde-rs.git", branch = "dev", version = "0.1.0" }
 noodles-bgzf = { version = "0.32.0" }
 crossbeam = { version = "0.8.4", features = [
   "crossbeam-queue",
