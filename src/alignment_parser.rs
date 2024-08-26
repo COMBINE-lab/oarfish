@@ -307,6 +307,8 @@ pub fn parse_alignments<R: io::BufRead>(
         records_for_read.clear();
     }
 
+    pb.finish_with_message("Finished processing alignments.");
+
     info!(
         "the alignment file contained {} unmapped read records.",
         num_unmapped.to_formatted_string(&Locale::en)
