@@ -140,11 +140,13 @@ impl AlnRecordLike for minimap2::Mapping {
     }
 
     fn aln_start(&self) -> u32 {
-        self.target_start.saturating_add(1) as u32
+        self.target_start as u32
     }
+
     fn aln_end(&self) -> u32 {
-        self.target_end.saturating_add(1) as u32
+        self.target_end as u32
     }
+
     fn is_supp(&self) -> bool {
         self.is_supplementary
     }
