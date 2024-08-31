@@ -143,6 +143,12 @@ The parameters above should be explained by their relevant help option, but the 
 
 **In general**, if you apply a `filter-group`, the group options will be applied first and then any explicitly provided options given will override the corresponding option in the `filter-group`.
 
+## Notes about single-cell mode
+
+Starting with version 0.6.1 `oarfish` incorporates the first single-cell quantification capabilities. Given a `bam` file, **collated by cell barcode and with already (UMI) deduplicated reads**, this mode, enabled with the `--single-cell` flag, will allow `oarfish` to produce a single-cell quantification matrix. Currently, this mode can not be used with read-based mode, and the input `bam` file should be properly formatted for this purpose. 
+
+**Formatting requirements of BAM input in single-cell mode**: All alignment records for the same cell barcode should be adjacent in the `bam` file, and a count will be obtained for each read record, so UMI de-duplication should have been performed if those are the counts you want. In the future, counting UMIs directly may be supported, and some of these other restrictions may be lifted.
+
 ## Inferential Replicates
 
 `oarfish` has the ability to compute [_inferential replicates_](https://academic.oup.com/nar/article/47/18/e105/5542870) of its quantification estimates. This is performed by bootstrap sampling of the original read mappings, and subsequently performing inference under each resampling.  These inferential replicates allow assessing the variance of the point estimate of transcript abundance, and can lead to improved differential analysis at the transcript level, if using a differential testing tool that takes advantage of this information. The generation of inferential replicates is controlled by the `--num-bootstraps` argument to `oarfish`.  The default value is `0`, meaning that no inferential replicates are generated.  If you set this to some value greater than `0`, the the requested number of inferential replicates will be generated. It is recommended, if generating inferential replicates, to run `oarfish` with multiple threads, since replicate generation is highly-parallelized. Finally, if replicates are generated, they are written to a [`Parquet`](https://parquet.apache.org/), starting with the specified output stem and ending with `infreps.pq`.
