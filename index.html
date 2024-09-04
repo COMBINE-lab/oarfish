@@ -320,6 +320,39 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#usage-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#aligment-mode-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      aligment-mode example
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#read-mode-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      read-mode example
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#input-to-oarfish" class="md-nav__link">
     <span class="md-ellipsis">
       Input to oarfish
@@ -479,6 +512,39 @@
       Basic usage
     </span>
   </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      Usage examples
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#aligment-mode-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      aligment-mode example
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#read-mode-example" class="md-nav__link">
+    <span class="md-ellipsis">
+      read-mode example
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
       
@@ -658,6 +724,29 @@ EM:
   -q, --short-quant &lt;SHORT_QUANT&gt;
           location of short read quantification (if provided)
 </code></pre>
+<h2 id="usage-examples">Usage examples</h2>
+<p>Assume that you have ONT cDNA sequencing reads in a file named <code>sample1_reads.tar.gz</code>, and you'd like to quantify the transcripts in a <em>transcriptome</em> reference in the file <code>transcripts.fa</code>.
+To accomplish this with oarfish, you can use either <a href="./#alignment-based-input">alignment-based</a> or <a href="./#read-based-input">read-based</a> mode.  Here we give a brief example
+of each.  To use alignment-based mode, we assume you have <a href="https://github.com/lh3/minimap2">minimap2</a> and <a href="http://www.htslib.org/">samtools</a> installed.  </p>
+<h3 id="aligment-mode-example">aligment-mode example</h3>
+<p>You can quantify the transcript abundances in this sample using the following commands:</p>
+<pre><code>$ minimap2 -t 16 -ax map-ont transcripts.fa sample1_reads.tar.gz | samtools view -@4 -b -o alignments.bam
+$ oarfish -j 16 -a alignments.bam -o sample1 --filter-group no-filters --model-coverage
+</code></pre>
+<p>This will produce several output files, as described <a href="./#output">below</a>.</p>
+<h3 id="read-mode-example">read-mode example</h3>
+<p>In read-based mode, you can quantify the transcript abundances in this sample using the following commands:</p>
+<pre><code>$ oarfish -j 16 --reads sample1_reads.tar.gz --reference transcripts.fa --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
+</code></pre>
+<p>If you are going to quantify more than one sample against these reference transcripts, it makes sense to save the minimap2 index that the above
+command creates.  This can be done using the following command:</p>
+<pre><code>$ oarfish -j 16 --reads sample1_reads.tar.gz --reference transcripts.fa --index-out transcripts.mmi --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
+</code></pre>
+<p>Then, in subsequent runs (say when quantifying <code>sample2_reads.tar.gz</code>), you can directly provide the <code>minimap2</code> index in place of the reference to
+speed up quantification.  That command would look like the following:</p>
+<pre><code>$ oarfish -j 16 --reads sample2_reads.tar.gz --reference transcripts.mmi --seq-tech ont-cdna -o sample2 --filter-group no-filters --model-coverage
+</code></pre>
+<p>As with alignment-based mode, these commands will produce several output files, as described <a href="./#output">below</a>.</p>
 <h2 id="input-to-oarfish">Input to <code>oarfish</code></h2>
 <p><code>Oarfish</code> can accept as input either a <code>bam</code> file containing reads aligned to the transcriptome as specified <a href="./#alignment-based-input">below</a>, or
 raw sequencing reads themselves (along with a reference transcriptome), which are then mapped to the reference using <a href="https://github.com/jguhlin/minimap2-rs">minimap2-rs</a>
