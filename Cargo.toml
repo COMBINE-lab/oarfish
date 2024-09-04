@@ -67,6 +67,7 @@ minimap2-temp = { version = "0.1.31" }
 #minimap2 = { version = "0.1.20", git = "https://github.com/jguhlin/minimap2-rs.git", branch = "alignment-score" }
 needletail = "0.5.1"
 indicatif = "0.17.8"
+rustc-hash = "2.0.0"
 
 [[bin]]
 name = "oarfish"

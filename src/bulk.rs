@@ -180,7 +180,14 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
     // now parse the actual alignments for the reads and store the results
     // in our in-memory stor
     let mut store = InMemoryAlignmentStore::new(filter_opts, header);
-    alignment_parser::parse_alignments(&mut store, header, reader, txps, args.quiet)?;
+    alignment_parser::parse_alignments(
+        &mut store,
+        header,
+        reader,
+        txps,
+        args.sort_check_num,
+        args.quiet,
+    )?;
     perform_inference_and_write_output(header, &mut store, txps, txps_name, seqcol_digest, args)
 }
 

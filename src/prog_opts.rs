@@ -325,6 +325,11 @@ pub struct Args {
     #[arg(short, long, help_heading = "coverage model", default_value_t = 100)]
     pub bin_width: u32,
 
+    /// Number of alignment records to check for name collation when attempting
+    /// to validate that the input BAM is name collated.
+    #[arg(long, hide = true, default_value_t=100_000)]
+    pub sort_check_num: usize,
+
     /// use a KDE model of the observed fragment length distribution
     #[arg(short, long, hide = true)]
     pub use_kde: bool,

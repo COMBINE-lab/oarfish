@@ -37,7 +37,7 @@ type HeaderReaderAligner = (
 );
 
 fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
-    info!("read-based mode");
+    info!("oarfish is operating in read-based mode");
 
     // set the number of indexing threads
     let idx_threads = &args.threads.max(1);
@@ -58,8 +58,7 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
                 .with_cigar()
                 .map_ont()
                 .with_index(
-                    &args
-                        .reference
+                    args.reference
                         .clone()
                         .expect("must provide reference sequence"),
                     idx_output,
@@ -71,8 +70,7 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
             .with_cigar()
             .map_pb()
             .with_index(
-                &args
-                    .reference
+                args.reference
                     .clone()
                     .expect("must provide reference sequence"),
                 idx_output,
@@ -83,8 +81,7 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
             .with_cigar()
             .map_hifi()
             .with_index(
-                &args
-                    .reference
+                args.reference
                     .clone()
                     .expect("must provide reference sequence"),
                 idx_output,
@@ -96,8 +93,11 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
     };
 
     info!("created aligner index opts : {:?}", aligner.idxopt);
-    // get the best 100 hits
+    // get up to the best_n hits for each read
+    // default value is 100.
     aligner.mapopt.best_n = args.best_n as i32;
+    // set the seed to be the same as what command-line
+    // minimap2 uses.
     aligner.mapopt.seed = 11;
 
     let mmi: mm_ffi::mm_idx_t = unsafe { **aligner.idx.as_ref().unwrap() };
