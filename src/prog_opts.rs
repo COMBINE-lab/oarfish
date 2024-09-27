@@ -309,8 +309,11 @@ pub struct Args {
     #[arg(long, help_heading = "EM", default_value_t = 1e-3)]
     pub convergence_thresh: f64,
 
-    /// maximum number of cores that the oarfish can use to obtain binomial probability
-    #[arg(short = 'j', long, default_value_t = 1)]
+    /// number of cores that oarfish will use during different phases 
+    /// of quantification. Note: This value will be at least 2 for bulk 
+    /// quantification and at least 3 for single-cell quantification due to
+    /// the use of dedicated parsing threads.
+    #[arg(short = 'j', long, default_value_t = 3)]
     pub threads: usize,
 
     /// location of short read quantification (if provided)
