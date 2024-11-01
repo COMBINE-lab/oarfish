@@ -301,6 +301,10 @@ pub struct Args {
     #[arg(long, help_heading = "coverage model", value_parser)]
     pub model_coverage: bool,
 
+    /// apply the coverage model
+    #[arg(long, help_heading = "output read-txps probabilities", value_parser)]
+    pub out_prob: bool,
+
     /// maximum number of iterations for which to run the EM algorithm
     #[arg(long, help_heading = "EM", default_value_t = 1000)]
     pub max_em_iter: u32,

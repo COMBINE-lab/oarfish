@@ -8,7 +8,7 @@ use crate::util::oarfish_types::{
     AlignmentFilters, EMInfo, InMemoryAlignmentStore, TranscriptInfo,
 };
 use crate::util::read_function::read_short_quant_vec;
-use crate::util::write_function::{write_infrep_file, write_output};
+use crate::util::write_function::{write_infrep_file, write_output, write_out_prob};
 use crate::{binomial_continuous_prob, normalize_read_probs};
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use crossbeam::channel::bounded;
@@ -146,6 +146,9 @@ fn perform_inference_and_write_output(
     // write the output
     write_output(&args.output, json_info, header, &counts, &aux_txp_counts)?;
 
+    if args.out_prob {
+        write_out_prob(&args.output, &emi, &txps_name)?;
+    }
     // if the user requested bootstrap replicates,
     // compute and write those out now.
     if args.num_bootstraps > 0 {

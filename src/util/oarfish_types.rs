@@ -28,6 +28,7 @@ pub trait AlnRecordLike {
     fn aln_start(&self) -> u32;
     fn aln_end(&self) -> u32;
     fn is_supp(&self) -> bool;
+    fn read_name(&self) -> Option<String>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -150,6 +151,10 @@ impl AlnRecordLike for minimap2::Mapping {
     fn is_supp(&self) -> bool {
         self.is_supplementary
     }
+
+    fn read_name(&self) -> Option<String> {
+        self.query_name.as_ref().map(|q| q.to_string())
+    }
 }
 
 pub trait NoodlesAlignmentLike {}
@@ -208,11 +213,16 @@ impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for
             .expect("alignment record should have flags")
             .is_supplementary()
     }
+
+    fn read_name(&self) -> Option<String> {
+        self.name().map(|n| n.to_string())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AlnInfo {
     pub ref_id: u32,
+    pub read_name: String,
     pub start: u32,
     pub end: u32,
     pub prob: f64,
@@ -230,6 +240,7 @@ impl AlnInfo {
     fn from_aln_rec_like<T: AlnRecordLike>(aln: &T, aln_header: &Header) -> Self {
         Self {
             ref_id: aln.ref_id(aln_header).expect("valid ref_id") as u32,
+            read_name: aln.read_name().unwrap_or_else(|| "None".to_string()),
             start: aln.aln_start(),
             end: aln.aln_end(),
             prob: 0.0_f64,

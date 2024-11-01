@@ -1,5 +1,6 @@
 use crate::util::oarfish_types::EMInfo;
 use crate::util::parquet_utils;
+use itertools::izip;
 
 use arrow2::{
     array::Array,
@@ -201,4 +202,63 @@ pub(crate) fn write_infrep_file(
         .with_additional_extension(".infreps.pq");
     let schema = Schema::from(fields);
     parquet_utils::write_chunk_to_file(output_path.to_str().unwrap(), schema, chunk)
+}
+
+
+pub fn write_out_prob(
+    output: &PathBuf,
+    emi: &EMInfo,
+    txps_name: &[String],
+) -> io::Result<()> {
+    if let Some(p) = output.parent() {
+        // unless this was a relative path with one component,
+        // which we should treat as the file prefix, then grab
+        // the non-empty parent and create it.
+        if p != Path::new("") {
+            create_dir_all(p)?;
+        }
+    }
+
+    let out_path = output.with_additional_extension(".prob");
+    File::create(&out_path)?;
+
+    let write_prob = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(out_path)
+        .expect("Couldn't create output file");
+    let mut writer_prob = BufWriter::new(write_prob);
+
+    writeln!(writer_prob, "read\ttxp\tAS_prob\tbinomial_prob\tfinal_prob").expect("Couldn't write to output file.");
+
+    let model_coverage = emi.eq_map.filter_opts.model_coverage;
+
+    for (alns, probs, coverage_probs) in emi.eq_map.iter() {
+        let mut denom = 0.0_f64;
+        for (_a, p, cp) in izip!(alns, probs, coverage_probs) {
+            // Compute the probability of assignment of the
+            // current read based on this alignment and the
+            // target's estimated abundance.
+            //let target_id = a.ref_id as usize;
+            let prob = *p as f64;
+            let cov_prob = if model_coverage { *cp } else { 1.0 };
+
+            denom += prob * cov_prob;
+        }
+
+        for (a, p, cp) in izip!(alns, probs, coverage_probs) {
+            // Compute the probability of assignment of the
+            // current read based on this alignment and the
+            // target's estimated abundance.
+            let target_id = a.ref_id as usize;
+            let prob = *p as f64;
+            let cov_prob = if model_coverage { *cp } else { 1.0 };
+
+            writeln!(writer_prob, "{}\t{}\t{}\t{}\t{}", a.read_name, txps_name[target_id], prob, cov_prob, (prob * cov_prob) / denom)
+                .expect("Couldn't write to output file.");
+        }
+    }
+
+    Ok(())
 }
