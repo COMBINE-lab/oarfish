@@ -28,7 +28,7 @@ pub trait AlnRecordLike {
     fn aln_start(&self) -> u32;
     fn aln_end(&self) -> u32;
     fn is_supp(&self) -> bool;
-    fn read_name(&self) -> Option<String>;
+    fn name(&self) -> Option<String>;
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -152,7 +152,7 @@ impl AlnRecordLike for minimap2::Mapping {
         self.is_supplementary
     }
 
-    fn read_name(&self) -> Option<String> {
+    fn name(&self) -> Option<String> {
         self.query_name.as_ref().map(|q| q.to_string())
     }
 }
@@ -214,7 +214,7 @@ impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for
             .is_supplementary()
     }
 
-    fn read_name(&self) -> Option<String> {
+    fn name(&self) -> Option<String> {
         self.name().map(|n| n.to_string())
     }
 }
@@ -222,7 +222,7 @@ impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for
 #[derive(Clone, Debug, PartialEq)]
 pub struct AlnInfo {
     pub ref_id: u32,
-    pub read_name: String,
+    //pub read_name: Option<String>,
     pub start: u32,
     pub end: u32,
     pub prob: f64,
@@ -240,7 +240,7 @@ impl AlnInfo {
     fn from_aln_rec_like<T: AlnRecordLike>(aln: &T, aln_header: &Header) -> Self {
         Self {
             ref_id: aln.ref_id(aln_header).expect("valid ref_id") as u32,
-            read_name: aln.read_name().unwrap_or_else(|| "None".to_string()),
+            //read_name: aln.read_name().unwrap_or_else(|| "None".to_string()),
             start: aln.aln_start(),
             end: aln.aln_end(),
             prob: 0.0_f64,
@@ -444,6 +444,7 @@ pub struct InMemoryAlignmentStore<'h> {
     boundaries: Vec<usize>,
     pub discard_table: DiscardTable,
     pub num_unique_alignments: usize,
+    pub read_names: Option<Vec<String>>,
 }
 
 impl<'h> InMemoryAlignmentStore<'h> {
@@ -463,17 +464,19 @@ pub struct InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'h, 'b> {
 }
 
 impl<'a, 'b, 'h> Iterator for InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'b, 'h> {
-    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
+    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a [String]>);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(next_ind) = self.rand_inds.next() {
             let start = self.store.boundaries[*next_ind];
             let end = self.store.boundaries[*next_ind + 1];
+            let read_name_slice = self.store.read_names.as_ref().map(|names| &names[start..end]);
             Some((
                 &self.store.alignments[start..end],
                 &self.store.as_probabilities[start..end],
                 &self.store.coverage_probabilities[start..end],
+                read_name_slice,
             ))
         } else {
             None
@@ -497,7 +500,7 @@ pub struct InMemoryAlignmentStoreIter<'a, 'h> {
 }
 
 impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
-    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
+    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a [String]>);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -507,10 +510,12 @@ impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
             let start = self.store.boundaries[self.idx];
             let end = self.store.boundaries[self.idx + 1];
             self.idx += 1;
+            let read_name_slice = self.store.read_names.as_ref().map(|names| &names[start..end]);
             Some((
                 &self.store.alignments[start..end],
                 &self.store.as_probabilities[start..end],
                 &self.store.coverage_probabilities[start..end],
+                read_name_slice,
             ))
         }
     }
@@ -529,7 +534,7 @@ impl<'a, 'h> ExactSizeIterator for InMemoryAlignmentStoreIter<'a, 'h> {}
 impl<'h> InMemoryAlignmentStore<'h> {
     pub fn new(fo: AlignmentFilters, header: &'h Header) -> Self {
         InMemoryAlignmentStore {
-            filter_opts: fo,
+            filter_opts: fo.clone(),
             aln_header: header,
             alignments: vec![],
             as_probabilities: vec![],
@@ -537,6 +542,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
             boundaries: vec![0],
             discard_table: DiscardTable::new(),
             num_unique_alignments: 0,
+            read_names: if fo.aln_prob { Some(Vec::new()) } else { None },
         }
     }
 
@@ -566,10 +572,10 @@ impl<'h> InMemoryAlignmentStore<'h> {
         txps: &mut [TranscriptInfo],
         ag: &mut Vec<T>,
     ) {
-        let (alns, as_probs) =
+        let (alns, as_probs, read_name) =
             self.filter_opts
                 .filter(&mut self.discard_table, self.aln_header, txps, ag);
-        self.add_filtered_group(&alns, &as_probs, txps);
+        self.add_filtered_group(&alns, &as_probs, read_name.as_ref().map(|v| v.as_slice()), txps);
     }
 
     #[inline(always)]
@@ -577,6 +583,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
         &mut self,
         alns: &[AlnInfo],
         as_probs: &[f32],
+        read_name: Option<&[String]>,
         txps: &mut [TranscriptInfo],
     ) {
         if !alns.is_empty() {
@@ -589,6 +596,12 @@ impl<'h> InMemoryAlignmentStore<'h> {
             self.coverage_probabilities
                 .extend(vec![0.0_f64; alns.len()]);
             self.boundaries.push(self.alignments.len());
+
+            if let Some(names) = read_name {
+                if let Some(ref mut self_names) = self.read_names {
+                    self_names.extend_from_slice(names);
+                }
+            }
         }
     }
 
@@ -645,6 +658,10 @@ pub struct AlignmentFilters {
     // True if we are enabling our coverage model and
     // false otherwise.
     pub model_coverage: bool,
+    // True if we are enabling to output the alignment probability and
+    // false otherwise.
+    pub aln_prob: bool,
+
 }
 
 /// This structure records information about
@@ -778,7 +795,7 @@ impl AlignmentFilters {
         aln_header: &Header,
         txps: &[TranscriptInfo],
         ag: &mut Vec<T>,
-    ) -> (Vec<AlnInfo>, Vec<f32>) {
+    ) -> (Vec<AlnInfo>, Vec<f32>, Option<Vec<String>>) {
         // track the best score of any alignment we've seen
         // so far for this read (this will designate the
         // "primary" alignment for the read).
@@ -886,19 +903,20 @@ impl AlignmentFilters {
 
         if ag.is_empty() || aln_len_at_best_retained == 0 || best_retained_score <= 0 {
             // There were no valid alignments
-            return (vec![], vec![]);
+            return (vec![], vec![], None);
         }
         if aln_frac_at_best_retained < self.min_aligned_fraction {
             // The best retained alignment did not have sufficient
             // coverage to be kept
             discard_table.discard_aln_frac += 1;
-            return (vec![], vec![]);
+            return (vec![], vec![], None);
         }
 
         // if we got here, then we have a valid "best" alignment
         discard_table.valid_best_aln += 1;
 
         let mut probabilities = Vec::<f32>::with_capacity(ag.len());
+        let mut read_name = self.aln_prob.then(|| Vec::<String>::with_capacity(ag.len()));
         let mscore = best_retained_score as f32;
         let inv_max_score = 1.0 / mscore;
 
@@ -910,7 +928,7 @@ impl AlignmentFilters {
 
         let _min_allowed_score = self.score_threshold * mscore;
 
-        for score in scores.iter_mut() {
+        for (i, score) in scores.iter_mut().enumerate() {
             const SCORE_PROB_DENOM: f32 = 5.0;
             let fscore = *score as f32;
             let score_ok = (fscore * inv_max_score) >= self.score_threshold; //>= thresh_score;
@@ -918,6 +936,13 @@ impl AlignmentFilters {
                 //let f = ((fscore - mscore) / (mscore - min_allowed_score)) * SCORE_PROB_DENOM;
                 let f = (fscore - mscore) / SCORE_PROB_DENOM;
                 probabilities.push(f.exp());
+                if let Some(ref mut names) = read_name {
+                    let mut rstring: String = "None".to_string();
+                    if let Some(rname) = ag[i].name() {
+                        rstring = String::from_utf8_lossy(rname.as_bytes()).to_string();
+                    }
+                    names.push(rstring);
+                }
             } else {
                 *score = i32::MIN;
                 discard_table.discard_score += 1;
@@ -933,6 +958,7 @@ impl AlignmentFilters {
                 .map(|x| AlnInfo::from_aln_rec_like(x, aln_header))
                 .collect(),
             probabilities,
+            read_name,
         )
     }
 }

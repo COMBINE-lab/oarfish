@@ -234,31 +234,33 @@ pub fn write_out_prob(
 
     let model_coverage = emi.eq_map.filter_opts.model_coverage;
 
-    for (alns, probs, coverage_probs) in emi.eq_map.iter() {
+    for (alns, probs, coverage_probs, names) in emi.eq_map.iter() {
         let mut denom = 0.0_f64;
+
         for (_a, p, cp) in izip!(alns, probs, coverage_probs) {
-            // Compute the probability of assignment of the
-            // current read based on this alignment and the
-            // target's estimated abundance.
-            //let target_id = a.ref_id as usize;
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
-
             denom += prob * cov_prob;
         }
 
-        for (a, p, cp) in izip!(alns, probs, coverage_probs) {
-            // Compute the probability of assignment of the
-            // current read based on this alignment and the
-            // target's estimated abundance.
+        for (a, p, cp, read) in izip!(alns, probs, coverage_probs, names.unwrap_or(&[])) {
             let target_id = a.ref_id as usize;
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
 
-            writeln!(writer_prob, "{}\t{}\t{}\t{}\t{}", a.read_name, txps_name[target_id], prob, cov_prob, (prob * cov_prob) / denom)
-                .expect("Couldn't write to output file.");
+            writeln!(
+                writer_prob,
+                "{}\t{}\t{}\t{}\t{}",
+                read,
+                txps_name[target_id],
+                prob,
+                cov_prob,
+                (prob * cov_prob) / denom
+            )
+            .expect("Couldn't write to output file.");
         }
     }
+  
 
     Ok(())
 }

@@ -146,7 +146,7 @@ fn perform_inference_and_write_output(
     // write the output
     write_output(&args.output, json_info, header, &counts, &aux_txp_counts)?;
 
-    if args.out_prob {
+    if args.aln_prob {
         write_out_prob(&args.output, &emi, &txps_name)?;
     }
     // if the user requested bootstrap replicates,
@@ -288,7 +288,7 @@ pub fn quantify_bulk_alignments_raw_reads(
     let map_threads = args.threads.saturating_sub(2).max(1);
 
     type ReadGroup = ReadChunkWithNames;
-    type AlignmentGroupInfo = (Vec<AlnInfo>, Vec<f32>, Vec<usize>);
+    type AlignmentGroupInfo = (Vec<AlnInfo>, Vec<f32>, Vec<usize>, Option<Vec<String>>);
     let mut store = std::thread::scope(|s| {
         const READ_CHUNK_SIZE: usize = 200;
         const ALN_GROUP_CHUNK_LIMIT: usize = 100;
@@ -355,6 +355,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                     let mut aln_group_alns: Vec<AlnInfo> = Vec::new();
                     let mut aln_group_probs: Vec<f32> = Vec::new();
                     let mut aln_group_boundaries: Vec<usize> = Vec::new();
+                    let mut aln_group_read_names = args.aln_prob.then(|| Vec::new());
                     aln_group_boundaries.push(0);
 
                     // get the next chunk of reads
@@ -365,16 +366,39 @@ pub fn quantify_bulk_alignments_raw_reads(
                             let map_res_opt =
                                 loc_aligner.map_with_name(name, seq, true, false, None, None);
                             if let Ok(mut mappings) = map_res_opt {
-                                let (ag, aprobs) = filter.filter(
+                                if args.aln_prob {
+                                    if let Some(first_part) = String::from_utf8_lossy(name).split_whitespace().next() {
+                                        let first_part_str = first_part.to_string();
+                                        for mapping in mappings.iter_mut() {
+                                            mapping.query_name = Some(first_part_str.clone());
+                                        }
+                                    }
+                                }
+                                
+                                let (ag, aprobs, read_name) = filter.filter(
                                     &mut discard_table,
                                     header,
                                     my_txp_info_view,
                                     &mut mappings,
                                 );
+
                                 if !ag.is_empty() {
                                     aln_group_alns.extend_from_slice(&ag);
                                     aln_group_probs.extend_from_slice(&aprobs);
                                     aln_group_boundaries.push(aln_group_alns.len());
+                                    //eprintln!("read_top: {:?}", read_name);
+                                    if let Some(ref mut names_vec) = aln_group_read_names {
+                                        if let Some(names) = read_name.as_ref() {
+                                            //eprintln!("read_top: {:?}", names);
+                                            if !names.is_empty() {
+                                                names_vec.extend_from_slice(names);
+                                            } else {
+                                                warn!("Received an empty `read_name` from `filter.filter`.");
+                                            }
+                                        } else {
+                                            warn!("`filter.filter` returned None for `read_name`.");
+                                        }
+                                    }
                                     chunk_size += 1;
                                 }
                                 if chunk_size >= ALN_GROUP_CHUNK_LIMIT {
@@ -383,12 +407,16 @@ pub fn quantify_bulk_alignments_raw_reads(
                                             aln_group_alns.clone(),
                                             aln_group_probs.clone(),
                                             aln_group_boundaries.clone(),
+                                            aln_group_read_names.clone(),
                                         ))
                                         .expect("Error sending alignment group");
                                     aln_group_alns.clear();
                                     aln_group_probs.clear();
                                     aln_group_boundaries.clear();
                                     aln_group_boundaries.push(0);
+                                    if let Some(ref mut names_vec) = aln_group_read_names {
+                                        names_vec.clear();
+                                    }
                                     chunk_size = 0;
                                 }
                             } else {
@@ -401,7 +429,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                     }
                     if chunk_size > 0 {
                         aln_group_sender
-                            .send((aln_group_alns, aln_group_probs, aln_group_boundaries))
+                            .send((aln_group_alns, aln_group_probs, aln_group_boundaries, aln_group_read_names))
                             .expect("Error sending alignment group");
                     }
                     // NOTE: because `clone()` clones the raw pointer, if it is
@@ -436,17 +464,22 @@ pub fn quantify_bulk_alignments_raw_reads(
             );
             pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
 
-            for (ags, aprobs, aln_boundaries) in aln_group_receiver {
+            for (ags, aprobs, aln_boundaries, read_name) in aln_group_receiver {
                 for window in aln_boundaries.windows(2) {
                     pb.inc(1);
                     let group_start = window[0];
                     let group_end = window[1];
                     let ag = &ags[group_start..group_end];
                     let as_probs = &aprobs[group_start..group_end];
+                    let read_name_slice = read_name.as_ref().map(|names| &names[group_start..group_end]);
+
+                    //eprintln!("as_probs: {:?}", as_probs);
+                    //eprintln!("read_name_slice: {:?}", read_name_slice);
+
                     if ag.len() == 1 {
                         store.inc_unique_alignments();
                     }
-                    store.add_filtered_group(ag, as_probs, txps_mut);
+                    store.add_filtered_group(ag, as_probs, read_name_slice, txps_mut);
                 }
             }
             pb.finish_with_message("Finished aligning reads.");

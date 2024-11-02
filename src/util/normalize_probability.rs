@@ -12,7 +12,7 @@ pub fn normalize_read_probs(
 
     info!("normalizing read probabilities");
     //iterate over all alignments in the bam file
-    for (alns, _as_probs, _coverage_prob) in store.iter() {
+    for (alns, _as_probs, _coverage_prob, _read_names) in store.iter() {
         //iterate over the alignments of a read
         for a in alns.iter() {
             let target_id: usize = a.ref_id as usize;
