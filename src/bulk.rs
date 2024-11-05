@@ -2,6 +2,7 @@ use crate::alignment_parser;
 use crate::em;
 use crate::kde_utils;
 use crate::prog_opts::Args;
+use crate::util::constants::EMPTY_READ_NAME;
 use crate::util::oarfish_types::AlnInfo;
 use crate::util::oarfish_types::DiscardTable;
 use crate::util::oarfish_types::{
@@ -379,7 +380,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                                     if let Some(first_part) = String::from_utf8_lossy(name).split_whitespace().next() {
                                         Some(first_part.to_string())
                                     } else {
-                                        Some("None".to_string())
+                                        Some(EMPTY_READ_NAME.to_string())
                                     }
                                 } else {
                                     None
@@ -402,7 +403,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                                         if let Some(name) = read_name {
                                             names_vec.push(name);
                                         } else {
-                                            names_vec.push("None".to_string());
+                                            names_vec.push(EMPTY_READ_NAME.to_string());
                                             warn!("Received an empty `read_name` from `filter.filter`.");
                                         }
                                     } else {

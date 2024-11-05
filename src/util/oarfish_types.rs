@@ -18,6 +18,8 @@ use sam::{alignment::record::data::field::tag::Tag as AlnTag, Header};
 #[allow(unused_imports)]
 use tracing::{error, info, warn};
 
+use super::constants::EMPTY_READ_NAME;
+
 pub trait AlnRecordLike {
     fn opt_sequence_len(&self) -> Option<usize>;
     fn is_reverse_complemented(&self) -> bool;
@@ -588,7 +590,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
                 Some(
                     first_aln
                         .name()
-                        .unwrap_or(bstr::BStr::new(b"None"))
+                        .unwrap_or(bstr::BStr::new(EMPTY_READ_NAME))
                         .to_string(),
                 )
             } else {
@@ -943,21 +945,6 @@ impl AlignmentFilters {
         discard_table.valid_best_aln += 1;
 
         let mut probabilities = Vec::<f32>::with_capacity(ag.len());
-        /*
-        let read_name = self.aln_prob.then(|| {
-            // get the first alignment
-            if let Some(aln) = ag.first() {
-                // get the read name from the first alignment
-                if let Some(rname) = aln.name() {
-                    String::from_utf8_lossy(rname.as_bytes()).to_string()
-                } else {
-                    "None".to_string()
-                }
-            } else {
-                "None".to_string()
-            }
-        });
-        */
         let mscore = best_retained_score as f32;
         let inv_max_score = 1.0 / mscore;
 
