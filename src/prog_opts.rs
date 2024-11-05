@@ -293,8 +293,13 @@ pub struct Args {
     #[arg(long, help_heading = "coverage model", value_parser)]
     pub model_coverage: bool,
 
-    /// apply the coverage model
-    #[arg(long, help_heading = "output read-txps probabilities", value_parser)]
+    /// write output alignment probabilites for each mapped read
+    #[arg(
+        long,
+        help_heading = "output read-txps probabilities",
+        conflicts_with = "single-cell",
+        value_parser
+    )]
     pub aln_prob: bool,
 
     /// maximum number of iterations for which to run the EM algorithm
