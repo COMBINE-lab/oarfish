@@ -464,19 +464,19 @@ pub struct InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'h, 'b> {
 }
 
 impl<'a, 'b, 'h> Iterator for InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'b, 'h> {
-    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a [String]>);
+    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(next_ind) = self.rand_inds.next() {
             let start = self.store.boundaries[*next_ind];
             let end = self.store.boundaries[*next_ind + 1];
-            let read_name_slice = self.store.read_names.as_ref().map(|names| &names[start..end]);
+            //let read_name_slice = self.store.read_names.as_ref().map(|names| &names[start..end]);
             Some((
                 &self.store.alignments[start..end],
                 &self.store.as_probabilities[start..end],
                 &self.store.coverage_probabilities[start..end],
-                read_name_slice,
+                //read_name_slice,
             ))
         } else {
             None
@@ -500,7 +500,7 @@ pub struct InMemoryAlignmentStoreIter<'a, 'h> {
 }
 
 impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
-    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a [String]>);
+    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
@@ -510,12 +510,12 @@ impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
             let start = self.store.boundaries[self.idx];
             let end = self.store.boundaries[self.idx + 1];
             self.idx += 1;
-            let read_name_slice = self.store.read_names.as_ref().map(|names| &names[start..end]);
+            //let read_name_slice = self.store.read_names.as_ref().map(|names| &names[start..end]);
             Some((
                 &self.store.alignments[start..end],
                 &self.store.as_probabilities[start..end],
                 &self.store.coverage_probabilities[start..end],
-                read_name_slice,
+                //read_name_slice,
             ))
         }
     }
@@ -575,7 +575,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
         let (alns, as_probs, read_name) =
             self.filter_opts
                 .filter(&mut self.discard_table, self.aln_header, txps, ag);
-        self.add_filtered_group(&alns, &as_probs, read_name.as_ref().map(|v| v.as_slice()), txps);
+        self.add_filtered_group(&alns, &as_probs, read_name, txps);
     }
 
     #[inline(always)]
@@ -583,7 +583,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
         &mut self,
         alns: &[AlnInfo],
         as_probs: &[f32],
-        read_name: Option<&[String]>,
+        read_name: Option<String>,
         txps: &mut [TranscriptInfo],
     ) {
         if !alns.is_empty() {
@@ -599,7 +599,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
 
             if let Some(names) = read_name {
                 if let Some(ref mut self_names) = self.read_names {
-                    self_names.extend_from_slice(names);
+                    self_names.push(names);
                 }
             }
         }
@@ -795,7 +795,7 @@ impl AlignmentFilters {
         aln_header: &Header,
         txps: &[TranscriptInfo],
         ag: &mut Vec<T>,
-    ) -> (Vec<AlnInfo>, Vec<f32>, Option<Vec<String>>) {
+    ) -> (Vec<AlnInfo>, Vec<f32>, Option<String>) {
         // track the best score of any alignment we've seen
         // so far for this read (this will designate the
         // "primary" alignment for the read).
@@ -916,7 +916,8 @@ impl AlignmentFilters {
         discard_table.valid_best_aln += 1;
 
         let mut probabilities = Vec::<f32>::with_capacity(ag.len());
-        let mut read_name = self.aln_prob.then(|| Vec::<String>::with_capacity(ag.len()));
+        //let mut read_name = self.aln_prob.then(|| Vec::<String>::with_capacity(ag.len()));
+        let mut read_name = self.aln_prob.then(|| String::new());
         let mscore = best_retained_score as f32;
         let inv_max_score = 1.0 / mscore;
 
@@ -928,7 +929,7 @@ impl AlignmentFilters {
 
         let _min_allowed_score = self.score_threshold * mscore;
 
-        for (i, score) in scores.iter_mut().enumerate() {
+        for (_i, score) in scores.iter_mut().enumerate() {
             const SCORE_PROB_DENOM: f32 = 5.0;
             let fscore = *score as f32;
             let score_ok = (fscore * inv_max_score) >= self.score_threshold; //>= thresh_score;
@@ -936,16 +937,17 @@ impl AlignmentFilters {
                 //let f = ((fscore - mscore) / (mscore - min_allowed_score)) * SCORE_PROB_DENOM;
                 let f = (fscore - mscore) / SCORE_PROB_DENOM;
                 probabilities.push(f.exp());
-                if let Some(ref mut names) = read_name {
-                    let mut rstring: String = "None".to_string();
-                    if let Some(rname) = ag[i].name() {
-                        rstring = String::from_utf8_lossy(rname.as_bytes()).to_string();
-                    }
-                    names.push(rstring);
-                }
             } else {
                 *score = i32::MIN;
                 discard_table.discard_score += 1;
+            }
+        }
+
+        if let Some(ref mut names) = read_name {
+            if let Some(last_alignment) = ag.last() {
+                if let Some(rname) = last_alignment.name() {
+                    *names = String::from_utf8_lossy(rname.as_bytes()).to_string();
+                }
             }
         }
 

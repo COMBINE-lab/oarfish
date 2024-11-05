@@ -30,7 +30,7 @@ pub fn get_aux_counts(
         cinfo.push(CountInfo::new())
     }
 
-    for (alns, probs, coverage_probs, _read_names) in store.iter() {
+    for (alns, probs, coverage_probs) in store.iter() {
         let is_unique = alns.len() == 1;
         for (a, _p, _cp) in izip!(alns, probs, coverage_probs) {
             // Compute the probability of assignment of the

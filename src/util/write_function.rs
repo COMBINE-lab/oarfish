@@ -234,7 +234,7 @@ pub fn write_out_prob(
 
     let model_coverage = emi.eq_map.filter_opts.model_coverage;
 
-    for (alns, probs, coverage_probs, names) in emi.eq_map.iter() {
+    for (index, (alns, probs, coverage_probs)) in emi.eq_map.iter().enumerate() {
         let mut denom = 0.0_f64;
 
         for (_a, p, cp) in izip!(alns, probs, coverage_probs) {
@@ -243,7 +243,10 @@ pub fn write_out_prob(
             denom += prob * cov_prob;
         }
 
-        for (a, p, cp, read) in izip!(alns, probs, coverage_probs, names.unwrap_or(&[])) {
+        let empty_vec = Vec::new();
+        let read = emi.eq_map.read_names.as_ref().unwrap_or(&empty_vec)[index].as_str();
+
+        for (a, p, cp) in izip!(alns, probs, coverage_probs) {
             let target_id = a.ref_id as usize;
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };

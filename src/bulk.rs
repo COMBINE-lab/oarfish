@@ -369,8 +369,8 @@ pub fn quantify_bulk_alignments_raw_reads(
                                 if args.aln_prob {
                                     if let Some(first_part) = String::from_utf8_lossy(name).split_whitespace().next() {
                                         let first_part_str = first_part.to_string();
-                                        for mapping in mappings.iter_mut() {
-                                            mapping.query_name = Some(first_part_str.clone());
+                                        if let Some(last_mapping) = mappings.last_mut() {
+                                            last_mapping.query_name = Some(first_part_str);
                                         }
                                     }
                                 }
@@ -388,15 +388,8 @@ pub fn quantify_bulk_alignments_raw_reads(
                                     aln_group_boundaries.push(aln_group_alns.len());
                                     //eprintln!("read_top: {:?}", read_name);
                                     if let Some(ref mut names_vec) = aln_group_read_names {
-                                        if let Some(names) = read_name.as_ref() {
-                                            //eprintln!("read_top: {:?}", names);
-                                            if !names.is_empty() {
-                                                names_vec.extend_from_slice(names);
-                                            } else {
-                                                warn!("Received an empty `read_name` from `filter.filter`.");
-                                            }
-                                        } else {
-                                            warn!("`filter.filter` returned None for `read_name`.");
+                                        if let Some(names) = read_name {
+                                            names_vec.push(names);
                                         }
                                     }
                                     chunk_size += 1;
@@ -465,13 +458,13 @@ pub fn quantify_bulk_alignments_raw_reads(
             pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
 
             for (ags, aprobs, aln_boundaries, read_name) in aln_group_receiver {
-                for window in aln_boundaries.windows(2) {
+                for (index_receiver, window) in aln_boundaries.windows(2).enumerate() {
                     pb.inc(1);
                     let group_start = window[0];
                     let group_end = window[1];
                     let ag = &ags[group_start..group_end];
                     let as_probs = &aprobs[group_start..group_end];
-                    let read_name_slice = read_name.as_ref().map(|names| &names[group_start..group_end]);
+                    let read_name_slice = read_name.as_ref().map(|names| &names[index_receiver]);
 
                     //eprintln!("as_probs: {:?}", as_probs);
                     //eprintln!("read_name_slice: {:?}", read_name_slice);
@@ -479,7 +472,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                     if ag.len() == 1 {
                         store.inc_unique_alignments();
                     }
-                    store.add_filtered_group(ag, as_probs, read_name_slice, txps_mut);
+                    store.add_filtered_group(ag, as_probs, read_name_slice.cloned(), txps_mut);
                 }
             }
             pb.finish_with_message("Finished aligning reads.");
