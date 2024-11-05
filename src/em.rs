@@ -18,7 +18,7 @@ use crate::bootstrap;
 /// likelihood for all reads mapping to each target.
 #[inline]
 fn m_step_par<'a, DFn>(
-    eq_iterates: &[(&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a [String]>)],
+    eq_iterates: &[(&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a String>)],
     tinfo: &[TranscriptInfo],
     model_coverage: bool,
     density_fn: DFn,
@@ -82,7 +82,7 @@ fn m_step_par<'a, DFn>(
 /// Then, `curr_counts` is computed by summing over the expected assignment
 /// likelihood for all reads mapping to each target.
 #[inline]
-fn m_step<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a [String]>)>>(
+fn m_step<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a String>)>>(
     eq_map_iter: I,
     tinfo: &[TranscriptInfo],
     model_coverage: bool,
@@ -92,7 +92,7 @@ fn m_step<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Opti
 ) where
     DFn: Fn(usize, usize) -> f64,
 {
-    for (alns, probs, coverage_probs, _read_names) in eq_map_iter {
+    for (alns, probs, coverage_probs, _read_name_opt) in eq_map_iter {
         let mut denom = 0.0_f64;
         for (a, p, cp) in izip!(alns, probs, coverage_probs) {
             // Compute the probability of assignment of the
@@ -139,7 +139,11 @@ fn m_step<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Opti
 ///
 /// returns:
 /// A [Vec<f64>] represented the expected read assignments to each transcript.
-pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a [String]>)> + 'a, F: Fn() -> I>(
+pub fn do_em<
+    'a,
+    I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a String>)> + 'a,
+    F: Fn() -> I,
+>(
     em_info: &'a EMInfo,
     make_iter: F,
     do_log: bool,
@@ -331,7 +335,7 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
     let max_iter = em_info.max_iter;
     let convergence_thresh = em_info.convergence_thresh;
     let total_weight: f64 = eq_map.num_aligned_reads() as f64;
-    let eq_iterates: Vec<(&[AlnInfo], &[f32], &[f64], Option<&[String]>)> = eq_map.iter().collect();
+    let eq_iterates: Vec<(&[AlnInfo], &[f32], &[f64], Option<&String>)> = eq_map.iter().collect();
     // initialize the estimated counts for the EM procedure
     let prev_counts: Vec<f64>;
     let mut curr_counts: Vec<AtomicF64> = vec![0.0f64; tinfo.len()]

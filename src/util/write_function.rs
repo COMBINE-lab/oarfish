@@ -204,12 +204,7 @@ pub(crate) fn write_infrep_file(
     parquet_utils::write_chunk_to_file(output_path.to_str().unwrap(), schema, chunk)
 }
 
-
-pub fn write_out_prob(
-    output: &PathBuf,
-    emi: &EMInfo,
-    txps_name: &[String],
-) -> io::Result<()> {
+pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> io::Result<()> {
     if let Some(p) = output.parent() {
         // unless this was a relative path with one component,
         // which we should treat as the file prefix, then grab
@@ -230,11 +225,12 @@ pub fn write_out_prob(
         .expect("Couldn't create output file");
     let mut writer_prob = BufWriter::new(write_prob);
 
-    writeln!(writer_prob, "read\ttxp\tAS_prob\tbinomial_prob\tfinal_prob").expect("Couldn't write to output file.");
+    writeln!(writer_prob, "read\ttxp\tAS_prob\tbinomial_prob\tfinal_prob")
+        .expect("Couldn't write to output file.");
 
     let model_coverage = emi.eq_map.filter_opts.model_coverage;
 
-    for (alns, probs, coverage_probs, names) in emi.eq_map.iter() {
+    for (alns, probs, coverage_probs, name) in emi.eq_map.iter() {
         let mut denom = 0.0_f64;
 
         for (_a, p, cp) in izip!(alns, probs, coverage_probs) {
@@ -243,10 +239,15 @@ pub fn write_out_prob(
             denom += prob * cov_prob;
         }
 
-        for (a, p, cp, read) in izip!(alns, probs, coverage_probs, names.unwrap_or(&[])) {
+        for (a, p, cp) in izip!(alns, probs, coverage_probs) {
             let target_id = a.ref_id as usize;
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
+            let read = if let Some(rn) = name {
+                rn
+            } else {
+                "no_read_name_available"
+            };
 
             writeln!(
                 writer_prob,
@@ -260,7 +261,6 @@ pub fn write_out_prob(
             .expect("Couldn't write to output file.");
         }
     }
-  
 
     Ok(())
 }

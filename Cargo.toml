@@ -27,6 +27,7 @@ categories = ["command-line-utilities", "science"]
 [dependencies]
 seqcol_rs = { git = "https://github.com/COMBINE-lab/seqcol_rs", branch = "dev", version = "0.1.2" }
 anyhow = "1.0.86"
+bstr = "1.10.0"
 bio-types = { version = "1.0.4", features = ["serde"] }
 clap = { version = "4.5.16", features = ["derive"] }
 noodles-bam = "0.66.0"
