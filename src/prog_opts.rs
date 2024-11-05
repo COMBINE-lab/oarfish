@@ -1,9 +1,9 @@
-use clap::{Parser, builder::ArgPredicate};
+use clap::{builder::ArgPredicate, Parser};
 use serde::Serialize;
-use tracing::info;
+use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::fmt;
+use tracing::info;
 
 /// These represent different "meta-options", specific settings
 /// for all of the different filters that should be applied in
@@ -54,7 +54,7 @@ impl FromStr for SequencingTech {
 /// TODO: see if there is some built-in clap functionality
 /// to avoid this song and dance.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub enum FilterArg{
+pub enum FilterArg {
     DefaultI64(i64),
     ProvidedI64(i64),
     DefaultU32(u32),
@@ -84,7 +84,6 @@ impl fmt::Display for FilterArg {
     }
 }
 
-
 /// Necessary functions on [FilterArg]
 impl FilterArg {
     /// If it is an i64 type, get the i64
@@ -92,30 +91,30 @@ impl FilterArg {
         match self {
             FilterArg::DefaultI64(x) => Ok(*x),
             FilterArg::ProvidedI64(x) => Ok(*x),
-            _ => anyhow::bail!("Could not provide FilterArg variant as an i64")
+            _ => anyhow::bail!("Could not provide FilterArg variant as an i64"),
         }
     }
 
-    /// If it is an u32 type, get the u32 
+    /// If it is an u32 type, get the u32
     pub fn try_as_u32(&self) -> anyhow::Result<u32> {
         match self {
             FilterArg::DefaultU32(x) => Ok(*x),
             FilterArg::ProvidedU32(x) => Ok(*x),
-            _ => anyhow::bail!("Could not provide FilterArg variant as a u32")
+            _ => anyhow::bail!("Could not provide FilterArg variant as a u32"),
         }
     }
 
-    /// If it is an f32 type, get the f32 
+    /// If it is an f32 type, get the f32
     pub fn try_as_f32(&self) -> anyhow::Result<f32> {
         match self {
             FilterArg::DefaultF32(x) => Ok(*x),
             FilterArg::ProvidedF32(x) => Ok(*x),
-            _ => anyhow::bail!("Could not provide FilterArg variant as an f32")
+            _ => anyhow::bail!("Could not provide FilterArg variant as an f32"),
         }
     }
-    
+
     /// If the value is user provided, return the value, otherwise
-    /// return `other` and print the message provided in `msg` to the 
+    /// return `other` and print the message provided in `msg` to the
     /// logger.
     pub fn provided_or_u32(&self, msg: &str, other: u32) -> u32 {
         match self {
@@ -123,12 +122,12 @@ impl FilterArg {
                 info!("{} {}", msg, x);
                 *x
             }
-            _ => other
+            _ => other,
         }
     }
 
     /// If the value is user provided, return the value, otherwise
-    /// return `other` and print the message provided in `msg` to the 
+    /// return `other` and print the message provided in `msg` to the
     /// logger.
     pub fn provided_or_i64(&self, msg: &str, other: i64) -> i64 {
         match self {
@@ -136,12 +135,12 @@ impl FilterArg {
                 info!("{} {}", msg, x);
                 *x
             }
-            _ => other
+            _ => other,
         }
     }
 
     /// If the value is user provided, return the value, otherwise
-    /// return `other` and print the message provided in `msg` to the 
+    /// return `other` and print the message provided in `msg` to the
     /// logger.
     pub fn provided_or_f32(&self, msg: &str, other: f32) -> f32 {
         match self {
@@ -149,7 +148,7 @@ impl FilterArg {
                 info!("{} {}", msg, x);
                 *x
             }
-            _ => other
+            _ => other,
         }
     }
 }
@@ -205,11 +204,7 @@ pub struct Args {
     pub verbose: bool,
 
     /// path to the file containing the input alignments
-    #[arg(
-        short,
-        long,
-        help_heading = "alignment mode"
-    )]
+    #[arg(short, long, help_heading = "alignment mode")]
     pub alignments: Option<PathBuf>,
 
     /// path to the file containing the input reads
@@ -226,24 +221,16 @@ pub struct Args {
 
     /// path to the file containing the reference transcriptome (or existing index) against which
     /// to map
-    #[arg(
-        long,
-        conflicts_with = "alignments",
-        help_heading = "raw read mode",
-    )]
+    #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]
     pub reference: Option<PathBuf>,
 
     /// path where minimap2 index will be written (if provided)
-    #[arg(
-        long,
-        conflicts_with = "alignments",
-        help_heading = "raw read mode",
-    )]
+    #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]
     pub index_out: Option<PathBuf>,
 
     /// sequencing technology in which to expect reads if using mapping based mode
     #[arg(
-        long, 
+        long,
         help_heading = "raw read mode",
         required_unless_present = "alignments",
         value_parser = clap::value_parser!(SequencingTech)
@@ -251,7 +238,12 @@ pub struct Args {
     pub seq_tech: Option<SequencingTech>,
 
     /// maximum number of secondary mappings to consider when mapping reads to the transcriptome
-    #[arg(long, default_value_t = 100, requires = "reads", help_heading = "raw read mode")]
+    #[arg(
+        long,
+        default_value_t = 100,
+        requires = "reads",
+        help_heading = "raw read mode"
+    )]
     pub best_n: usize,
 
     /// location where output quantification file should be written
@@ -313,8 +305,8 @@ pub struct Args {
     #[arg(long, help_heading = "EM", default_value_t = 1e-3)]
     pub convergence_thresh: f64,
 
-    /// number of cores that oarfish will use during different phases 
-    /// of quantification. Note: This value will be at least 2 for bulk 
+    /// number of cores that oarfish will use during different phases
+    /// of quantification. Note: This value will be at least 2 for bulk
     /// quantification and at least 3 for single-cell quantification due to
     /// the use of dedicated parsing threads.
     #[arg(short = 'j', long, default_value_t = 3)]
@@ -334,7 +326,7 @@ pub struct Args {
 
     /// Number of alignment records to check for name collation when attempting
     /// to validate that the input BAM is name collated.
-    #[arg(long, hide = true, default_value_t=100_000)]
+    #[arg(long, hide = true, default_value_t = 100_000)]
     pub sort_check_num: usize,
 
     /// use a KDE model of the observed fragment length distribution

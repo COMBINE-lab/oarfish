@@ -11,14 +11,16 @@ use tracing::{info, span, trace};
 
 use crate::bootstrap;
 
+type EqIterateT<'a> = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a String>);
+
 /// Performs one iteration of the EM algorithm by looping over all
 /// alignments and computing their estimated probability of being
 /// the true alignment (using the abunance estimates from `prev_counts`).
 /// Then, `curr_counts` is computed by summing over the expected assignment
 /// likelihood for all reads mapping to each target.
 #[inline]
-fn m_step_par<'a, DFn>(
-    eq_iterates: &[(&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a String>)],
+fn m_step_par<DFn>(
+    eq_iterates: &[EqIterateT],
     tinfo: &[TranscriptInfo],
     model_coverage: bool,
     density_fn: DFn,
@@ -335,7 +337,7 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
     let max_iter = em_info.max_iter;
     let convergence_thresh = em_info.convergence_thresh;
     let total_weight: f64 = eq_map.num_aligned_reads() as f64;
-    let eq_iterates: Vec<(&[AlnInfo], &[f32], &[f64], Option<&String>)> = eq_map.iter().collect();
+    let eq_iterates: Vec<EqIterateT> = eq_map.iter().collect();
     // initialize the estimated counts for the EM procedure
     let prev_counts: Vec<f64>;
     let mut curr_counts: Vec<AtomicF64> = vec![0.0f64; tinfo.len()]

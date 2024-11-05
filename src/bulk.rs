@@ -8,7 +8,7 @@ use crate::util::oarfish_types::{
     AlignmentFilters, EMInfo, InMemoryAlignmentStore, TranscriptInfo,
 };
 use crate::util::read_function::read_short_quant_vec;
-use crate::util::write_function::{write_infrep_file, write_output, write_out_prob};
+use crate::util::write_function::{write_infrep_file, write_out_prob, write_output};
 use crate::{binomial_continuous_prob, normalize_read_probs};
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use crossbeam::channel::bounded;
@@ -147,7 +147,7 @@ fn perform_inference_and_write_output(
     write_output(&args.output, json_info, header, &counts, &aux_txp_counts)?;
 
     if args.aln_prob {
-        write_out_prob(&args.output, &emi, &txps_name)?;
+        write_out_prob(&args.output, &emi, txps_name)?;
     }
     // if the user requested bootstrap replicates,
     // compute and write those out now.
@@ -362,7 +362,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                     let mut aln_group_alns: Vec<AlnInfo> = Vec::new();
                     let mut aln_group_probs: Vec<f32> = Vec::new();
                     let mut aln_group_boundaries: Vec<usize> = Vec::new();
-                    let mut aln_group_read_names = args.aln_prob.then(|| Vec::new());
+                    let mut aln_group_read_names = args.aln_prob.then(Vec::new);
                     aln_group_boundaries.push(0);
 
                     // get the next chunk of reads
@@ -384,7 +384,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                                 } else {
                                     None
                                 };
-                                
+
                                 let (ag, aprobs, read_name) = filter.filter(
                                     &mut discard_table,
                                     header,
@@ -423,7 +423,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                                     aln_group_probs.clear();
                                     aln_group_boundaries.clear();
                                     aln_group_boundaries.push(0);
-                                    aln_group_read_names = args.aln_prob.then(|| Vec::new());
+                                    aln_group_read_names = args.aln_prob.then(Vec::new);
                                     chunk_size = 0;
                                 }
                             } else {
@@ -472,13 +472,13 @@ pub fn quantify_bulk_alignments_raw_reads(
             pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
 
             for (ags, aprobs, aln_boundaries, read_names) in aln_group_receiver {
-                // if we are getting read names out then we are going to "reverse" them 
-                // here so that we can simply pop the strings off the back to get them 
-                // in order. We do this since we cannot otherwise "move" a string out of a 
+                // if we are getting read names out then we are going to "reverse" them
+                // here so that we can simply pop the strings off the back to get them
+                // in order. We do this since we cannot otherwise "move" a string out of a
                 // Vec.
-                let mut reversed_read_names = if let Some(mut names_vec) = read_names { 
-                        names_vec.reverse(); 
-                        Some(names_vec)
+                let mut reversed_read_names = if let Some(mut names_vec) = read_names {
+                    names_vec.reverse();
+                    Some(names_vec)
                 } else {
                     None
                 };
@@ -489,10 +489,10 @@ pub fn quantify_bulk_alignments_raw_reads(
                     let group_end = window[1];
                     let ag = &ags[group_start..group_end];
                     let as_probs = &aprobs[group_start..group_end];
-                    let read_name_opt = if let Some(ref mut names_vec) = reversed_read_names { 
-                        names_vec.pop() 
-                    } else { 
-                        None 
+                    let read_name_opt = if let Some(ref mut names_vec) = reversed_read_names {
+                        names_vec.pop()
+                    } else {
+                        None
                     };
 
                     if ag.len() == 1 {

@@ -469,11 +469,11 @@ impl<'a, 'b, 'h> Iterator for InMemoryAlignmentStoreSamplingWithReplacementIter<
         if let Some(next_ind) = self.rand_inds.next() {
             let start = self.store.boundaries[*next_ind];
             let end = self.store.boundaries[*next_ind + 1];
-            let read_name_opt = if let Some(ref read_names) = self.store.read_names {
-                Some(&read_names[*next_ind])
-            } else {
-                None
-            };
+            let read_name_opt = self
+                .store
+                .read_names
+                .as_ref()
+                .map(|read_names| &read_names[*next_ind]);
             Some((
                 &self.store.alignments[start..end],
                 &self.store.as_probabilities[start..end],
@@ -512,11 +512,11 @@ impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
             let start = self.store.boundaries[self.idx];
             let end = self.store.boundaries[self.idx + 1];
             self.idx += 1;
-            let read_name_opt = if let Some(ref read_names) = self.store.read_names {
-                Some(&read_names[self.idx])
-            } else {
-                None
-            };
+            let read_name_opt = self
+                .store
+                .read_names
+                .as_ref()
+                .map(|read_names| &read_names[self.idx]);
             Some((
                 &self.store.alignments[start..end],
                 &self.store.as_probabilities[start..end],
