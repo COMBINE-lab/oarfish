@@ -37,7 +37,7 @@ type HeaderReaderAligner = (
 );
 
 fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
-    info!("read-based mode");
+    info!("oarfish is operating in read-based mode");
 
     // set the number of indexing threads
     let idx_threads = &args.threads.max(1);
@@ -58,8 +58,7 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
                 .with_cigar()
                 .map_ont()
                 .with_index(
-                    &args
-                        .reference
+                    args.reference
                         .clone()
                         .expect("must provide reference sequence"),
                     idx_output,
@@ -71,8 +70,7 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
             .with_cigar()
             .map_pb()
             .with_index(
-                &args
-                    .reference
+                args.reference
                     .clone()
                     .expect("must provide reference sequence"),
                 idx_output,
@@ -83,8 +81,7 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
             .with_cigar()
             .map_hifi()
             .with_index(
-                &args
-                    .reference
+                args.reference
                     .clone()
                     .expect("must provide reference sequence"),
                 idx_output,
@@ -96,8 +93,11 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
     };
 
     info!("created aligner index opts : {:?}", aligner.idxopt);
-    // get the best 100 hits
+    // get up to the best_n hits for each read
+    // default value is 100.
     aligner.mapopt.best_n = args.best_n as i32;
+    // set the seed to be the same as what command-line
+    // minimap2 uses.
     aligner.mapopt.seed = 11;
 
     let mmi: mm_ffi::mm_idx_t = unsafe { **aligner.idx.as_ref().unwrap() };
@@ -239,7 +239,7 @@ fn main() -> anyhow::Result<()> {
         .with(filtered_layer)
         .init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
 
     // change the logging filter if the user specified quiet or
     // verbose.
@@ -258,8 +258,27 @@ fn main() -> anyhow::Result<()> {
         let alignments = args.alignments.clone().unwrap();
         let afile = File::open(&alignments)?;
 
-        let worker_count = NonZeroUsize::new(1.max(args.threads.saturating_sub(1)))
-            .expect("decompression threads >= 1");
+        let decomp_threads = if args.single_cell {
+            // we will overlap quantification with parsing, so don't try to use too many
+            // parser threads, and adjust the worker threads accordingly.
+
+            // is there a better heuristic than this?
+            // <= 6 threads, use only 1 for decompression
+            // 6-8 threads, use 2 for decompression
+            // > 8 threads, use 3 for decompression
+            match args.threads {
+                1..=6 => 1,
+                7 | 8 => 2,
+                _ => 3,
+            }
+        } else {
+            // try to use all but 1 thread, and assume we have at least 2.
+            1.max(args.threads.saturating_sub(1))
+        };
+
+        let worker_count = NonZeroUsize::new(decomp_threads).expect("decompression threads >= 1");
+        args.threads = 1.max(args.threads.saturating_sub(decomp_threads));
+
         let decoder = bgzf::MultithreadedReader::with_worker_count(worker_count, afile);
         let mut reader = bam::io::Reader::from(decoder);
         // parse the header, and ensure that the reads were mapped with minimap2 (as far as we

@@ -313,8 +313,11 @@ pub struct Args {
     #[arg(long, help_heading = "EM", default_value_t = 1e-3)]
     pub convergence_thresh: f64,
 
-    /// maximum number of cores that the oarfish can use to obtain binomial probability
-    #[arg(short = 'j', long, default_value_t = 1)]
+    /// number of cores that oarfish will use during different phases 
+    /// of quantification. Note: This value will be at least 2 for bulk 
+    /// quantification and at least 3 for single-cell quantification due to
+    /// the use of dedicated parsing threads.
+    #[arg(short = 'j', long, default_value_t = 3)]
     pub threads: usize,
 
     /// location of short read quantification (if provided)
@@ -328,6 +331,11 @@ pub struct Args {
     /// width of the bins used in the coverage model
     #[arg(short, long, help_heading = "coverage model", default_value_t = 100)]
     pub bin_width: u32,
+
+    /// Number of alignment records to check for name collation when attempting
+    /// to validate that the input BAM is name collated.
+    #[arg(long, hide = true, default_value_t=100_000)]
+    pub sort_check_num: usize,
 
     /// use a KDE model of the observed fragment length distribution
     #[arg(short, long, hide = true)]

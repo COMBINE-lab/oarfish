@@ -106,6 +106,47 @@ EM:
           location of short read quantification (if provided)
 ```
 
+## Usage examples
+
+Assume that you have ONT cDNA sequencing reads in a file named `sample1_reads.tar.gz`, and you'd like to quantify the transcripts in a *transcriptome* reference in the file `transcripts.fa`.
+To accomplish this with oarfish, you can use either [alignment-based](index.md#alignment-based-input) or [read-based](index.md#read-based-input) mode.  Here we give a brief example
+of each.  To use alignment-based mode, we assume you have [minimap2](https://github.com/lh3/minimap2) and [samtools](http://www.htslib.org/) installed.  
+
+### aligment-mode example
+
+You can quantify the transcript abundances in this sample using the following commands:
+
+```{bash}
+$ minimap2 -t 16 -ax map-ont transcripts.fa sample1_reads.tar.gz | samtools view -@4 -b -o alignments.bam
+$ oarfish -j 16 -a alignments.bam -o sample1 --filter-group no-filters --model-coverage
+```
+
+This will produce several output files, as described [below](index.md#output).
+
+### read-mode example
+
+In read-based mode, you can quantify the transcript abundances in this sample using the following commands:
+
+```{bash}
+$ oarfish -j 16 --reads sample1_reads.tar.gz --reference transcripts.fa --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
+```
+
+If you are going to quantify more than one sample against these reference transcripts, it makes sense to save the minimap2 index that the above
+command creates.  This can be done using the following command:
+
+```{bash}
+$ oarfish -j 16 --reads sample1_reads.tar.gz --reference transcripts.fa --index-out transcripts.mmi --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
+```
+
+Then, in subsequent runs (say when quantifying `sample2_reads.tar.gz`), you can directly provide the `minimap2` index in place of the reference to
+speed up quantification.  That command would look like the following:
+
+```{bash}
+$ oarfish -j 16 --reads sample2_reads.tar.gz --reference transcripts.mmi --seq-tech ont-cdna -o sample2 --filter-group no-filters --model-coverage
+```
+
+As with alignment-based mode, these commands will produce several output files, as described [below](index.md#output).
+
 ## Input to `oarfish`
 
 `Oarfish` can accept as input either a `bam` file containing reads aligned to the transcriptome as specified [below](index.md#alignment-based-input), or
@@ -143,6 +184,12 @@ The parameters above should be explained by their relevant help option, but the 
 
 **In general**, if you apply a `filter-group`, the group options will be applied first and then any explicitly provided options given will override the corresponding option in the `filter-group`.
 
+## Notes about single-cell mode
+
+Starting with version 0.6.1 `oarfish` incorporates the first single-cell quantification capabilities. Given a `bam` file, **collated by cell barcode and with already (UMI) deduplicated reads**, this mode, enabled with the `--single-cell` flag, will allow `oarfish` to produce a single-cell quantification matrix. Currently, this mode can not be used with read-based mode, and the input `bam` file should be properly formatted for this purpose. 
+
+**Formatting requirements of BAM input in single-cell mode**: All alignment records for the same cell barcode should be adjacent in the `bam` file, and a count will be obtained for each read record, so UMI de-duplication should have been performed if those are the counts you want. In the future, counting UMIs directly may be supported, and some of these other restrictions may be lifted.
+
 ## Inferential Replicates
 
 `oarfish` has the ability to compute [_inferential replicates_](https://academic.oup.com/nar/article/47/18/e105/5542870) of its quantification estimates. This is performed by bootstrap sampling of the original read mappings, and subsequently performing inference under each resampling.  These inferential replicates allow assessing the variance of the point estimate of transcript abundance, and can lead to improved differential analysis at the transcript level, if using a differential testing tool that takes advantage of this information. The generation of inferential replicates is controlled by the `--num-bootstraps` argument to `oarfish`.  The default value is `0`, meaning that no inferential replicates are generated.  If you set this to some value greater than `0`, the the requested number of inferential replicates will be generated. It is recommended, if generating inferential replicates, to run `oarfish` with multiple threads, since replicate generation is highly-parallelized. Finally, if replicates are generated, they are written to a [`Parquet`](https://parquet.apache.org/), starting with the specified output stem and ending with `infreps.pq`.
@@ -154,6 +201,7 @@ The `--output` option passed to `oarfish` corresponds to a path prefix (this pre
   * `P.meta_info.json` - a JSON format file containing information about relevant parameters with which `oarfish` was run, and other relevant inforamtion from the processed sample apart from the actual transcript quantifications.
   * `P.quant` - a tab separated file listing the quantified targets, as well as information about their length and other metadata. The `num_reads` column provides the estimate of the number of reads originating from each target.
   * `P.infreps.pq` - a [`Parquet`](https://parquet.apache.org/) table where each row is a transcript and each column is an inferential replicate, containing the estimated counts for each transcript under each computed inferential replicate.
+  * `P.ambig_info.tsv` - a tab separated file listing, for each transcript (in the same order in which they appear in `P.quant`) the number of uniquely mapped, ambiguously mapped, and total reads.  The quantification estimate for each transcript, in general, should reside between the number of uniquely aligned reads and the total number of reads (i.e. these provide, respectively lower and upper bounds for the number of reads assigned to each transcript).  Note that the total in this file is the total number of reads that align to this transcript with a sufficiently high alignment score --- it is _not_, in general, an estimate of the number of reads originating from this transcript as many of those reads can be multimapping and, in fact, potentially better described by other transcripts.
 
 ## References
 

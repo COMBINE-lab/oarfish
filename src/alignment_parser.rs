@@ -34,7 +34,7 @@ pub fn read_and_verify_header<R: io::BufRead>(
     if so_type == "coordinate" {
         error!("oarfish is not designed to process coordinate sorted BAM files.");
         anyhow::bail!(
-        "You provided a coordinate-sorted BAM, but oarfish does not support processing these. 
+        "You provided a coordinate-sorted BAM, but oarfish does not support processing these.
          You should provide a BAM file collated by record name (which is the \"natural\" minimap2 order)."
         );
     }
@@ -227,8 +227,16 @@ pub fn parse_alignments<R: io::BufRead>(
     header: &Header,
     reader: &mut bam::io::Reader<R>,
     txps: &mut [TranscriptInfo],
+    check_order_thresh: usize,
     quiet: bool,
 ) -> anyhow::Result<()> {
+    //use blart::TreeMap;
+    use rustc_hash::FxHashSet;
+
+    let mut read_name_map = FxHashSet::default();
+    read_name_map.reserve(check_order_thresh);
+    let mut rg_num = 0_usize;
+
     // we'll need these to keep track of which alignments belong
     // to which reads.
     let mut prev_read = String::new();
@@ -238,7 +246,7 @@ pub fn parse_alignments<R: io::BufRead>(
     let pb = if quiet {
         indicatif::ProgressBar::hidden()
     } else {
-        indicatif::ProgressBar::new_spinner().with_message("Number of reads mapped")
+        indicatif::ProgressBar::new_spinner().with_message("Number of alignments processed")
     };
 
     pb.set_style(
@@ -291,6 +299,18 @@ pub fn parse_alignments<R: io::BufRead>(
                 // so it becomes the first on the new alignment range
                 // vector.
                 prev_read = rstring;
+                if rg_num < check_order_thresh {
+                    if !read_name_map.insert(prev_read.clone()) {
+                        error!("It appears that the input BAM file is not name-collated. oarfish is not designed to process coordinate sorted BAM files.");
+                        anyhow::bail!(
+                                "You appear to have provided a coordinate-sorted BAM, but oarfish does not support processing these.\n\
+                                    You should provide a BAM file collated by record name (which is the \"natural\" minimap2 order).\n\
+                                    Alignment records for the same read {} were observed twice in a non-contiguous block.", 
+                                &prev_read
+                            );
+                    }
+                    rg_num += 1;
+                }
                 if let Some(_ref_id) = record.reference_sequence_id() {
                     records_for_read.push(record_copy);
                 }
