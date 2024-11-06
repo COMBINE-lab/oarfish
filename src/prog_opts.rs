@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use clap::{builder::ArgPredicate, Parser};
 use serde::Serialize;
 use std::fmt;
@@ -30,20 +31,18 @@ pub enum ReadAssignmentProbOut {
     Compressed,
 }
 
-impl FromStr for ReadAssignmentProbOut {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "none" => Ok(ReadAssignmentProbOut::NoOutput),
-            "" => Ok(ReadAssignmentProbOut::NoOutput),
-            "raw" => Ok(ReadAssignmentProbOut::Uncompressed),
-            "yes" => Ok(ReadAssignmentProbOut::Uncompressed),
-            "compressed" => Ok(ReadAssignmentProbOut::Uncompressed),
-            x => Err(format!(
-                "Cannot parse {} as a valid option for read assignment probability output",
-                x
-            )),
-        }
+fn parse_assign_prob_out_value(s: &str) -> anyhow::Result<ReadAssignmentProbOut> {
+    match s.to_lowercase().as_str() {
+        "none" => Ok(ReadAssignmentProbOut::NoOutput),
+        "" => Ok(ReadAssignmentProbOut::NoOutput),
+        "raw" => Ok(ReadAssignmentProbOut::Uncompressed),
+        "yes" => Ok(ReadAssignmentProbOut::Uncompressed),
+        "uncompressed" => Ok(ReadAssignmentProbOut::Uncompressed),
+        "compressed" => Ok(ReadAssignmentProbOut::Uncompressed),
+        x => anyhow::bail!(
+            "Cannot parse {} as a valid option for read assignment probability output",
+            x
+        ),
     }
 }
 
@@ -317,12 +316,15 @@ pub struct Args {
     #[arg(long, help_heading = "coverage model", value_parser)]
     pub model_coverage: bool,
 
-    /// write output alignment probabilites for each mapped read
+    /// write output alignment probabilites (optionally compressed) for each mapped read
     #[arg(
         long,
         help_heading = "output read-txps probabilities",
         conflicts_with = "single-cell",
-        value_parser = clap::value_parser!(ReadAssignmentProbOut)
+        default_missing_value = "uncompressed",
+        num_args = 0..=1,
+        require_equals = true,
+        value_parser = parse_assign_prob_out_value
     )]
     pub write_assignment_probs: Option<ReadAssignmentProbOut>,
 
