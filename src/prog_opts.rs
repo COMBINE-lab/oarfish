@@ -26,19 +26,16 @@ fn parse_strand(arg: &str) -> anyhow::Result<bio_types::strand::Strand> {
 
 #[derive(Debug, Clone, clap::ValueEnum, Serialize)]
 pub enum ReadAssignmentProbOut {
-    NoOutput,
     Uncompressed,
     Compressed,
 }
 
 fn parse_assign_prob_out_value(s: &str) -> anyhow::Result<ReadAssignmentProbOut> {
     match s.to_lowercase().as_str() {
-        "none" => Ok(ReadAssignmentProbOut::NoOutput),
-        "" => Ok(ReadAssignmentProbOut::NoOutput),
         "raw" => Ok(ReadAssignmentProbOut::Uncompressed),
-        "yes" => Ok(ReadAssignmentProbOut::Uncompressed),
         "uncompressed" => Ok(ReadAssignmentProbOut::Uncompressed),
-        "compressed" => Ok(ReadAssignmentProbOut::Uncompressed),
+        "compressed" => Ok(ReadAssignmentProbOut::Compressed),
+        "lz4" => Ok(ReadAssignmentProbOut::Compressed),
         x => anyhow::bail!(
             "Cannot parse {} as a valid option for read assignment probability output",
             x

@@ -217,7 +217,13 @@ pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> i
         }
     }
 
-    let out_path = output.with_additional_extension(".prob");
+    let compressed = matches!(
+        emi.eq_map.filter_opts.write_assignment_probs_type,
+        Some(ReadAssignmentProbOut::Compressed)
+    );
+
+    let extension = if compressed { ".prob.lz4" } else { ".prob" };
+    let out_path = output.with_additional_extension(extension);
     File::create(&out_path)?;
 
     let write_prob = OpenOptions::new()
@@ -227,10 +233,6 @@ pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> i
         .open(out_path)
         .expect("Couldn't create output file");
 
-    let compressed = matches!(
-        emi.eq_map.filter_opts.write_assignment_probs_type,
-        Some(ReadAssignmentProbOut::Compressed)
-    );
     let mut writer_prob = if compressed {
         Either::Right(EncoderBuilder::new().level(9).build(write_prob)?)
     } else {

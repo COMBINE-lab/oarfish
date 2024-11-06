@@ -56,6 +56,7 @@ fn get_json_info(args: &Args, emi: &EMInfo, seqcol_digest: &str) -> serde_json::
         "em_convergence_thresh": &args.convergence_thresh,
         "threads": &args.threads,
         "filter_group": &args.filter_group,
+        "write_assignment_probs": &emi.eq_map.filter_opts.write_assignment_probs_type,
         "short_quant": &args.short_quant,
         "num_bootstraps": &args.num_bootstraps,
         "seqcol_digest": seqcol_digest
