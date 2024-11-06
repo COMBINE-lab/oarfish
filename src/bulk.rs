@@ -406,9 +406,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                                             names_vec.push(EMPTY_READ_NAME.to_string());
                                             warn!("Received an empty `read_name` from `filter.filter`.");
                                         }
-                                    } else {
-                                        warn!("`filter.filter` returned None for `read_name`.");
-                                    }
+                                    } 
                                     chunk_size += 1;
                                 }
                                 if chunk_size >= ALN_GROUP_CHUNK_LIMIT {
