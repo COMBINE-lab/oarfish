@@ -147,7 +147,7 @@ fn perform_inference_and_write_output(
     // write the output
     write_output(&args.output, json_info, header, &counts, &aux_txp_counts)?;
 
-    if args.write_assignment_probs {
+    if args.write_assignment_probs.is_some() {
         write_out_prob(&args.output, &emi, txps_name)?;
     }
     // if the user requested bootstrap replicates,
@@ -348,6 +348,7 @@ pub fn quantify_bulk_alignments_raw_reads(
         });
 
         // Consumer threads: receive sequences and perform alignment
+        let write_assignment_probs: bool = args.write_assignment_probs.is_some();
         let consumers: Vec<_> = (0..map_threads)
             .map(|_| {
                 let receiver = read_receiver.clone();
@@ -363,7 +364,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                     let mut aln_group_alns: Vec<AlnInfo> = Vec::new();
                     let mut aln_group_probs: Vec<f32> = Vec::new();
                     let mut aln_group_boundaries: Vec<usize> = Vec::new();
-                    let mut aln_group_read_names = args.write_assignment_probs.then(Vec::new);
+                    let mut aln_group_read_names = write_assignment_probs.then(Vec::new);
                     aln_group_boundaries.push(0);
 
                     // get the next chunk of reads
@@ -376,7 +377,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                             if let Ok(mut mappings) = map_res_opt {
 
                                 // if we are tracking the read names, then extract it here
-                                let read_name = if args.write_assignment_probs {
+                                let read_name = if write_assignment_probs {
                                     if let Some(first_part) = String::from_utf8_lossy(name).split_whitespace().next() {
                                         Some(first_part.to_string())
                                     } else {
@@ -422,7 +423,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                                     aln_group_probs.clear();
                                     aln_group_boundaries.clear();
                                     aln_group_boundaries.push(0);
-                                    aln_group_read_names = args.write_assignment_probs.then(Vec::new);
+                                    aln_group_read_names = write_assignment_probs.then(Vec::new);
                                     chunk_size = 0;
                                 }
                             } else {

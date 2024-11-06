@@ -1,3 +1,4 @@
+use crate::prog_opts::ReadAssignmentProbOut;
 use crate::util::oarfish_types::EMInfo;
 use crate::util::parquet_utils;
 use itertools::izip;
@@ -7,6 +8,8 @@ use arrow2::{
     chunk::Chunk,
     datatypes::{Field, Schema},
 };
+use either::Either;
+use lz4::EncoderBuilder;
 use path_tools::WithAdditionalExtension;
 
 use std::path::{Path, PathBuf};
@@ -223,27 +226,37 @@ pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> i
         .truncate(true)
         .open(out_path)
         .expect("Couldn't create output file");
-    let mut writer_prob = BufWriter::new(write_prob);
 
-    writeln!(writer_prob, "{}\t{}", txps_name.len(), emi.eq_map.len()).expect("couldn't write to prob output file");
+    let compressed = matches!(
+        emi.eq_map.filter_opts.write_assignment_probs_type,
+        Some(ReadAssignmentProbOut::Compressed)
+    );
+    let mut writer_prob = if compressed {
+        Either::Right(EncoderBuilder::new().level(9).build(write_prob)?)
+    } else {
+        Either::Left(BufWriter::with_capacity(1024 * 1024, write_prob))
+    };
+
+    writeln!(writer_prob, "{}\t{}", txps_name.len(), emi.eq_map.len())
+        .expect("couldn't write to prob output file");
     for tname in txps_name {
         writeln!(writer_prob, "{}", tname).expect("couldn't write to prob output file");
     }
 
     let model_coverage = emi.eq_map.filter_opts.model_coverage;
-    
+
     let mut txps = Vec::<usize>::new();
     let mut txp_probs = Vec::<f64>::new();
 
     for (alns, probs, coverage_probs, name) in emi.eq_map.iter_with_names() {
         let mut denom = 0.0_f64;
-        
+
         for (_a, p, cp) in izip!(alns, probs, coverage_probs) {
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
             denom += prob * cov_prob;
         }
-        
+
         let read = if let Some(rn) = name {
             rn
         } else {
@@ -259,12 +272,26 @@ pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> i
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
             txps.push(target_id);
-            txp_probs.push( ((prob * cov_prob) / denom).clamp(0.0, 1.0) );
+            txp_probs.push(((prob * cov_prob) / denom).clamp(0.0, 1.0));
         }
 
-        let txp_ids = txps.iter().map(|x| format!("{}", x)).collect::<Vec<String>>().join("\t");
-        let prob_vals = txp_probs.iter().map(|x| format!("{:.3}", x)).collect::<Vec<String>>().join("\t");
-        writeln!(writer_prob, "{}\t{}\t{}", txps.len(), txp_ids, prob_vals).expect("couldn't write to prob output file");
+        let txp_ids = txps
+            .iter()
+            .map(|x| format!("{}", x))
+            .collect::<Vec<String>>()
+            .join("\t");
+        let prob_vals = txp_probs
+            .iter()
+            .map(|x| format!("{:.3}", x))
+            .collect::<Vec<String>>()
+            .join("\t");
+        writeln!(writer_prob, "{}\t{}\t{}", txps.len(), txp_ids, prob_vals)
+            .expect("couldn't write to prob output file");
+    }
+
+    if let Either::Right(lz4) = writer_prob {
+        let (_output, result) = lz4.finish();
+        result?;
     }
 
     Ok(())

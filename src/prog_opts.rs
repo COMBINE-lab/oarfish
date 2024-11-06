@@ -24,6 +24,30 @@ fn parse_strand(arg: &str) -> anyhow::Result<bio_types::strand::Strand> {
 }
 
 #[derive(Debug, Clone, clap::ValueEnum, Serialize)]
+pub enum ReadAssignmentProbOut {
+    NoOutput,
+    Uncompressed,
+    Compressed,
+}
+
+impl FromStr for ReadAssignmentProbOut {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "none" => Ok(ReadAssignmentProbOut::NoOutput),
+            "" => Ok(ReadAssignmentProbOut::NoOutput),
+            "raw" => Ok(ReadAssignmentProbOut::Uncompressed),
+            "yes" => Ok(ReadAssignmentProbOut::Uncompressed),
+            "compressed" => Ok(ReadAssignmentProbOut::Uncompressed),
+            x => Err(format!(
+                "Cannot parse {} as a valid option for read assignment probability output",
+                x
+            )),
+        }
+    }
+}
+
+#[derive(Debug, Clone, clap::ValueEnum, Serialize)]
 pub enum SequencingTech {
     OntCDNA,
     OntDRNA,
@@ -298,9 +322,9 @@ pub struct Args {
         long,
         help_heading = "output read-txps probabilities",
         conflicts_with = "single-cell",
-        value_parser
+        value_parser = clap::value_parser!(ReadAssignmentProbOut)
     )]
-    pub write_assignment_probs: bool,
+    pub write_assignment_probs: Option<ReadAssignmentProbOut>,
 
     /// maximum number of iterations for which to run the EM algorithm
     #[arg(long, help_heading = "EM", default_value_t = 1000)]

@@ -18,6 +18,8 @@ use sam::{alignment::record::data::field::tag::Tag as AlnTag, Header};
 #[allow(unused_imports)]
 use tracing::{error, info, warn};
 
+use crate::prog_opts::ReadAssignmentProbOut;
+
 use super::constants::EMPTY_READ_NAME;
 
 pub trait AlnRecordLike {
@@ -784,6 +786,7 @@ pub struct AlignmentFilters {
     // True if we are enabling to output the alignment probability and
     // false otherwise.
     pub write_assignment_probs: bool,
+    pub write_assignment_probs_type: Option<ReadAssignmentProbOut>,
 }
 
 /// This structure records information about
