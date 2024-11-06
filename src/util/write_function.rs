@@ -230,7 +230,7 @@ pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> i
 
     let model_coverage = emi.eq_map.filter_opts.model_coverage;
 
-    for (alns, probs, coverage_probs, name) in emi.eq_map.iter() {
+    for (alns, probs, coverage_probs, name) in emi.eq_map.iter_with_names() {
         let mut denom = 0.0_f64;
 
         for (_a, p, cp) in izip!(alns, probs, coverage_probs) {

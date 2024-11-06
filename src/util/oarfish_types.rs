@@ -463,7 +463,43 @@ pub struct InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'h, 'b> {
     pub rand_inds: std::slice::Iter<'b, usize>,
 }
 
+pub struct InMemoryAlignmentStoreSamplingWithReplacementIterWithNames<'a, 'h, 'b> {
+    pub store: &'a InMemoryAlignmentStore<'h>,
+    pub rand_inds: std::slice::Iter<'b, usize>,
+}
+
 impl<'a, 'b, 'h> Iterator for InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'b, 'h> {
+    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(next_ind) = self.rand_inds.next() {
+            let start = self.store.boundaries[*next_ind];
+            let end = self.store.boundaries[*next_ind + 1];
+            Some((
+                &self.store.alignments[start..end],
+                &self.store.as_probabilities[start..end],
+                &self.store.coverage_probabilities[start..end],
+            ))
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.rand_inds.size_hint()
+    }
+}
+
+impl<'a, 'b, 'h> ExactSizeIterator
+    for InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'b, 'h>
+{
+}
+
+impl<'a, 'b, 'h> Iterator
+    for InMemoryAlignmentStoreSamplingWithReplacementIterWithNames<'a, 'b, 'h>
+{
     type Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a String>);
 
     #[inline]
@@ -494,8 +530,13 @@ impl<'a, 'b, 'h> Iterator for InMemoryAlignmentStoreSamplingWithReplacementIter<
 }
 
 impl<'a, 'b, 'h> ExactSizeIterator
-    for InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'b, 'h>
+    for InMemoryAlignmentStoreSamplingWithReplacementIterWithNames<'a, 'b, 'h>
 {
+}
+
+pub struct InMemoryAlignmentStoreIterWithNames<'a, 'h> {
+    pub store: &'a InMemoryAlignmentStore<'h>,
+    pub idx: usize,
 }
 
 pub struct InMemoryAlignmentStoreIter<'a, 'h> {
@@ -503,7 +544,7 @@ pub struct InMemoryAlignmentStoreIter<'a, 'h> {
     pub idx: usize,
 }
 
-impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
+impl<'a, 'h> Iterator for InMemoryAlignmentStoreIterWithNames<'a, 'h> {
     type Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a String>);
 
     #[inline]
@@ -524,6 +565,36 @@ impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
                 &self.store.as_probabilities[start..end],
                 &self.store.coverage_probabilities[start..end],
                 read_name_opt,
+            ))
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (
+            self.store.len() - self.idx,
+            Some(self.store.len() - self.idx),
+        )
+    }
+}
+
+impl<'a, 'h> ExactSizeIterator for InMemoryAlignmentStoreIterWithNames<'a, 'h> {}
+
+impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
+    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.idx + 1 >= self.store.boundaries.len() {
+            None
+        } else {
+            let start = self.store.boundaries[self.idx];
+            let end = self.store.boundaries[self.idx + 1];
+            self.idx += 1;
+            Some((
+                &self.store.alignments[start..end],
+                &self.store.as_probabilities[start..end],
+                &self.store.coverage_probabilities[start..end],
             ))
         }
     }
@@ -561,6 +632,13 @@ impl<'h> InMemoryAlignmentStore<'h> {
         }
     }
 
+    pub fn iter_with_names(&self) -> InMemoryAlignmentStoreIterWithNames {
+        InMemoryAlignmentStoreIterWithNames {
+            store: self,
+            idx: 0,
+        }
+    }
+
     pub fn random_sampling_iter<'a, 'b>(
         &'a self,
         inds: &'b [usize],
@@ -569,6 +647,19 @@ impl<'h> InMemoryAlignmentStore<'h> {
         'b: 'a,
     {
         InMemoryAlignmentStoreSamplingWithReplacementIter {
+            store: self,
+            rand_inds: inds.iter(),
+        }
+    }
+
+    pub fn random_sampling_iter_with_names<'a, 'b>(
+        &'a self,
+        inds: &'b [usize],
+    ) -> InMemoryAlignmentStoreSamplingWithReplacementIterWithNames
+    where
+        'b: 'a,
+    {
+        InMemoryAlignmentStoreSamplingWithReplacementIterWithNames {
             store: self,
             rand_inds: inds.iter(),
         }

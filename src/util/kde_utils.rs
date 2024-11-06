@@ -10,7 +10,7 @@ pub fn get_kde_model(
     let mut max_x: f64 = 0_f64;
     let mut max_y: f64 = 0_f64;
 
-    for (ainfs, _aprobs, _cprobs, _read_names) in store.iter() {
+    for (ainfs, _aprobs, _cprobs) in store.iter() {
         for ainf in ainfs {
             let txp_len = txps[ainf.ref_id as usize].lenf;
             let aln_len = ainf.alignment_span() as f64;
@@ -31,7 +31,7 @@ pub fn get_kde_model(
 
     let mut grid = kders::kde::KDEGrid::new(gd, bin_width, Some(kernel_bandwidth));
 
-    for (ainfs, _aprobs, _cprobs, _read_names) in store.iter() {
+    for (ainfs, _aprobs, _cprobs) in store.iter() {
         let w = 1. / (ainfs.len() as f64);
         for ainf in ainfs {
             let txp_len = txps[ainf.ref_id as usize].lenf;
@@ -63,7 +63,7 @@ pub fn refresh_kde_model(
 
     let mut grid = kders::kde::KDEGrid::new(gd, bin_width, Some(kernel_bandwidth));
 
-    for (ainfs, aprobs, cprobs, _read_names) in store.iter() {
+    for (ainfs, aprobs, cprobs) in store.iter() {
         let mut denom = 0.0_f64;
         for (a, p, _cp) in izip!(ainfs, aprobs, cprobs) {
             // Compute the probability of assignment of the

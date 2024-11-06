@@ -11,7 +11,8 @@ use tracing::{info, span, trace};
 
 use crate::bootstrap;
 
-type EqIterateT<'a> = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a String>);
+type EqIterateT<'a> = (&'a [AlnInfo], &'a [f32], &'a [f64]);
+type EqIterateWithNamesT<'a> = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a String>);
 
 /// Performs one iteration of the EM algorithm by looping over all
 /// alignments and computing their estimated probability of being
@@ -32,7 +33,7 @@ fn m_step_par<DFn>(
     // for (alns, probs, coverage_probs) in eq_map.iter() {
     eq_iterates.par_iter().for_each_with(
         &curr_counts,
-        |curr_counts, (alns, probs, coverage_probs, _read_names)| {
+        |curr_counts, (alns, probs, coverage_probs)| {
             let mut denom = 0.0_f64;
             for (a, p, cp) in izip!(*alns, *probs, *coverage_probs) {
                 // Compute the probability of assignment of the
@@ -84,7 +85,7 @@ fn m_step_par<DFn>(
 /// Then, `curr_counts` is computed by summing over the expected assignment
 /// likelihood for all reads mapping to each target.
 #[inline]
-fn m_step<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a String>)>>(
+fn m_step<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])>>(
     eq_map_iter: I,
     tinfo: &[TranscriptInfo],
     model_coverage: bool,
@@ -94,7 +95,7 @@ fn m_step<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Opti
 ) where
     DFn: Fn(usize, usize) -> f64,
 {
-    for (alns, probs, coverage_probs, _read_name_opt) in eq_map_iter {
+    for (alns, probs, coverage_probs) in eq_map_iter {
         let mut denom = 0.0_f64;
         for (a, p, cp) in izip!(alns, probs, coverage_probs) {
             // Compute the probability of assignment of the
@@ -141,11 +142,7 @@ fn m_step<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Opti
 ///
 /// returns:
 /// A [Vec<f64>] represented the expected read assignments to each transcript.
-pub fn do_em<
-    'a,
-    I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a String>)> + 'a,
-    F: Fn() -> I,
->(
+pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a, F: Fn() -> I>(
     em_info: &'a EMInfo,
     make_iter: F,
     do_log: bool,
