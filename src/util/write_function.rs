@@ -259,7 +259,7 @@ pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> i
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
             txps.push(target_id);
-            txp_probs.push( (prob * cov_prob) / denom );
+            txp_probs.push( ((prob * cov_prob) / denom).clamp(0.0, 1.0) );
         }
 
         let txp_ids = txps.iter().map(|x| format!("{}", x)).collect::<Vec<String>>().join("\t");
