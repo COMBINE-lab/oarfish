@@ -513,12 +513,12 @@ impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
         } else {
             let start = self.store.boundaries[self.idx];
             let end = self.store.boundaries[self.idx + 1];
-            self.idx += 1;
             let read_name_opt = self
                 .store
                 .read_names
                 .as_ref()
                 .map(|read_names| &read_names[self.idx]);
+            self.idx += 1;
             Some((
                 &self.store.alignments[start..end],
                 &self.store.as_probabilities[start..end],
