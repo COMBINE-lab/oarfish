@@ -172,7 +172,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .min_aligned_len(mal)
                 .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
-                .aln_prob(args.aln_prob)
+                .write_assignment_probs(args.write_assignment_probs)
                 .build())
         }
         Some(FilterGroup::NanocountFilters) => {
@@ -205,7 +205,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .min_aligned_len(mal)
                 .which_strand(bio_types::strand::Strand::Forward)
                 .model_coverage(args.model_coverage)
-                .aln_prob(args.aln_prob)
+                .write_assignment_probs(args.write_assignment_probs)
                 .build())
         }
         None => {
@@ -218,7 +218,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .min_aligned_len(args.min_aligned_len.try_as_u32()?)
                 .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
-                .aln_prob(args.aln_prob)
+                .write_assignment_probs(args.write_assignment_probs)
                 .build())
         }
     }

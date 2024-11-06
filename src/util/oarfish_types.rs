@@ -621,7 +621,11 @@ impl<'h> InMemoryAlignmentStore<'h> {
             boundaries: vec![0],
             discard_table: DiscardTable::new(),
             num_unique_alignments: 0,
-            read_names: if fo.aln_prob { Some(Vec::new()) } else { None },
+            read_names: if fo.write_assignment_probs {
+                Some(Vec::new())
+            } else {
+                None
+            },
         }
     }
 
@@ -676,7 +680,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
             // safely get the first element if the user
             // wants alignment probabilities, then we'll need
             // the read name, so get it.
-            let first_name = if self.filter_opts.aln_prob {
+            let first_name = if self.filter_opts.write_assignment_probs {
                 let first_aln = ag.first().expect("alignment group should be non-empty");
                 Some(
                     first_aln
@@ -779,7 +783,7 @@ pub struct AlignmentFilters {
     pub model_coverage: bool,
     // True if we are enabling to output the alignment probability and
     // false otherwise.
-    pub aln_prob: bool,
+    pub write_assignment_probs: bool,
 }
 
 /// This structure records information about

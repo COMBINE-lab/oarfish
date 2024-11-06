@@ -300,7 +300,7 @@ pub struct Args {
         conflicts_with = "single-cell",
         value_parser
     )]
-    pub aln_prob: bool,
+    pub write_assignment_probs: bool,
 
     /// maximum number of iterations for which to run the EM algorithm
     #[arg(long, help_heading = "EM", default_value_t = 1000)]
