@@ -234,7 +234,7 @@ pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> i
         .expect("Couldn't create output file");
 
     let mut writer_prob = if compressed {
-        Either::Right(EncoderBuilder::new().level(9).build(write_prob)?)
+        Either::Right(EncoderBuilder::new().level(4).build(write_prob)?)
     } else {
         Either::Left(BufWriter::with_capacity(1024 * 1024, write_prob))
     };
