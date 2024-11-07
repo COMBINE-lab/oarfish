@@ -260,7 +260,7 @@ pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> i
         }
 
         let read = if let Some(rn) = name {
-            rn
+            rn.trim_end_matches('\0')
         } else {
             "no_read_name_available"
         };
