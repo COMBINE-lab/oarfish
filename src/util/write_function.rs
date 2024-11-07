@@ -230,9 +230,16 @@ pub fn write_out_prob(
         .expect("Couldn't create output file");
     let mut writer_prob = BufWriter::new(write_prob);
 
-    writeln!(writer_prob, "read\ttxp\tAS_prob\tbinomial_prob\tfinal_prob").expect("Couldn't write to output file.");
+    writeln!(writer_prob, "{}\t{}", txps_name.len(), emi.eq_map.len())
+        .expect("couldn't write to prob output file");
+    for tname in txps_name {
+        writeln!(writer_prob, "{}", tname).expect("couldn't write to prob output file");
+    }
 
     let model_coverage = emi.eq_map.filter_opts.model_coverage;
+
+    let mut txps = Vec::<usize>::new();
+    let mut txp_probs = Vec::<f64>::new();
 
     for (index, (alns, probs, coverage_probs)) in emi.eq_map.iter().enumerate() {
         let mut denom = 0.0_f64;
@@ -245,25 +252,33 @@ pub fn write_out_prob(
 
         let empty_vec = Vec::new();
         let read = emi.eq_map.read_names.as_ref().unwrap_or(&empty_vec)[index].as_str();
+        
+        write!(writer_prob, "{}\t", read).expect("couldn't write to prob output file");
+
+        txps.clear();
+        txp_probs.clear();
 
         for (a, p, cp) in izip!(alns, probs, coverage_probs) {
             let target_id = a.ref_id as usize;
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
-
-            writeln!(
-                writer_prob,
-                "{}\t{}\t{}\t{}\t{}",
-                read,
-                txps_name[target_id],
-                prob,
-                cov_prob,
-                (prob * cov_prob) / denom
-            )
-            .expect("Couldn't write to output file.");
+            txps.push(target_id);
+            txp_probs.push(((prob * cov_prob) / denom).clamp(0.0, 1.0));
         }
+
+        let txp_ids = txps
+            .iter()
+            .map(|x| format!("{}", x))
+            .collect::<Vec<String>>()
+            .join("\t");
+        let prob_vals = txp_probs
+            .iter()
+            .map(|x| format!("{:.3}", x))
+            .collect::<Vec<String>>()
+            .join("\t");
+        writeln!(writer_prob, "{}\t{}\t{}", txps.len(), txp_ids, prob_vals)
+            .expect("couldn't write to prob output file");
     }
-  
 
     Ok(())
 }
