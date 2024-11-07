@@ -313,7 +313,9 @@ pub struct Args {
     #[arg(long, help_heading = "coverage model", value_parser)]
     pub model_coverage: bool,
 
-    /// write output alignment probabilites (optionally compressed) for each mapped read
+    /// write output alignment probabilites (optionally compressed) for each mapped read.
+    /// If <WRITE_ASSIGNMENT_PROBS> is present, it must be one of `uncompressed` (default) or
+    /// `compressed`, which will cause the output file to be lz4 compressed.
     #[arg(
         long,
         help_heading = "output read-txps probabilities",
