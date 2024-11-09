@@ -14,6 +14,7 @@ use bio_types::strand::Strand;
 use minimap2_temp as minimap2;
 use noodles_sam as sam;
 use sam::{alignment::record::data::field::tag::Tag as AlnTag, Header};
+use swapvec::{SwapVec, SwapVecConfig};
 
 #[allow(unused_imports)]
 use tracing::{error, info, warn};
@@ -446,7 +447,15 @@ pub struct InMemoryAlignmentStore<'h> {
     boundaries: Vec<usize>,
     pub discard_table: DiscardTable,
     pub num_unique_alignments: usize,
-    pub read_names: Option<Vec<String>>,
+    // Sigh --- this is ugly. We need the RefCell because we want to
+    // be able to "take" the SwapVec given a shared reference. Then,
+    // because we added the RefCell, we need the Mutex, because the
+    // InMemoryAlignmentStore gets passed between threads in the parallel
+    // version of the EM algorithm.
+    // TODO: Figure out a cleaner way to do this, since we don't even need
+    // this field if we are not requesting read assignment probabilities
+    // (hence, why it is optional).
+    pub read_names: Option<std::sync::Mutex<std::cell::RefCell<SwapVec<String>>>>,
 }
 
 impl<'h> InMemoryAlignmentStore<'h> {
@@ -458,14 +467,17 @@ impl<'h> InMemoryAlignmentStore<'h> {
     pub fn aggregate_discard_table(&mut self, table: &DiscardTable) {
         self.discard_table.aggregate(table);
     }
+
+    pub fn take_read_names_vec(&self) -> anyhow::Result<SwapVec<String>> {
+        if let Some(ref rnames) = self.read_names {
+            Ok(rnames.lock().unwrap().replace(swapvec::SwapVec::default()))
+        } else {
+            anyhow::bail!("cannot take a read_names vector from an alignment store that is not tracking read names")
+        }
+    }
 }
 
 pub struct InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'h, 'b> {
-    pub store: &'a InMemoryAlignmentStore<'h>,
-    pub rand_inds: std::slice::Iter<'b, usize>,
-}
-
-pub struct InMemoryAlignmentStoreSamplingWithReplacementIterWithNames<'a, 'h, 'b> {
     pub store: &'a InMemoryAlignmentStore<'h>,
     pub rand_inds: std::slice::Iter<'b, usize>,
 }
@@ -499,49 +511,13 @@ impl<'a, 'b, 'h> ExactSizeIterator
 {
 }
 
-impl<'a, 'b, 'h> Iterator
-    for InMemoryAlignmentStoreSamplingWithReplacementIterWithNames<'a, 'b, 'h>
-{
-    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a String>);
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(next_ind) = self.rand_inds.next() {
-            let start = self.store.boundaries[*next_ind];
-            let end = self.store.boundaries[*next_ind + 1];
-            let read_name_opt = self
-                .store
-                .read_names
-                .as_ref()
-                .map(|read_names| &read_names[*next_ind]);
-            Some((
-                &self.store.alignments[start..end],
-                &self.store.as_probabilities[start..end],
-                &self.store.coverage_probabilities[start..end],
-                read_name_opt,
-            ))
-        } else {
-            None
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.rand_inds.size_hint()
-    }
-}
-
-impl<'a, 'b, 'h> ExactSizeIterator
-    for InMemoryAlignmentStoreSamplingWithReplacementIterWithNames<'a, 'b, 'h>
-{
-}
-
-pub struct InMemoryAlignmentStoreIterWithNames<'a, 'h> {
+pub struct InMemoryAlignmentStoreIter<'a, 'h> {
     pub store: &'a InMemoryAlignmentStore<'h>,
     pub idx: usize,
 }
 
-pub struct InMemoryAlignmentStoreIter<'a, 'h> {
+/*
+pub struct InMemoryAlignmentStoreIterWithNames<'a, 'h> {
     pub store: &'a InMemoryAlignmentStore<'h>,
     pub idx: usize,
 }
@@ -581,6 +557,7 @@ impl<'a, 'h> Iterator for InMemoryAlignmentStoreIterWithNames<'a, 'h> {
 }
 
 impl<'a, 'h> ExactSizeIterator for InMemoryAlignmentStoreIterWithNames<'a, 'h> {}
+*/
 
 impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
     type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
@@ -624,7 +601,13 @@ impl<'h> InMemoryAlignmentStore<'h> {
             discard_table: DiscardTable::new(),
             num_unique_alignments: 0,
             read_names: if fo.write_assignment_probs {
-                Some(Vec::new())
+                Some(std::sync::Mutex::new(std::cell::RefCell::new(
+                    SwapVec::with_config(SwapVecConfig {
+                        swap_after: Default::default(),
+                        batch_size: Default::default(),
+                        compression: Some(swapvec::Compression::Lz4),
+                    }),
+                )))
             } else {
                 None
             },
@@ -638,12 +621,14 @@ impl<'h> InMemoryAlignmentStore<'h> {
         }
     }
 
+    /*
     pub fn iter_with_names(&self) -> InMemoryAlignmentStoreIterWithNames {
         InMemoryAlignmentStoreIterWithNames {
             store: self,
             idx: 0,
         }
     }
+    */
 
     pub fn random_sampling_iter<'a, 'b>(
         &'a self,
@@ -653,19 +638,6 @@ impl<'h> InMemoryAlignmentStore<'h> {
         'b: 'a,
     {
         InMemoryAlignmentStoreSamplingWithReplacementIter {
-            store: self,
-            rand_inds: inds.iter(),
-        }
-    }
-
-    pub fn random_sampling_iter_with_names<'a, 'b>(
-        &'a self,
-        inds: &'b [usize],
-    ) -> InMemoryAlignmentStoreSamplingWithReplacementIterWithNames
-    where
-        'b: 'a,
-    {
-        InMemoryAlignmentStoreSamplingWithReplacementIterWithNames {
             store: self,
             rand_inds: inds.iter(),
         }
@@ -725,7 +697,12 @@ impl<'h> InMemoryAlignmentStore<'h> {
             self.boundaries.push(self.alignments.len());
             // if we are keeping read names, push this one
             if let (Some(ref mut read_names), Some(rn)) = (&mut self.read_names, read_name) {
-                read_names.push(rn);
+                read_names
+                    .get_mut()
+                    .unwrap()
+                    .borrow_mut()
+                    .push(rn)
+                    .expect("should be able to add name to vector");
             }
         }
     }

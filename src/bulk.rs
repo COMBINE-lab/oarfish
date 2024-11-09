@@ -148,9 +148,6 @@ fn perform_inference_and_write_output(
     // write the output
     write_output(&args.output, json_info, header, &counts, &aux_txp_counts)?;
 
-    if args.write_assignment_probs.is_some() {
-        write_out_prob(&args.output, &emi, txps_name)?;
-    }
     // if the user requested bootstrap replicates,
     // compute and write those out now.
     if args.num_bootstraps > 0 {
@@ -170,6 +167,11 @@ fn perform_inference_and_write_output(
         let chunk = Chunk::new(new_arrays);
         write_infrep_file(&args.output, bs_fields, chunk)?;
     }
+
+    if args.write_assignment_probs.is_some() {
+        write_out_prob(&args.output, &emi, txps_name)?;
+    }
+
     Ok(())
 }
 

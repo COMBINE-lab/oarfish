@@ -207,7 +207,7 @@ pub(crate) fn write_infrep_file(
     parquet_utils::write_chunk_to_file(output_path.to_str().unwrap(), schema, chunk)
 }
 
-pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> io::Result<()> {
+pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> anyhow::Result<()> {
     if let Some(p) = output.parent() {
         // unless this was a relative path with one component,
         // which we should treat as the file prefix, then grab
@@ -246,11 +246,14 @@ pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> i
     }
 
     let model_coverage = emi.eq_map.filter_opts.model_coverage;
+    let names_vec = emi.eq_map.take_read_names_vec()?;
+
+    let names_iter = names_vec.into_iter();
 
     let mut txps = Vec::<usize>::new();
     let mut txp_probs = Vec::<f64>::new();
 
-    for (alns, probs, coverage_probs, name) in emi.eq_map.iter_with_names() {
+    for ((alns, probs, coverage_probs), name) in izip!(emi.eq_map.iter(), names_iter) {
         let mut denom = 0.0_f64;
 
         for (_a, p, cp) in izip!(alns, probs, coverage_probs) {
@@ -259,11 +262,9 @@ pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> i
             denom += prob * cov_prob;
         }
 
-        let read = if let Some(rn) = name {
-            rn.trim_end_matches('\0')
-        } else {
-            "no_read_name_available"
-        };
+        let rn = name.expect("could not extract read name from file");
+        let read = rn.trim_end_matches('\0');
+
         write!(writer_prob, "{}\t", read).expect("couldn't write to prob output file");
 
         txps.clear();

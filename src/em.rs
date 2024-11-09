@@ -12,7 +12,6 @@ use tracing::{info, span, trace};
 use crate::bootstrap;
 
 type EqIterateT<'a> = (&'a [AlnInfo], &'a [f32], &'a [f64]);
-type EqIterateWithNamesT<'a> = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a String>);
 
 /// Performs one iteration of the EM algorithm by looping over all
 /// alignments and computing their estimated probability of being
