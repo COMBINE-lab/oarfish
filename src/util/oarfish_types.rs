@@ -14,14 +14,11 @@ use bio_types::strand::Strand;
 use minimap2_temp as minimap2;
 use noodles_sam as sam;
 use sam::{alignment::record::data::field::tag::Tag as AlnTag, Header};
-use swapvec::{SwapVec, SwapVecConfig};
 
 #[allow(unused_imports)]
 use tracing::{error, info, warn};
 
 use crate::prog_opts::ReadAssignmentProbOut;
-
-use super::constants::EMPTY_READ_NAME;
 
 pub trait AlnRecordLike {
     fn opt_sequence_len(&self) -> Option<usize>;
@@ -447,15 +444,6 @@ pub struct InMemoryAlignmentStore<'h> {
     boundaries: Vec<usize>,
     pub discard_table: DiscardTable,
     pub num_unique_alignments: usize,
-    // Sigh --- this is ugly. We need the RefCell because we want to
-    // be able to "take" the SwapVec given a shared reference. Then,
-    // because we added the RefCell, we need the Mutex, because the
-    // InMemoryAlignmentStore gets passed between threads in the parallel
-    // version of the EM algorithm.
-    // TODO: Figure out a cleaner way to do this, since we don't even need
-    // this field if we are not requesting read assignment probabilities
-    // (hence, why it is optional).
-    pub read_names: Option<std::sync::Mutex<std::cell::RefCell<SwapVec<String>>>>,
 }
 
 impl<'h> InMemoryAlignmentStore<'h> {
@@ -466,14 +454,6 @@ impl<'h> InMemoryAlignmentStore<'h> {
 
     pub fn aggregate_discard_table(&mut self, table: &DiscardTable) {
         self.discard_table.aggregate(table);
-    }
-
-    pub fn take_read_names_vec(&self) -> anyhow::Result<SwapVec<String>> {
-        if let Some(ref rnames) = self.read_names {
-            Ok(rnames.lock().unwrap().replace(swapvec::SwapVec::default()))
-        } else {
-            anyhow::bail!("cannot take a read_names vector from an alignment store that is not tracking read names")
-        }
     }
 }
 
@@ -516,49 +496,6 @@ pub struct InMemoryAlignmentStoreIter<'a, 'h> {
     pub idx: usize,
 }
 
-/*
-pub struct InMemoryAlignmentStoreIterWithNames<'a, 'h> {
-    pub store: &'a InMemoryAlignmentStore<'h>,
-    pub idx: usize,
-}
-
-impl<'a, 'h> Iterator for InMemoryAlignmentStoreIterWithNames<'a, 'h> {
-    type Item = (&'a [AlnInfo], &'a [f32], &'a [f64], Option<&'a String>);
-
-    #[inline]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.idx + 1 >= self.store.boundaries.len() {
-            None
-        } else {
-            let start = self.store.boundaries[self.idx];
-            let end = self.store.boundaries[self.idx + 1];
-            let read_name_opt = self
-                .store
-                .read_names
-                .as_ref()
-                .map(|read_names| &read_names[self.idx]);
-            self.idx += 1;
-            Some((
-                &self.store.alignments[start..end],
-                &self.store.as_probabilities[start..end],
-                &self.store.coverage_probabilities[start..end],
-                read_name_opt,
-            ))
-        }
-    }
-
-    #[inline]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (
-            self.store.len() - self.idx,
-            Some(self.store.len() - self.idx),
-        )
-    }
-}
-
-impl<'a, 'h> ExactSizeIterator for InMemoryAlignmentStoreIterWithNames<'a, 'h> {}
-*/
-
 impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
     type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
 
@@ -600,17 +537,6 @@ impl<'h> InMemoryAlignmentStore<'h> {
             boundaries: vec![0],
             discard_table: DiscardTable::new(),
             num_unique_alignments: 0,
-            read_names: if fo.write_assignment_probs {
-                Some(std::sync::Mutex::new(std::cell::RefCell::new(
-                    SwapVec::with_config(SwapVecConfig {
-                        swap_after: Default::default(),
-                        batch_size: Default::default(),
-                        compression: Some(swapvec::Compression::Lz4),
-                    }),
-                )))
-            } else {
-                None
-            },
         }
     }
 
@@ -620,15 +546,6 @@ impl<'h> InMemoryAlignmentStore<'h> {
             idx: 0,
         }
     }
-
-    /*
-    pub fn iter_with_names(&self) -> InMemoryAlignmentStoreIterWithNames {
-        InMemoryAlignmentStoreIterWithNames {
-            store: self,
-            idx: 0,
-        }
-    }
-    */
 
     pub fn random_sampling_iter<'a, 'b>(
         &'a self,
@@ -648,32 +565,14 @@ impl<'h> InMemoryAlignmentStore<'h> {
         &mut self,
         txps: &mut [TranscriptInfo],
         ag: &mut Vec<T>,
-    ) {
+    ) -> bool {
         if !ag.is_empty() {
-            // ag isn't empty so we should be able to
-            // safely get the first element if the user
-            // wants alignment probabilities, then we'll need
-            // the read name, so get it.
-            let first_name = if self.filter_opts.write_assignment_probs {
-                let first_aln = ag.first().expect("alignment group should be non-empty");
-                Some(
-                    first_aln
-                        .name()
-                        .unwrap_or(bstr::BStr::new(EMPTY_READ_NAME))
-                        .to_string(),
-                )
-            } else {
-                None
-            };
-
-            let (alns, as_probs, read_name) = self.filter_opts.filter(
-                &mut self.discard_table,
-                self.aln_header,
-                txps,
-                first_name,
-                ag,
-            );
-            self.add_filtered_group(&alns, &as_probs, read_name, txps);
+            let (alns, as_probs) =
+                self.filter_opts
+                    .filter(&mut self.discard_table, self.aln_header, txps, ag);
+            self.add_filtered_group(&alns, &as_probs, txps)
+        } else {
+            false
         }
     }
 
@@ -682,9 +581,8 @@ impl<'h> InMemoryAlignmentStore<'h> {
         &mut self,
         alns: &[AlnInfo],
         as_probs: &[f32],
-        read_name: Option<String>,
         txps: &mut [TranscriptInfo],
-    ) {
+    ) -> bool {
         if !alns.is_empty() {
             for a in alns.iter() {
                 let tid = a.ref_id as usize;
@@ -695,15 +593,9 @@ impl<'h> InMemoryAlignmentStore<'h> {
             self.coverage_probabilities
                 .extend(vec![0.0_f64; alns.len()]);
             self.boundaries.push(self.alignments.len());
-            // if we are keeping read names, push this one
-            if let (Some(ref mut read_names), Some(rn)) = (&mut self.read_names, read_name) {
-                read_names
-                    .get_mut()
-                    .unwrap()
-                    .borrow_mut()
-                    .push(rn)
-                    .expect("should be able to add name to vector");
-            }
+            true
+        } else {
+            false
         }
     }
 
@@ -897,9 +789,8 @@ impl AlignmentFilters {
         discard_table: &mut DiscardTable,
         aln_header: &Header,
         txps: &[TranscriptInfo],
-        read_name: Option<String>,
         ag: &mut Vec<T>,
-    ) -> (Vec<AlnInfo>, Vec<f32>, Option<String>) {
+    ) -> (Vec<AlnInfo>, Vec<f32>) {
         // track the best score of any alignment we've seen
         // so far for this read (this will designate the
         // "primary" alignment for the read).
@@ -1007,13 +898,13 @@ impl AlignmentFilters {
 
         if ag.is_empty() || aln_len_at_best_retained == 0 || best_retained_score <= 0 {
             // There were no valid alignments
-            return (vec![], vec![], None);
+            return (vec![], vec![]);
         }
         if aln_frac_at_best_retained < self.min_aligned_fraction {
             // The best retained alignment did not have sufficient
             // coverage to be kept
             discard_table.discard_aln_frac += 1;
-            return (vec![], vec![], None);
+            return (vec![], vec![]);
         }
 
         // if we got here, then we have a valid "best" alignment
@@ -1054,7 +945,6 @@ impl AlignmentFilters {
                 .map(|x| AlnInfo::from_aln_rec_like(x, aln_header))
                 .collect(),
             probabilities,
-            read_name,
         )
     }
 }

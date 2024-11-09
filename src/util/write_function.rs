@@ -11,6 +11,7 @@ use arrow2::{
 use either::Either;
 use lz4::EncoderBuilder;
 use path_tools::WithAdditionalExtension;
+use swapvec::SwapVec;
 
 use std::path::{Path, PathBuf};
 use std::{
@@ -207,7 +208,12 @@ pub(crate) fn write_infrep_file(
     parquet_utils::write_chunk_to_file(output_path.to_str().unwrap(), schema, chunk)
 }
 
-pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> anyhow::Result<()> {
+pub fn write_out_prob(
+    output: &PathBuf,
+    emi: &EMInfo,
+    names_vec: SwapVec<String>,
+    txps_name: &[String],
+) -> anyhow::Result<()> {
     if let Some(p) = output.parent() {
         // unless this was a relative path with one component,
         // which we should treat as the file prefix, then grab
@@ -246,7 +252,7 @@ pub fn write_out_prob(output: &PathBuf, emi: &EMInfo, txps_name: &[String]) -> a
     }
 
     let model_coverage = emi.eq_map.filter_opts.model_coverage;
-    let names_vec = emi.eq_map.take_read_names_vec()?;
+    //let names_vec = emi.eq_map.take_read_names_vec()?;
 
     let names_iter = names_vec.into_iter();
 

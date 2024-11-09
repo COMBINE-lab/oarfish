@@ -1,3 +1,4 @@
+use crate::util::constants::EMPTY_READ_NAME;
 use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
 use noodles_bam as bam;
 use noodles_sam::header::record::value::map::tag;
@@ -5,6 +6,7 @@ use noodles_sam::{alignment::RecordBuf, Header};
 use num_format::{Locale, ToFormattedString};
 use std::io;
 use std::path::Path;
+use swapvec::SwapVec;
 use tracing::{error, info};
 
 pub fn read_and_verify_header<R: io::BufRead>(
@@ -224,6 +226,7 @@ pub fn parse_alignments_for_barcode<R: io::BufRead>(
 
 pub fn parse_alignments<R: io::BufRead>(
     store: &mut InMemoryAlignmentStore,
+    name_vec: &mut Option<SwapVec<String>>,
     header: &Header,
     reader: &mut bam::io::Reader<R>,
     txps: &mut [TranscriptInfo],
@@ -258,6 +261,21 @@ pub fn parse_alignments<R: io::BufRead>(
     );
     pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
 
+    // Adds the read name for the read corresponding to the provided alignment group
+    // `recs`, **if** we are keeping read names for the purpose of reporting read
+    // assignment probabilities.
+    let mut add_read_name = |recs: &Vec<noodles_sam::alignment::record_buf::RecordBuf>| {
+        if let Some(ref mut nvec) = name_vec {
+            let first_aln = recs.first().expect("alignment group should be non-empty");
+            let read_name = first_aln
+                .name()
+                .unwrap_or(bstr::BStr::new(EMPTY_READ_NAME))
+                .to_string();
+            nvec.push(read_name)
+                .expect("cannot push name to read name vector");
+        }
+    };
+
     // Parse the input alignemnt file, gathering the alignments aggregated
     // by their source read. **Note**: this requires that we have a
     // name-sorted input bam file (currently, aligned against the transcriptome).
@@ -289,7 +307,9 @@ pub fn parse_alignments<R: io::BufRead>(
                 // otherwise, record the alignment range for the
                 // previous read record.
                 if !prev_read.is_empty() {
-                    store.add_group(txps, &mut records_for_read);
+                    if store.add_group(txps, &mut records_for_read) {
+                        add_read_name(&records_for_read);
+                    }
                     if records_for_read.len() == 1 {
                         store.inc_unique_alignments();
                     }
@@ -320,7 +340,10 @@ pub fn parse_alignments<R: io::BufRead>(
     // if we end with a non-empty alignment range vector, then
     // add that group.
     if !records_for_read.is_empty() {
-        store.add_group(txps, &mut records_for_read);
+        // if we are using read names and we added the group here
+        if store.add_group(txps, &mut records_for_read) {
+            add_read_name(&records_for_read);
+        }
         if records_for_read.len() == 1 {
             store.inc_unique_alignments();
         }

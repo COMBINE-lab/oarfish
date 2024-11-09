@@ -280,7 +280,9 @@ fn main() -> anyhow::Result<()> {
         };
 
         let worker_count = NonZeroUsize::new(decomp_threads).expect("decompression threads >= 1");
-        args.threads = 1.max(args.threads.saturating_sub(decomp_threads));
+        if args.single_cell {
+            args.threads = 1.max(args.threads.saturating_sub(decomp_threads));
+        }
 
         let decoder = bgzf::MultithreadedReader::with_worker_count(worker_count, afile);
         let mut reader = bam::io::Reader::from(decoder);

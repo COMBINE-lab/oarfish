@@ -47,7 +47,7 @@ itertools = "0.13.0"
 serde_json = "1.0.127"
 path-tools = "0.1.0"
 atomic_float = "1.0.0"
-swapvec = { git = "https://github.com/rob-p/sendable_swapvec", branch = "main", version = "0.4.2" }
+sendable-swapvec = "0.4.3"
 rand = "0.8.5"
 arrow2 = { version = "0.18.0", features = [
   "io_parquet",

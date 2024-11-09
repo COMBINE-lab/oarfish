@@ -23,6 +23,7 @@ use noodles_bam as bam;
 use num_format::{Locale, ToFormattedString};
 use serde_json::json;
 use std::io::BufRead;
+use swapvec::{SwapVec, SwapVecConfig};
 use tracing::{info, warn};
 
 /// Produce a [serde_json::Value] that encodes the relevant arguments and
@@ -66,6 +67,7 @@ fn get_json_info(args: &Args, emi: &EMInfo, seqcol_digest: &str) -> serde_json::
 fn perform_inference_and_write_output(
     header: &noodles_sam::header::Header,
     store: &mut InMemoryAlignmentStore,
+    name_vec: Option<SwapVec<String>>,
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
     seqcol_digest: String,
@@ -169,7 +171,9 @@ fn perform_inference_and_write_output(
     }
 
     if args.write_assignment_probs.is_some() {
-        write_out_prob(&args.output, &emi, txps_name)?;
+        let name_vec = name_vec
+            .expect("cannot write assignment probabilities without valid vector of read names");
+        write_out_prob(&args.output, &emi, name_vec, txps_name)?;
     }
 
     Ok(())
@@ -184,18 +188,36 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
     args: &Args,
     seqcol_digest: String,
 ) -> anyhow::Result<()> {
+    let mut name_vec = if filter_opts.write_assignment_probs {
+        Some(SwapVec::<String>::with_config(SwapVecConfig {
+            swap_after: Default::default(),
+            batch_size: Default::default(),
+            compression: Some(swapvec::Compression::Lz4),
+        }))
+    } else {
+        None
+    };
     // now parse the actual alignments for the reads and store the results
     // in our in-memory stor
     let mut store = InMemoryAlignmentStore::new(filter_opts, header);
     alignment_parser::parse_alignments(
         &mut store,
+        &mut name_vec,
         header,
         reader,
         txps,
         args.sort_check_num,
         args.quiet,
     )?;
-    perform_inference_and_write_output(header, &mut store, txps, txps_name, seqcol_digest, args)
+    perform_inference_and_write_output(
+        header,
+        &mut store,
+        name_vec,
+        txps,
+        txps_name,
+        seqcol_digest,
+        args,
+    )
 }
 
 #[derive(Clone)]
@@ -300,7 +322,7 @@ pub fn quantify_bulk_alignments_raw_reads(
 
     type ReadGroup = ReadChunkWithNames;
     type AlignmentGroupInfo = (Vec<AlnInfo>, Vec<f32>, Vec<usize>, Option<Vec<String>>);
-    let mut store = std::thread::scope(|s| {
+    let (mut store, name_vec) = std::thread::scope(|s| {
         const READ_CHUNK_SIZE: usize = 200;
         const ALN_GROUP_CHUNK_LIMIT: usize = 100;
 
@@ -378,23 +400,10 @@ pub fn quantify_bulk_alignments_raw_reads(
                             let map_res_opt =
                                 loc_aligner.map_with_name(name, seq, true, false, None, None);
                             if let Ok(mut mappings) = map_res_opt {
-
-                                // if we are tracking the read names, then extract it here
-                                let read_name = if write_assignment_probs {
-                                    if let Some(first_part) = String::from_utf8_lossy(name).split_whitespace().next() {
-                                        Some(first_part.to_string())
-                                    } else {
-                                        Some(EMPTY_READ_NAME.to_string())
-                                    }
-                                } else {
-                                    None
-                                };
-
-                                let (ag, aprobs, read_name) = filter.filter(
+                                let (ag, aprobs) = filter.filter(
                                     &mut discard_table,
                                     header,
                                     my_txp_info_view,
-                                    read_name,
                                     &mut mappings,
                                 );
 
@@ -404,13 +413,15 @@ pub fn quantify_bulk_alignments_raw_reads(
                                     aln_group_boundaries.push(aln_group_alns.len());
                                     // if we are storing read names
                                     if let Some(ref mut names_vec) = aln_group_read_names {
-                                        if let Some(name) = read_name {
-                                            names_vec.push(name);
+                                        let read_name = if let Some(first_part) =
+                                            String::from_utf8_lossy(name).split_whitespace().next()
+                                        {
+                                            first_part.to_string()
                                         } else {
-                                            names_vec.push(EMPTY_READ_NAME.to_string());
-                                            warn!("Received an empty `read_name` from `filter.filter`.");
-                                        }
-                                    } 
+                                            EMPTY_READ_NAME.to_string()
+                                        };
+                                        names_vec.push(read_name);
+                                    }
                                     chunk_size += 1;
                                 }
                                 if chunk_size >= ALN_GROUP_CHUNK_LIMIT {
@@ -431,7 +442,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                                 }
                             } else {
                                 warn!(
-                                    "Error encountered mapping read : {}",
+                                    "Error encountered mappread_ing read : {}",
                                     map_res_opt.unwrap_err()
                                 );
                             }
@@ -439,7 +450,12 @@ pub fn quantify_bulk_alignments_raw_reads(
                     }
                     if chunk_size > 0 {
                         aln_group_sender
-                            .send((aln_group_alns, aln_group_probs, aln_group_boundaries, aln_group_read_names))
+                            .send((
+                                aln_group_alns,
+                                aln_group_probs,
+                                aln_group_boundaries,
+                                aln_group_read_names,
+                            ))
                             .expect("Error sending alignment group");
                     }
                     // NOTE: because `clone()` clones the raw pointer, if it is
@@ -458,7 +474,18 @@ pub fn quantify_bulk_alignments_raw_reads(
         let txps_mut = txps.as_mut();
         let filter_opts_store = filter_opts.clone();
         let aln_group_consumer = s.spawn(move || {
+            let mut name_vec = if filter_opts_store.write_assignment_probs {
+                Some(SwapVec::<String>::with_config(SwapVecConfig {
+                    swap_after: Default::default(),
+                    batch_size: Default::default(),
+                    compression: Some(swapvec::Compression::Lz4),
+                }))
+            } else {
+                None
+            };
+
             let mut store = InMemoryAlignmentStore::new(filter_opts_store, header);
+
             let pb = if args.quiet {
                 indicatif::ProgressBar::hidden()
             } else {
@@ -501,11 +528,17 @@ pub fn quantify_bulk_alignments_raw_reads(
                     if ag.len() == 1 {
                         store.inc_unique_alignments();
                     }
-                    store.add_filtered_group(ag, as_probs, read_name_opt, txps_mut);
+                    if store.add_filtered_group(ag, as_probs, txps_mut) {
+                        if let Some(ref mut nvec) = name_vec {
+                            let read_name = read_name_opt.unwrap_or(EMPTY_READ_NAME.to_string());
+                            nvec.push(read_name)
+                                .expect("cannot push name to read name vector");
+                        }
+                    }
                 }
             }
             pb.finish_with_message("Finished aligning reads.");
-            store
+            (store, name_vec)
         });
 
         // Wait for the producer to finish reading
@@ -519,7 +552,7 @@ pub fn quantify_bulk_alignments_raw_reads(
 
         drop(aln_group_sender);
 
-        let mut store = aln_group_consumer
+        let (mut store, name_vec) = aln_group_consumer
             .join()
             .expect("Alignment group consumer panicked");
 
@@ -531,8 +564,16 @@ pub fn quantify_bulk_alignments_raw_reads(
         for dt in &discard_tables {
             store.aggregate_discard_table(dt);
         }
-        store
+        (store, name_vec)
     });
 
-    perform_inference_and_write_output(header, &mut store, txps, txps_name, seqcol_digest, args)
+    perform_inference_and_write_output(
+        header,
+        &mut store,
+        name_vec,
+        txps,
+        txps_name,
+        seqcol_digest,
+        args,
+    )
 }
