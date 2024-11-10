@@ -1,4 +1,3 @@
-use anyhow::anyhow;
 use clap::{builder::ArgPredicate, Parser};
 use serde::Serialize;
 use std::fmt;

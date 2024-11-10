@@ -30,6 +30,7 @@ pub trait AlnRecordLike {
     fn aln_start(&self) -> u32;
     fn aln_end(&self) -> u32;
     fn is_supp(&self) -> bool;
+    #[allow(dead_code)]
     fn name(&self) -> Option<String>;
 }
 

@@ -322,6 +322,8 @@ pub fn quantify_bulk_alignments_raw_reads(
 
     type ReadGroup = ReadChunkWithNames;
     type AlignmentGroupInfo = (Vec<AlnInfo>, Vec<f32>, Vec<usize>, Option<Vec<String>>);
+
+    // we need the scope here so we can borrow the relevant non-'static data
     let (mut store, name_vec) = std::thread::scope(|s| {
         const READ_CHUNK_SIZE: usize = 200;
         const ALN_GROUP_CHUNK_LIMIT: usize = 100;
