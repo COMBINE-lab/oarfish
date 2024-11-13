@@ -12,6 +12,7 @@ use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::{write_infrep_file, write_out_prob, write_output};
 use crate::{binomial_continuous_prob, normalize_read_probs};
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
+use bstr::{ByteSlice, B};
 use crossbeam::channel::bounded;
 use crossbeam::channel::Receiver;
 use crossbeam::channel::Sender;
@@ -289,6 +290,9 @@ impl<'a> Iterator for ReadChunkIter<'a> {
 
     #[inline(always)]
     fn size_hint(&self) -> (usize, Option<usize>) {
+        // there's the - 1 because the separator always has
+        // one more entry than the actual number of sequences
+        // because it starts with a 0.
         let rem = (self.chunk.seq_sep.len() - 1) - self.pos;
         (rem, Some(rem))
     }
@@ -351,8 +355,17 @@ pub fn quantify_bulk_alignments_raw_reads(
                     chunk_size += 1;
                     ctr += 1;
 
+                    let read_str = B(record.id())
+                        .fields_with(|ch| ch.is_ascii_whitespace())
+                        .next();
+                    let read_name = if let Some(first_part) = read_str {
+                        first_part
+                    } else {
+                        EMPTY_READ_NAME.as_bytes()
+                    };
+
                     // put this read on the current chunk
-                    read_chunk.add_id_and_read(record.id(), &record.seq());
+                    read_chunk.add_id_and_read(read_name, &record.seq());
 
                     // send off the next chunks of reads to a thread
                     if chunk_size >= READ_CHUNK_SIZE {
@@ -415,14 +428,8 @@ pub fn quantify_bulk_alignments_raw_reads(
                                     aln_group_boundaries.push(aln_group_alns.len());
                                     // if we are storing read names
                                     if let Some(ref mut names_vec) = aln_group_read_names {
-                                        let read_name = if let Some(first_part) =
-                                            String::from_utf8_lossy(name).split_whitespace().next()
-                                        {
-                                            first_part.to_string()
-                                        } else {
-                                            EMPTY_READ_NAME.to_string()
-                                        };
-                                        names_vec.push(read_name);
+                                        let name_str = String::from_utf8_lossy(name).into_owned();
+                                        names_vec.push(name_str);
                                     }
                                     chunk_size += 1;
                                 }

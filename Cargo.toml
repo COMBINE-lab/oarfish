@@ -65,9 +65,9 @@ sprs = "0.11.1"
 minimap2-sys = { version = "0.1.19" }
 # rely on minimap2-temp until upstream version is pushed
 # make sure relevant changes are in upstream PR
-minimap2-temp = { version = "0.1.31" }
+minimap2-temp = { version = "0.1.32" }
 # alternative sources for dev
-#minimap2 = { version = "0.1.20", git = "https://github.com/rob-p/minimap2-rs.git", branch = "alignment-score" }
+#minimap2-temp = { version = "0.1.20", git = "https://github.com/rob-p/minimap2-rs.git", branch = "alignment-score" }
 #minimap2 = { version = "0.1.20", git = "https://github.com/jguhlin/minimap2-rs.git", branch = "alignment-score" }
 needletail = "0.5.1"
 indicatif = "0.17.8"
