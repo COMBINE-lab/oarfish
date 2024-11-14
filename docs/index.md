@@ -183,13 +183,13 @@ In alignment-based mode, `oarfish` processes pre-computed alignments of hte read
 
 **Note (2)**: For very high quality PacBio data, it may be most appropriate to use the `-ax map-hifi` flag in place of `-ax pacbio`.  We are currently evaluating the effect of this option, and also welcome feedback if you have experiences to share on the use of data aligned with these different flags with `oarfish`.
 
-### Other notes on `oarfish` parameters
+## Other notes on `oarfish` parameters
 
 The parameters above should be explained by their relevant help option, but the `-d`/`--strand-filter` is worth noting explicitly. By default, alignments to both strands of a transcript will be considered valid.  You can use this option to allow only alignments in the specified orientation; for example `-d fw` will allow only alignments in the forward orientation and `-d rc` will allow only alignments in the reverse-complement orientation and `-d both` (the default) will allow both.  The `-d` filter, if explicitly provided, overrides the orientation filter in any provided "filter group" so e.g. passing `--filter-group no-filters -d fw` will disable other filters, but will still only admit alignments in the forward orientation.
 
 **In general**, if you apply a `filter-group`, the group options will be applied first and then any explicitly provided options given will override the corresponding option in the `filter-group`.
 
-#### Read-level assignment probabilities
+### Read-level assignment probabilities
 
 `oarfish` has the ability to output read-level assignment probabilities.  That is, for each input read, what is the probability, conditioned on the final estimate of transcript abundances, that the read was sequenced from each transcript to which it aligned. By default, this information is not recorded (as it's not required, or commonly used, for most standard analyses). To enable this output, you should pass the `--write-assignment-probs` option to `oarfish`.  Optionally, you may also pass `--write-assignment-probs=compressed` to write the output to a compressed ([lz4](https://github.com/lz4/lz4)) stream --- the default
 output is to an uncompressed text file.
@@ -247,6 +247,7 @@ The `--output` option passed to `oarfish` corresponds to a path prefix (this pre
   * `P.quant` - a tab separated file listing the quantified targets, as well as information about their length and other metadata. The `num_reads` column provides the estimate of the number of reads originating from each target.
   * `P.infreps.pq` - a [`Parquet`](https://parquet.apache.org/) table where each row is a transcript and each column is an inferential replicate, containing the estimated counts for each transcript under each computed inferential replicate.
   * `P.ambig_info.tsv` - a tab separated file listing, for each transcript (in the same order in which they appear in `P.quant`) the number of uniquely mapped, ambiguously mapped, and total reads.  The quantification estimate for each transcript, in general, should reside between the number of uniquely aligned reads and the total number of reads (i.e. these provide, respectively lower and upper bounds for the number of reads assigned to each transcript).  Note that the total in this file is the total number of reads that align to this transcript with a sufficiently high alignment score --- it is _not_, in general, an estimate of the number of reads originating from this transcript as many of those reads can be multimapping and, in fact, potentially better described by other transcripts.
+  * `P.prob[.lz4]` - a file encoding the assignment probability of each read to each transcript to which it had a valid alignment (optionally compressed using [`lz4`](https://github.com/lz4/lz4)). This file is optional and is generated only if `--write-assignment-probs` is passed to `oarfish`.
 
 ## References
 
