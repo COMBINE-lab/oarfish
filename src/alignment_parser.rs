@@ -309,9 +309,9 @@ pub fn parse_alignments<R: io::BufRead>(
                 if !prev_read.is_empty() {
                     if store.add_group(txps, &mut records_for_read) {
                         add_read_name(&records_for_read);
-                    }
-                    if records_for_read.len() == 1 {
-                        store.inc_unique_alignments();
+                        if records_for_read.len() == 1 {
+                            store.inc_unique_alignments();
+                        }
                     }
                     records_for_read.clear();
                 }
@@ -343,9 +343,9 @@ pub fn parse_alignments<R: io::BufRead>(
         // if we are using read names and we added the group here
         if store.add_group(txps, &mut records_for_read) {
             add_read_name(&records_for_read);
-        }
-        if records_for_read.len() == 1 {
-            store.inc_unique_alignments();
+            if records_for_read.len() == 1 {
+                store.inc_unique_alignments();
+            }
         }
         records_for_read.clear();
     }

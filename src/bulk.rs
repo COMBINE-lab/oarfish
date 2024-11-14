@@ -534,14 +534,14 @@ pub fn quantify_bulk_alignments_raw_reads(
                         None
                     };
 
-                    if ag.len() == 1 {
-                        store.inc_unique_alignments();
-                    }
                     if store.add_filtered_group(ag, as_probs, txps_mut) {
                         if let Some(ref mut nvec) = name_vec {
                             let read_name = read_name_opt.unwrap_or(EMPTY_READ_NAME.to_string());
                             nvec.push(read_name)
                                 .expect("cannot push name to read name vector");
+                        }
+                        if ag.len() == 1 {
+                            store.inc_unique_alignments();
                         }
                     }
                 }

@@ -186,7 +186,11 @@ impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for
     }
 
     fn aln_span(&self) -> Option<usize> {
-        self.alignment_span().expect("valid span")
+        // NOTE: The transpose here is because noodles_sam
+        // switched from returning Result<Option<usize>> to
+        // Option<Result<usize>> --- think if there is a
+        // better way to handle the new return type directly
+        self.alignment_span().transpose().expect("valid span")
     }
 
     fn aln_score(&self) -> Option<i64> {
