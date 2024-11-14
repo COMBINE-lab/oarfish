@@ -380,7 +380,12 @@
   
 </li>
         
-          <li class="md-nav__item">
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#other-notes-on-oarfish-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       Other notes on oarfish parameters
@@ -396,11 +401,6 @@
       Read-level assignment probabilities
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
         
@@ -591,7 +591,12 @@
   
 </li>
         
-          <li class="md-nav__item">
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#other-notes-on-oarfish-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       Other notes on oarfish parameters
@@ -607,11 +612,6 @@
       Read-level assignment probabilities
     </span>
   </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
         
@@ -804,10 +804,10 @@ corresponding to the <code>minimap2</code> parameter <code>-N</code>) can be spe
 <h3 id="alignmment-based-input">Alignmment-based input</h3>
 <p>In alignment-based mode, <code>oarfish</code> processes pre-computed alignments of hte read to the transcriptome. The input should be a <code>bam</code> format file, with reads aligned using <a href="https://github.com/lh3/minimap2"><code>minimap2</code></a> against the <em>transcriptome</em>. That is, <code>oarfish</code> does not currently handle spliced alignment to the genome. Further, the output alignments should be name sorted (the default order produced by <code>minimap2</code> should be fine). <em>Specifically</em>, <code>oarfish</code> relies on the existence of the <code>AS</code> tag in the <code>bam</code> records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read. ### Choosing <code>minimap2</code> alignment options Since the purpose of <code>oarfish</code> is to estimate transcript abundance from a collection of alignments to the target transcriptome, it is important that the alignments are generated in a fashion that is compatible with this goal.  Primarily, this means that the aligner should be configured to report as many optimal (and near-optimal) alignments as exist, so that <code>oarfish</code> can observe all of this information and determine how to allocate reads to transcripts.  We recommend using the following options with <code>minimap2</code> when aligning data for later processing by <code>oarfish</code> * For ONT data (either dRNA or cDNA): please use the flags <code>--eqx -N 100 -ax map-ont</code> For PacBio data: please use the flags <code>--eqx -N 100 -ax pacbio</code> <strong>Note (1)</strong>: It may be worthwile using an even larger <code>N</code> value (e.g. the <a href="https://www.biorxiv.org/content/10.1101/2024.04.13.589356v1.full">TranSigner manuscript</a> recommends <code>-N 181</code>). A larger value should not diminish the accuracy of <code>oarfish</code>, but it may make alignment take longer and produce a larger <code>bam</code> file.</p>
 <p><strong>Note (2)</strong>: For very high quality PacBio data, it may be most appropriate to use the <code>-ax map-hifi</code> flag in place of <code>-ax pacbio</code>.  We are currently evaluating the effect of this option, and also welcome feedback if you have experiences to share on the use of data aligned with these different flags with <code>oarfish</code>.</p>
-<h3 id="other-notes-on-oarfish-parameters">Other notes on <code>oarfish</code> parameters</h3>
+<h2 id="other-notes-on-oarfish-parameters">Other notes on <code>oarfish</code> parameters</h2>
 <p>The parameters above should be explained by their relevant help option, but the <code>-d</code>/<code>--strand-filter</code> is worth noting explicitly. By default, alignments to both strands of a transcript will be considered valid.  You can use this option to allow only alignments in the specified orientation; for example <code>-d fw</code> will allow only alignments in the forward orientation and <code>-d rc</code> will allow only alignments in the reverse-complement orientation and <code>-d both</code> (the default) will allow both.  The <code>-d</code> filter, if explicitly provided, overrides the orientation filter in any provided "filter group" so e.g. passing <code>--filter-group no-filters -d fw</code> will disable other filters, but will still only admit alignments in the forward orientation.</p>
 <p><strong>In general</strong>, if you apply a <code>filter-group</code>, the group options will be applied first and then any explicitly provided options given will override the corresponding option in the <code>filter-group</code>.</p>
-<h4 id="read-level-assignment-probabilities">Read-level assignment probabilities</h4>
+<h3 id="read-level-assignment-probabilities">Read-level assignment probabilities</h3>
 <p><code>oarfish</code> has the ability to output read-level assignment probabilities.  That is, for each input read, what is the probability, conditioned on the final estimate of transcript abundances, that the read was sequenced from each transcript to which it aligned. By default, this information is not recorded (as it's not required, or commonly used, for most standard analyses). To enable this output, you should pass the <code>--write-assignment-probs</code> option to <code>oarfish</code>.  Optionally, you may also pass <code>--write-assignment-probs=compressed</code> to write the output to a compressed (<a href="https://github.com/lz4/lz4">lz4</a>) stream --- the default
 output is to an uncompressed text file.</p>
 <p>The format of the read assignment probabilities is as follows --- where all fields below on a single line are <code>\t</code> delimited:</p>
@@ -847,6 +847,7 @@ readZ 1 4 1.0
 <li><code>P.quant</code> - a tab separated file listing the quantified targets, as well as information about their length and other metadata. The <code>num_reads</code> column provides the estimate of the number of reads originating from each target.</li>
 <li><code>P.infreps.pq</code> - a <a href="https://parquet.apache.org/"><code>Parquet</code></a> table where each row is a transcript and each column is an inferential replicate, containing the estimated counts for each transcript under each computed inferential replicate.</li>
 <li><code>P.ambig_info.tsv</code> - a tab separated file listing, for each transcript (in the same order in which they appear in <code>P.quant</code>) the number of uniquely mapped, ambiguously mapped, and total reads.  The quantification estimate for each transcript, in general, should reside between the number of uniquely aligned reads and the total number of reads (i.e. these provide, respectively lower and upper bounds for the number of reads assigned to each transcript).  Note that the total in this file is the total number of reads that align to this transcript with a sufficiently high alignment score --- it is <em>not</em>, in general, an estimate of the number of reads originating from this transcript as many of those reads can be multimapping and, in fact, potentially better described by other transcripts.</li>
+<li><code>P.prob[.lz4]</code> - a file encoding the assignment probability of each read to each transcript to which it had a valid alignment (optionally compressed using <a href="https://github.com/lz4/lz4"><code>lz4</code></a>). This file is optional and is generated only if <code>--write-assignment-probs</code> is passed to <code>oarfish</code>.</li>
 </ul>
 <h2 id="references">References</h2>
 <div class="footnote">
