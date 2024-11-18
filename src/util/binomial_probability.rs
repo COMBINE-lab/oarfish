@@ -183,26 +183,9 @@ pub fn binomial_continuous_prob(txps: &mut [TranscriptInfo], bins: &u32, threads
 
     let _log_span = info_span!("binomial_continuous_prob").entered();
     info!("computing coverage probabilities");
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .build()
-        .unwrap();
 
-    txps.par_iter_mut().enumerate().for_each(|(_i, t)| {
+    let compute_txp_coverage_probs = |_i: usize, t: &mut TranscriptInfo| {
         let temp_prob: Vec<f64> = if *bins != 0 {
-            /*
-            let bin_counts: Vec<f32>;
-            let bin_lengths: Vec<f32>;
-            let _num_discarded_read_temp: usize;
-            let _bin_coverage: Vec<f64>;
-            (
-                bin_counts,
-                bin_lengths,
-                _num_discarded_read_temp,
-                _bin_coverage,
-            ) = bin_transcript_normalize_counts(t, bins); //binning the transcript length and obtain the counts and length vectors
-                                                          //==============================================================================================
-            */
             let min_cov = t.total_weight / 100.;
             t.coverage_bins.iter_mut().for_each(|elem| *elem += min_cov);
             let (bin_counts, bin_lengths) = t.get_normalized_counts_and_lengths();
@@ -216,8 +199,26 @@ pub fn binomial_continuous_prob(txps: &mut [TranscriptInfo], bins: &u32, threads
         } else {
             std::unimplemented!("coverage model with 0 bins is not currently implemented");
         };
-
         t.coverage_prob = temp_prob;
-    });
+    };
+
+    // if we are requesting only a single thread, then don't bother with
+    // the overhead of e.g. creating a thread pool and doing parallel
+    // iteration, etc.
+    if threads > 1 {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            txps.par_iter_mut()
+                .enumerate()
+                .for_each(|(_i, t)| compute_txp_coverage_probs(_i, t));
+        });
+    } else {
+        txps.iter_mut()
+            .enumerate()
+            .for_each(|(_i, t)| compute_txp_coverage_probs(_i, t));
+    }
     info!("done");
 }

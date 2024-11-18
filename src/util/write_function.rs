@@ -276,12 +276,23 @@ pub fn write_out_prob(
         txps.clear();
         txp_probs.clear();
 
+        const DISPLAY_THRESH: f64 = 0.001;
+        let mut denom2 = 0.0_f64;
+
         for (a, p, cp) in izip!(alns, probs, coverage_probs) {
             let target_id = a.ref_id as usize;
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
-            txps.push(target_id);
-            txp_probs.push(((prob * cov_prob) / denom).clamp(0.0, 1.0));
+            let nprob = ((prob * cov_prob) / denom).clamp(0.0, 1.0);
+            if nprob >= DISPLAY_THRESH {
+                txps.push(target_id);
+                txp_probs.push(nprob);
+                denom2 += nprob;
+            }
+        }
+
+        for p in txp_probs.iter_mut() {
+            *p /= denom2;
         }
 
         let txp_ids = txps
