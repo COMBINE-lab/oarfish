@@ -18,7 +18,8 @@ use crossbeam::channel::Receiver;
 use crossbeam::channel::Sender;
 #[allow(unused_imports)]
 use minimap2_sys as mm_ffi;
-use minimap2_temp as minimap2;
+//use minimap2_temp as minimap2;
+use minimap2;
 use needletail::parse_fastx_file;
 use noodles_bam as bam;
 use num_format::{Locale, ToFormattedString};
@@ -393,7 +394,7 @@ pub fn quantify_bulk_alignments_raw_reads(
             .map(|_| {
                 let receiver = read_receiver.clone();
                 let mut filter = filter_opts.clone();
-                let mut loc_aligner = aligner.clone().with_cigar();
+                let mut loc_aligner = aligner.clone();
 
                 let my_txp_info_view = &txp_info_view;
                 let aln_group_sender = aln_group_sender.clone();
@@ -413,7 +414,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                         for (name, seq) in read_chunk.iter() {
                             // map the next read, with cigar string
                             let map_res_opt =
-                                loc_aligner.map_with_name(name, seq, true, false, None, None);
+                                loc_aligner.map(seq, true, false, None, None, Some(name));
                             if let Ok(mut mappings) = map_res_opt {
                                 let (ag, aprobs) = filter.filter(
                                     &mut discard_table,

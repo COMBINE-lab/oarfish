@@ -5,7 +5,8 @@ use anyhow::Context;
 
 use core::ffi;
 use minimap2_sys as mm_ffi;
-use minimap2_temp as minimap2;
+//use minimap2_temp as minimap2;
+use minimap2;
 use num_format::{Locale, ToFormattedString};
 use std::{fs::File, io};
 
@@ -55,8 +56,8 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
         Some(SequencingTech::OntCDNA) | Some(SequencingTech::OntDRNA) => {
             minimap2::Aligner::builder()
                 .with_index_threads(*idx_threads)
-                .with_cigar()
                 .map_ont()
+                .with_cigar()
                 .with_index(
                     args.reference
                         .clone()
@@ -67,8 +68,8 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
         }
         Some(SequencingTech::PacBio) => minimap2::Aligner::builder()
             .with_index_threads(*idx_threads)
-            .with_cigar()
             .map_pb()
+            .with_cigar()
             .with_index(
                 args.reference
                     .clone()
@@ -78,8 +79,8 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
             .expect("could not construct minimap2 index"),
         Some(SequencingTech::PacBioHifi) => minimap2::Aligner::builder()
             .with_index_threads(*idx_threads)
-            .with_cigar()
             .map_hifi()
+            .with_cigar()
             .with_index(
                 args.reference
                     .clone()

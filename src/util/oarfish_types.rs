@@ -11,7 +11,8 @@ use serde::Serialize;
 use typed_builder::TypedBuilder;
 
 use bio_types::strand::Strand;
-use minimap2_temp as minimap2;
+//use minimap2_temp as minimap2;
+use minimap2;
 use noodles_sam as sam;
 use sam::{alignment::record::data::field::tag::Tag as AlnTag, Header};
 
