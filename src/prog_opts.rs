@@ -226,7 +226,11 @@ pub struct Args {
     #[arg(short, long, help_heading = "alignment mode")]
     pub alignments: Option<PathBuf>,
 
-    /// path to the file containing the input reads
+    /// path to the file containing the input reads; these can be
+    /// in FASTA/Q format (possibly gzipped), or provided in
+    /// uBAM (unaligned BAM) format. The format will be inferred from
+    /// the file suffixes, and if a format cannot be inferred, it will
+    /// be assumed to be (possibly gzipped) FASTA/Q
     #[arg(
         long,
         help_heading = "raw read mode",
