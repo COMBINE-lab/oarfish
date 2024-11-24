@@ -6,20 +6,20 @@ use crate::util::constants::EMPTY_READ_NAME;
 use crate::util::oarfish_types::AlnInfo;
 use crate::util::oarfish_types::DiscardTable;
 use crate::util::oarfish_types::{
-    AlignmentFilters, EMInfo, InMemoryAlignmentStore, TranscriptInfo,
+    AlignmentFilters, EMInfo, InMemoryAlignmentStore, InputSourceType, ReadChunkWithNames,
+    ReadSource, TranscriptInfo,
 };
 use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::{write_infrep_file, write_out_prob, write_output};
 use crate::{binomial_continuous_prob, normalize_read_probs};
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
-use bstr::{ByteSlice, B};
 use crossbeam::channel::bounded;
 use crossbeam::channel::Receiver;
 use crossbeam::channel::Sender;
 #[allow(unused_imports)]
 use minimap2_sys as mm_ffi;
 //use minimap2_temp as minimap2;
-use minimap2;
+
 use needletail::parse_fastx_file;
 use noodles_bam as bam;
 use num_format::{Locale, ToFormattedString};
@@ -222,84 +222,41 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
     )
 }
 
-#[derive(Clone)]
-struct ReadChunkWithNames {
-    read_seq: Vec<u8>,
-    read_names: Vec<u8>,
-    seq_sep: Vec<usize>,
-    name_sep: Vec<usize>,
-}
-
-impl ReadChunkWithNames {
-    pub fn new() -> Self {
-        Self {
-            read_seq: Vec::new(),
-            read_names: Vec::new(),
-            seq_sep: vec![0usize],
-            name_sep: vec![0usize],
+fn get_source_type(pb: &std::path::Path) -> InputSourceType {
+    let faq_endings = vec![
+        ".fasta",
+        ".fastq",
+        ".FASTA",
+        ".FASTQ",
+        ".fa",
+        ".fq",
+        ".FA",
+        ".FQ",
+        ".fasta.gz",
+        ".fastq.gz",
+        ".FASTA.GZ",
+        ".FASTQ.GZ",
+        ".fa.gz",
+        ".fq.gz",
+        ".FA.GZ",
+        ".FQ.GZ",
+    ];
+    let ubam_endings = vec![".bam", ".BAM", ".ubam", ".UBAM"];
+    if let Some(ps) = pb.to_str() {
+        for fe in faq_endings {
+            if ps.ends_with(fe) {
+                return InputSourceType::Fastx;
+            }
+        }
+        for be in ubam_endings {
+            if ps.ends_with(be) {
+                return InputSourceType::Ubam;
+            }
         }
     }
 
-    #[inline(always)]
-    pub fn add_id_and_read(&mut self, id: &[u8], read: &[u8]) {
-        self.read_names.extend_from_slice(id);
-        self.read_names.push(b'\0');
-        self.read_seq.extend_from_slice(read);
-        self.name_sep.push(self.read_names.len());
-        self.seq_sep.push(self.read_seq.len());
-    }
-
-    #[inline(always)]
-    pub fn clear(&mut self) {
-        self.read_names.clear();
-        self.read_seq.clear();
-        self.name_sep.clear();
-        self.name_sep.push(0);
-        self.seq_sep.clear();
-        self.seq_sep.push(0);
-    }
-
-    pub fn iter(&self) -> ReadChunkIter {
-        ReadChunkIter {
-            chunk: self,
-            pos: 0,
-        }
-    }
+    InputSourceType::Unknown
 }
-
-struct ReadChunkIter<'a> {
-    chunk: &'a ReadChunkWithNames,
-    pos: usize,
-}
-
-impl<'a> Iterator for ReadChunkIter<'a> {
-    type Item = (&'a [u8], &'a [u8]);
-
-    #[inline(always)]
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.pos < self.chunk.seq_sep.len() - 1 {
-            let i = self.pos;
-            let name: &[u8] =
-                &self.chunk.read_names[self.chunk.name_sep[i]..self.chunk.name_sep[i + 1]];
-            let seq: &[u8] = &self.chunk.read_seq[self.chunk.seq_sep[i]..self.chunk.seq_sep[i + 1]];
-            self.pos += 1;
-            Some((name, seq))
-        } else {
-            None
-        }
-    }
-
-    #[inline(always)]
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        // there's the - 1 because the separator always has
-        // one more entry than the actual number of sequences
-        // because it starts with a 0.
-        let rem = (self.chunk.seq_sep.len() - 1) - self.pos;
-        (rem, Some(rem))
-    }
-}
-
-impl<'a> ExactSizeIterator for ReadChunkIter<'a> {}
 
 #[allow(clippy::too_many_arguments)]
 pub fn quantify_bulk_alignments_raw_reads(
@@ -341,36 +298,49 @@ pub fn quantify_bulk_alignments_raw_reads(
         let mut chunk_size = 0_usize;
         let mut read_chunk = ReadChunkWithNames::new();
 
+        // work shared between the two different
+        // source types
+        let mark_chunk = |chunk_size: &mut usize,
+                          ctr: &mut usize,
+                          read_chunk: &mut ReadGroup,
+                          read_sender: &Sender<ReadGroup>| {
+            *chunk_size += 1;
+            *ctr += 1;
+            if *chunk_size >= READ_CHUNK_SIZE {
+                read_sender
+                    .send(read_chunk.clone())
+                    .expect("Error sending sequence");
+                // prepare for the next chunk
+                read_chunk.clear();
+                *chunk_size = 0;
+            }
+        };
+
+        // read from either a UBAM or (possibly compressed) FASTX file
         for read_path in rpaths {
-            let mut reader =
-                parse_fastx_file(read_path).expect("valid path/file to read sequences");
-
-            while let Some(result) = reader.next() {
-                let record = result.expect("Error reading record");
-
-                chunk_size += 1;
-                ctr += 1;
-
-                let read_str = B(record.id())
-                    .fields_with(|ch| ch.is_ascii_whitespace())
-                    .next();
-                let read_name = if let Some(first_part) = read_str {
-                    first_part
-                } else {
-                    EMPTY_READ_NAME.as_bytes()
-                };
-
-                // put this read on the current chunk
-                read_chunk.add_id_and_read(read_name, &record.seq());
-
-                // send off the next chunks of reads to a thread
-                if chunk_size >= READ_CHUNK_SIZE {
-                    read_sender
-                        .send(read_chunk.clone())
-                        .expect("Error sending sequence");
-                    // prepare for the next chunk
-                    read_chunk.clear();
-                    chunk_size = 0;
+            match get_source_type(&read_path) {
+                InputSourceType::Ubam => {
+                    let mut reader = std::fs::File::open(read_path)
+                        .map(bam::io::Reader::new)
+                        .expect("could not create BAM reader");
+                    let header = reader.read_header().expect("could not read BAM header");
+                    for result in reader.record_bufs(&header) {
+                        let record = result.expect("Error reading ubam record");
+                        record.add_to_read_group(&mut read_chunk);
+                        mark_chunk(&mut chunk_size, &mut ctr, &mut read_chunk, &read_sender);
+                    }
+                }
+                s @ (InputSourceType::Fastx | InputSourceType::Unknown) => {
+                    if matches!(s, InputSourceType::Unknown) {
+                        warn!("could not determine input file type for {} from suffix; assuming (possibly gzipped) fastx", &read_path.display());
+                    }
+                    let mut reader =
+                        parse_fastx_file(read_path).expect("valid path/file to read sequences");
+                    while let Some(result) = reader.next() {
+                        let record = result.expect("Error reading record");
+                        record.add_to_read_group(&mut read_chunk);
+                        mark_chunk(&mut chunk_size, &mut ctr, &mut read_chunk, &read_sender);
+                    }
                 }
             }
         }

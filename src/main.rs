@@ -6,7 +6,6 @@ use anyhow::Context;
 use core::ffi;
 use minimap2_sys as mm_ffi;
 //use minimap2_temp as minimap2;
-use minimap2;
 use num_format::{Locale, ToFormattedString};
 use std::{fs::File, io};
 

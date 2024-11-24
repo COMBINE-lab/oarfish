@@ -11,6 +11,7 @@ use serde::Serialize;
 use typed_builder::TypedBuilder;
 
 use bio_types::strand::Strand;
+use bstr::{ByteSlice, B};
 //use minimap2_temp as minimap2;
 use minimap2;
 use noodles_sam as sam;
@@ -20,6 +21,132 @@ use sam::{alignment::record::data::field::tag::Tag as AlnTag, Header};
 use tracing::{error, info, warn};
 
 use crate::prog_opts::ReadAssignmentProbOut;
+use crate::util::constants::EMPTY_READ_NAME;
+
+// how we can get our raw input
+pub(crate) enum InputSourceType {
+    Ubam,
+    Fastx,
+    Unknown,
+}
+
+// need both FASTX and UBAM to be able to act as an
+// input source
+pub(crate) trait ReadSource {
+    fn add_to_read_group(&self, rg: &mut ReadChunkWithNames);
+}
+
+impl<'a> ReadSource for needletail::parser::SequenceRecord<'a> {
+    #[inline(always)]
+    fn add_to_read_group(&self, rg: &mut ReadChunkWithNames) {
+        let read_str = B(self.id())
+            .fields_with(|ch| ch.is_ascii_whitespace())
+            .next();
+        let read_name = if let Some(first_part) = read_str {
+            first_part
+        } else {
+            EMPTY_READ_NAME.as_bytes()
+        };
+
+        // put this read on the current chunk
+        rg.add_id_and_read(read_name, &self.seq());
+    }
+}
+
+impl ReadSource for noodles_sam::alignment::RecordBuf {
+    #[inline(always)]
+    fn add_to_read_group(&self, rg: &mut ReadChunkWithNames) {
+        let read_name = if let Some(name) = self.name() {
+            name.fields_with(|ch| ch.is_ascii_whitespace())
+                .next()
+                .unwrap_or(EMPTY_READ_NAME.as_bytes())
+        } else {
+            EMPTY_READ_NAME.as_bytes()
+        };
+
+        // put this read on the current chunk
+        rg.add_id_and_read(read_name, self.sequence().as_ref());
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct ReadChunkWithNames {
+    read_seq: Vec<u8>,
+    read_names: Vec<u8>,
+    seq_sep: Vec<usize>,
+    name_sep: Vec<usize>,
+}
+
+impl ReadChunkWithNames {
+    pub fn new() -> Self {
+        Self {
+            read_seq: Vec::new(),
+            read_names: Vec::new(),
+            seq_sep: vec![0usize],
+            name_sep: vec![0usize],
+        }
+    }
+
+    #[inline(always)]
+    pub fn add_id_and_read(&mut self, id: &[u8], read: &[u8]) {
+        self.read_names.extend_from_slice(id);
+        self.read_names.push(b'\0');
+        self.read_seq.extend_from_slice(read);
+        self.name_sep.push(self.read_names.len());
+        self.seq_sep.push(self.read_seq.len());
+    }
+
+    #[inline(always)]
+    pub fn clear(&mut self) {
+        self.read_names.clear();
+        self.read_seq.clear();
+        self.name_sep.clear();
+        self.name_sep.push(0);
+        self.seq_sep.clear();
+        self.seq_sep.push(0);
+    }
+
+    pub fn iter(&self) -> ReadChunkIter {
+        ReadChunkIter {
+            chunk: self,
+            pos: 0,
+        }
+    }
+}
+
+pub struct ReadChunkIter<'a> {
+    chunk: &'a ReadChunkWithNames,
+    pos: usize,
+}
+
+impl<'a> Iterator for ReadChunkIter<'a> {
+    type Item = (&'a [u8], &'a [u8]);
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.pos < self.chunk.seq_sep.len() - 1 {
+            let i = self.pos;
+            let name: &[u8] =
+                &self.chunk.read_names[self.chunk.name_sep[i]..self.chunk.name_sep[i + 1]];
+            let seq: &[u8] = &self.chunk.read_seq[self.chunk.seq_sep[i]..self.chunk.seq_sep[i + 1]];
+            self.pos += 1;
+            Some((name, seq))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        // there's the - 1 because the separator always has
+        // one more entry than the actual number of sequences
+        // because it starts with a 0.
+        let rem = (self.chunk.seq_sep.len() - 1) - self.pos;
+        (rem, Some(rem))
+    }
+}
+
+impl<'a> ExactSizeIterator for ReadChunkIter<'a> {}
 
 pub trait AlnRecordLike {
     fn opt_sequence_len(&self) -> Option<usize>;
