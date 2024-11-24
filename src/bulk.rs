@@ -328,65 +328,69 @@ pub fn quantify_bulk_alignments_raw_reads(
     type ReadGroup = ReadChunkWithNames;
     type AlignmentGroupInfo = (Vec<AlnInfo>, Vec<f32>, Vec<usize>, Option<Vec<String>>);
 
+    let (read_sender, read_receiver): (Sender<ReadGroup>, Receiver<ReadGroup>) =
+        bounded(args.threads * 10);
+
+    const READ_CHUNK_SIZE: usize = 200;
+    let mut rpaths = vec![];
+    read_paths.clone_into(&mut rpaths);
+
+    // Producer thread: reads sequences and sends them to the channel
+    let producer = std::thread::spawn(move || {
+        let mut ctr = 0_usize;
+        let mut chunk_size = 0_usize;
+        let mut read_chunk = ReadChunkWithNames::new();
+
+        for read_path in rpaths {
+            let mut reader =
+                parse_fastx_file(read_path).expect("valid path/file to read sequences");
+
+            while let Some(result) = reader.next() {
+                let record = result.expect("Error reading record");
+
+                chunk_size += 1;
+                ctr += 1;
+
+                let read_str = B(record.id())
+                    .fields_with(|ch| ch.is_ascii_whitespace())
+                    .next();
+                let read_name = if let Some(first_part) = read_str {
+                    first_part
+                } else {
+                    EMPTY_READ_NAME.as_bytes()
+                };
+
+                // put this read on the current chunk
+                read_chunk.add_id_and_read(read_name, &record.seq());
+
+                // send off the next chunks of reads to a thread
+                if chunk_size >= READ_CHUNK_SIZE {
+                    read_sender
+                        .send(read_chunk.clone())
+                        .expect("Error sending sequence");
+                    // prepare for the next chunk
+                    read_chunk.clear();
+                    chunk_size = 0;
+                }
+            }
+        }
+        // if any reads remain, send them off
+        if chunk_size > 0 {
+            read_sender
+                .send(read_chunk)
+                .expect("Error sending sequence");
+        }
+        ctr
+    });
+
     // we need the scope here so we can borrow the relevant non-'static data
     let (mut store, name_vec) = std::thread::scope(|s| {
-        const READ_CHUNK_SIZE: usize = 200;
         const ALN_GROUP_CHUNK_LIMIT: usize = 100;
 
-        let (read_sender, read_receiver): (Sender<ReadGroup>, Receiver<ReadGroup>) =
-            bounded(args.threads * 10);
         let (aln_group_sender, aln_group_receiver): (
             Sender<AlignmentGroupInfo>,
             Receiver<AlignmentGroupInfo>,
         ) = bounded(args.threads * 100);
-
-        // Producer thread: reads sequences and sends them to the channel
-        let producer = s.spawn(move || {
-            let mut ctr = 0_usize;
-            let mut chunk_size = 0_usize;
-            let mut read_chunk = ReadChunkWithNames::new();
-
-            for read_path in read_paths {
-                let mut reader =
-                    parse_fastx_file(read_path).expect("valid path/file to read sequences");
-
-                while let Some(result) = reader.next() {
-                    let record = result.expect("Error reading record");
-
-                    chunk_size += 1;
-                    ctr += 1;
-
-                    let read_str = B(record.id())
-                        .fields_with(|ch| ch.is_ascii_whitespace())
-                        .next();
-                    let read_name = if let Some(first_part) = read_str {
-                        first_part
-                    } else {
-                        EMPTY_READ_NAME.as_bytes()
-                    };
-
-                    // put this read on the current chunk
-                    read_chunk.add_id_and_read(read_name, &record.seq());
-
-                    // send off the next chunks of reads to a thread
-                    if chunk_size >= READ_CHUNK_SIZE {
-                        read_sender
-                            .send(read_chunk.clone())
-                            .expect("Error sending sequence");
-                        // prepare for the next chunk
-                        read_chunk.clear();
-                        chunk_size = 0;
-                    }
-                }
-            }
-            // if any reads remain, send them off
-            if chunk_size > 0 {
-                read_sender
-                    .send(read_chunk)
-                    .expect("Error sending sequence");
-            }
-            ctr
-        });
 
         // Consumer threads: receive sequences and perform alignment
         let write_assignment_probs: bool = args.write_assignment_probs.is_some();
