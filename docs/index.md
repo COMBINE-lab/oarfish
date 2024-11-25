@@ -113,7 +113,7 @@ EM:
 
 ## Usage examples
 
-Assume that you have ONT cDNA sequencing reads in a file named `sample1_reads.tar.gz`, and you'd like to quantify the transcripts in a *transcriptome* reference in the file `transcripts.fa`.
+Assume that you have ONT cDNA sequencing reads in a file named `sample1_reads.fq.gz`, and you'd like to quantify the transcripts in a *transcriptome* reference in the file `transcripts.fa`.
 To accomplish this with oarfish, you can use either [alignment-based](index.md#alignment-based-input) or [read-based](index.md#read-based-input) mode.  Here we give a brief example
 of each.  To use alignment-based mode, we assume you have [minimap2](https://github.com/lh3/minimap2) and [samtools](http://www.htslib.org/) installed.  
 
@@ -122,7 +122,7 @@ of each.  To use alignment-based mode, we assume you have [minimap2](https://git
 You can quantify the transcript abundances in this sample using the following commands:
 
 ```{bash}
-$ minimap2 -t 16 -ax map-ont transcripts.fa sample1_reads.tar.gz | samtools view -@4 -b -o alignments.bam
+$ minimap2 -t 16 -ax map-ont transcripts.fa sample1_reads.fq.gz | samtools view -@4 -b -o alignments.bam
 $ oarfish -j 16 -a alignments.bam -o sample1 --filter-group no-filters --model-coverage
 ```
 
@@ -133,24 +133,28 @@ This will produce several output files, as described [below](index.md#output).
 In read-based mode, you can quantify the transcript abundances in this sample using the following commands:
 
 ```{bash}
-$ oarfish -j 16 --reads sample1_reads.tar.gz --reference transcripts.fa --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
+$ oarfish -j 16 --reads sample1_reads.fq.gz --reference transcripts.fa --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
 ```
 
 If you are going to quantify more than one sample against these reference transcripts, it makes sense to save the minimap2 index that the above
 command creates.  This can be done using the following command:
 
 ```{bash}
-$ oarfish -j 16 --reads sample1_reads.tar.gz --reference transcripts.fa --index-out transcripts.mmi --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
+$ oarfish -j 16 --reads sample1_reads.fq.gz --reference transcripts.fa --index-out transcripts.mmi --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
 ```
 
-Then, in subsequent runs (say when quantifying `sample2_reads.tar.gz`), you can directly provide the `minimap2` index in place of the reference to
+Then, in subsequent runs (say when quantifying `sample2_reads.fq.gz`), you can directly provide the `minimap2` index in place of the reference to
 speed up quantification.  That command would look like the following:
 
 ```{bash}
-$ oarfish -j 16 --reads sample2_reads.tar.gz --reference transcripts.mmi --seq-tech ont-cdna -o sample2 --filter-group no-filters --model-coverage
+$ oarfish -j 16 --reads sample2_reads.fq.gz --reference transcripts.mmi --seq-tech ont-cdna -o sample2 --filter-group no-filters --model-coverage
 ```
 
 As with alignment-based mode, these commands will produce several output files, as described [below](index.md#output).
+
+#### Input formats
+
+`oarfish` is capable of taking input in either `FASTA` format `FASTQ` format, or unaligned `BAM` (`uBAM`) format.  When you pass the raw reads to `oarfish` via the `--reads` flag, `oarfish` will attempt to infer the type of the input by looking at the file suffix.  If it matches one of `.fa`, `.fasta`, `.FA`, `.FASTA`, `.fq`, `.fastq`, `.FQ`, `.FASTQ`, `.fa.gz`, `.fasta.gz`, `.FA.GZ`, `.FASTA.GZ`, `.fq.gz`, `.fastq.gz`, `.FQ.GZ`, or `.FASTQ.GZ`, then the input file will be assumed to be an (appropriately compressed) `FASTA` or `FASTQ` format. Otherwise, if it ends in `.bam` or `.ubam` or `.BAM` or `.UBAM`, it will be assumed to be in `uBAM` format. If  the format cannot be inferred via the file suffix (e.g. if the file is being provided via process substitution), then an attempt will be made to parse it as a (possibly compressed) `FASTA`/`FASTQ` format file.
 
 ## Input to `oarfish`
 
