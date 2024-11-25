@@ -368,7 +368,7 @@ pub fn quantify_bulk_alignments_raw_reads(
             .map(|_| {
                 let receiver = read_receiver.clone();
                 let mut filter = filter_opts.clone();
-                let mut loc_aligner = aligner.clone();
+                let loc_aligner = aligner.clone();
 
                 let my_txp_info_view = &txp_info_view;
                 let aln_group_sender = aln_group_sender.clone();
@@ -442,13 +442,6 @@ pub fn quantify_bulk_alignments_raw_reads(
                             ))
                             .expect("Error sending alignment group");
                     }
-                    // NOTE: because `clone()` clones the raw pointer, if it is
-                    // still set when this thread goes out of scope, the underlying
-                    // raw pointer will be freed and the other aligners will have
-                    // references to already freed memory and this will lead to a
-                    // double-free when they are dropped. So, to avoid this, here
-                    // we set the idx pointer to None directly. Track: https://github.com/jguhlin/minimap2-rs/issues/71
-                    loc_aligner.idx = None;
                     discard_table
                 })
             })
