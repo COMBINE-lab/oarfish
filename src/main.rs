@@ -5,6 +5,8 @@ use anyhow::Context;
 
 use core::ffi;
 use minimap2_sys as mm_ffi;
+// Or now
+// use minimap2_sys::ffi as mm_ffi;
 //use minimap2_temp as minimap2;
 use num_format::{Locale, ToFormattedString};
 use std::{fs::File, io};
@@ -124,8 +126,7 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
     for i in 0..n_seq {
         let _seq = unsafe { *(**mmi).seq.offset(i as isize) };
         // Or now:
-        // let _seq = aligner.get_seq(i as usize).unwrap()
-        // -- should work, not tested!
+        // let _seq = aligner.get_seq(i as usize).unwrap();
         let c_str = unsafe { ffi::CStr::from_ptr(_seq.name) };
         let rust_str = c_str.to_str().unwrap().to_string();
         header = header.add_reference_sequence(
