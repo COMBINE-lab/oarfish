@@ -70,9 +70,15 @@ sprs = "0.11.2"
 
 # alternative sources for dev
 #minimap2-temp = { version = "0.1.20", git = "https://github.com/rob-p/minimap2-rs.git", branch = "alignment-score" }
-minimap2-sys = { version = "0.1.19+minimap2.2.28", git = "https://github.com/rob-p/minimap2-sys", branch = "main" }
-minimap2 = { version = "0.1.21+minimap2.2.28", git = "https://github.com/rob-p/minimap2-rs", branch = "main" }
+# minimap2-sys = { version = "0.1.19+minimap2.2.28", git = "https://github.com/rob-p/minimap2-sys", branch = "main" }
+# minimap2 = { version = "0.1.21+minimap2.2.28", git = "https://github.com/rob-p/minimap2-rs", branch = "main" }
 #minimap2 = { version = "0.1.20", git = "https://github.com/jguhlin/minimap2-rs.git", branch = "alignment-score" }
+minimap2-sys = { version = "0.1.20+minimap2.2.28", git = "https://github.com/jguhlin/minimap2-rs", branch = "Aligner-clone-logistics" }
+minimap2 = { version = "0.1.21+minimap2.2.28", git = "https://github.com/jguhlin/minimap2-rs", branch = "Aligner-clone-logistics" }
+
+# Or now minimap2-sys is exported in minimap2:
+# use minimap2_sys::ffi as mm_ffi;
+
 
 needletail = "0.6.0"
 indicatif = "0.17.9"
