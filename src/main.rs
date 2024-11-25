@@ -5,9 +5,12 @@ use anyhow::Context;
 
 use core::ffi;
 use minimap2_sys as mm_ffi;
+// Or now
+// use minimap2::ffi as mm_ffi;
 //use minimap2_temp as minimap2;
 use num_format::{Locale, ToFormattedString};
 use std::{fs::File, io};
+use std::sync::Arc;
 
 use tracing::info;
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
@@ -100,8 +103,10 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
     // minimap2 uses.
     aligner.mapopt.seed = 11;
 
-    let mmi: mm_ffi::mm_idx_t = unsafe { **aligner.idx.as_ref().unwrap() };
-    let n_seq = mmi.n_seq;
+    let mmi: Arc<*mut mm_ffi::mm_idx_t> = Arc::clone(&aligner.idx.as_ref().unwrap());
+    let n_seq = unsafe { (**mmi).n_seq };
+    // Or now:
+    // let n_seq = aligner.n_seq();
 
     info!(
         "index contains {} sequences",
@@ -118,8 +123,10 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
     }
 
     // TODO: better creation of the header
-    for i in 0..mmi.n_seq {
-        let _seq = unsafe { *(mmi.seq).offset(i as isize) };
+    for i in 0..n_seq {
+        let _seq = unsafe { *(**mmi).seq.offset(i as isize) };
+        // Or now:
+        // let _seq = aligner.get_seq(i as usize).unwrap();
         let c_str = unsafe { ffi::CStr::from_ptr(_seq.name) };
         let rust_str = c_str.to_str().unwrap().to_string();
         header = header.add_reference_sequence(
