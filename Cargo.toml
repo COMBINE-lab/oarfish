@@ -37,7 +37,7 @@ num-format = "0.4.4"
 lz4 = "1.28.0"
 either = "1.13.0"
 tabled = "0.17.0"
-tracing = "0.1.40"
+tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 typed-builder = "0.20.0"
 rayon = "1.10"
@@ -64,21 +64,9 @@ crossbeam = { version = "0.8.4", features = [
 ] }
 sprs = "0.11.2"
 
-# rely on minimap2-temp until upstream version is pushed
-# make sure relevant changes are in upstream PR
-#minimap2-temp = { version = "0.1.32" }
-
 # alternative sources for dev
-#minimap2-temp = { version = "0.1.20", git = "https://github.com/rob-p/minimap2-rs.git", branch = "alignment-score" }
-# minimap2-sys = { version = "0.1.19+minimap2.2.28", git = "https://github.com/rob-p/minimap2-sys", branch = "main" }
-# minimap2 = { version = "0.1.21+minimap2.2.28", git = "https://github.com/rob-p/minimap2-rs", branch = "main" }
-#minimap2 = { version = "0.1.20", git = "https://github.com/jguhlin/minimap2-rs.git", branch = "alignment-score" }
-minimap2-sys = { version = "0.1.20+minimap2.2.28", git = "https://github.com/jguhlin/minimap2-rs", branch = "Aligner-clone-logistics" }
-minimap2 = { version = "0.1.21+minimap2.2.28", git = "https://github.com/jguhlin/minimap2-rs", branch = "Aligner-clone-logistics" }
-
-# Or now minimap2-sys is exported in minimap2:
-# use minimap2_sys::ffi as mm_ffi;
-
+minimap2-sys = { version = "0.1.20" } #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
+minimap2 = { version = "0.1.21" }     #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
 
 needletail = "0.6.0"
 indicatif = "0.17.9"
