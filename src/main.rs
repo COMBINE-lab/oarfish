@@ -9,8 +9,8 @@ use minimap2_sys as mm_ffi;
 // use minimap2::ffi as mm_ffi;
 //use minimap2_temp as minimap2;
 use num_format::{Locale, ToFormattedString};
-use std::{fs::File, io};
 use std::sync::Arc;
+use std::{fs::File, io};
 
 use tracing::info;
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
@@ -36,7 +36,7 @@ use crate::util::{binomial_probability::binomial_continuous_prob, kde_utils};
 type HeaderReaderAligner = (
     noodles_sam::header::Header,
     Option<bam::io::Reader<bgzf::MultithreadedReader<File>>>,
-    Option<minimap2::Aligner>,
+    Option<minimap2::Aligner<minimap2::Built>>,
 );
 
 fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {

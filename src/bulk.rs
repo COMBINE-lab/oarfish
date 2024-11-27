@@ -261,7 +261,7 @@ fn get_source_type(pb: &std::path::Path) -> InputSourceType {
 #[allow(clippy::too_many_arguments)]
 pub fn quantify_bulk_alignments_raw_reads(
     header: &noodles_sam::Header,
-    aligner: minimap2::Aligner,
+    aligner: minimap2::Aligner<minimap2::Built>,
     filter_opts: AlignmentFilters,
     read_paths: &[std::path::PathBuf],
     txps: &mut [TranscriptInfo],
