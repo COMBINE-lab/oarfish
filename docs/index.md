@@ -152,9 +152,6 @@ $ oarfish -j 16 --reads sample2_reads.fq.gz --reference transcripts.mmi --seq-te
 
 As with alignment-based mode, these commands will produce several output files, as described [below](index.md#output).
 
-#### Input formats
-
-`oarfish` is capable of taking input in either `FASTA` format `FASTQ` format, or unaligned `BAM` (`uBAM`) format.  When you pass the raw reads to `oarfish` via the `--reads` flag, `oarfish` will attempt to infer the type of the input by looking at the file suffix.  If it matches one of `.fa`, `.fasta`, `.FA`, `.FASTA`, `.fq`, `.fastq`, `.FQ`, `.FASTQ`, `.fa.gz`, `.fasta.gz`, `.FA.GZ`, `.FASTA.GZ`, `.fq.gz`, `.fastq.gz`, `.FQ.GZ`, or `.FASTQ.GZ`, then the input file will be assumed to be an (appropriately compressed) `FASTA` or `FASTQ` format. Otherwise, if it ends in `.bam` or `.ubam` or `.BAM` or `.UBAM`, it will be assumed to be in `uBAM` format. If  the format cannot be inferred via the file suffix (e.g. if the file is being provided via process substitution), then an attempt will be made to parse it as a (possibly compressed) `FASTA`/`FASTQ` format file.
 
 ## Input to `oarfish`
 
@@ -180,6 +177,10 @@ The mapping between the potential values that can be passed to `oarfish`'s `--se
 Given these inputs, `oarfish` will either load the pre-built `minimap2` index, or build one according to the parameter specified by `--seq-tech`, and will then align
 the reads to this index using [`minimap2-rs`](https://github.com/jguhlin/minimap2-rs).  Optionally, the maximum multimapping rate (i.e. the number of secondary alignments 
 corresponding to the `minimap2` parameter `-N`) can be specified with the command line parameter `--best-n`. The default value of this parameter is 100.
+
+#### Read-based input formats
+
+`oarfish` is capable of taking input in either `FASTA` format `FASTQ` format, or unaligned `BAM` (`uBAM`) format.  When you pass the raw reads to `oarfish` via the `--reads` flag, `oarfish` will attempt to infer the type of the input by looking at the file suffix.  If it matches one of `.fa`, `.fasta`, `.FA`, `.FASTA`, `.fq`, `.fastq`, `.FQ`, `.FASTQ`, `.fa.gz`, `.fasta.gz`, `.FA.GZ`, `.FASTA.GZ`, `.fq.gz`, `.fastq.gz`, `.FQ.GZ`, or `.FASTQ.GZ`, then the input file will be assumed to be an (appropriately compressed) `FASTA` or `FASTQ` format. Otherwise, if it ends in `.bam` or `.ubam` or `.BAM` or `.UBAM`, it will be assumed to be in `uBAM` format. If  the format cannot be inferred via the file suffix (e.g. if the file is being provided via process substitution), then an attempt will be made to parse it as a (possibly compressed) `FASTA`/`FASTQ` format file.
 
 ### Alignmment-based input
 
