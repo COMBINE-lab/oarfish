@@ -345,21 +345,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="read-mode example">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#input-formats" class="md-nav__link">
-    <span class="md-ellipsis">
-      Input formats
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
         
       </ul>
@@ -383,6 +368,21 @@
       Read-based input
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Read-based input">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read-based-input-formats" class="md-nav__link">
+    <span class="md-ellipsis">
+      Read-based input formats
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -571,21 +571,6 @@
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="read-mode example">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#input-formats" class="md-nav__link">
-    <span class="md-ellipsis">
-      Input formats
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
 </li>
         
       </ul>
@@ -609,6 +594,21 @@
       Read-based input
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Read-based input">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read-based-input-formats" class="md-nav__link">
+    <span class="md-ellipsis">
+      Read-based input formats
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -812,8 +812,6 @@ speed up quantification.  That command would look like the following:</p>
 <pre><code>$ oarfish -j 16 --reads sample2_reads.fq.gz --reference transcripts.mmi --seq-tech ont-cdna -o sample2 --filter-group no-filters --model-coverage
 </code></pre>
 <p>As with alignment-based mode, these commands will produce several output files, as described <a href="./#output">below</a>.</p>
-<h4 id="input-formats">Input formats</h4>
-<p><code>oarfish</code> is capable of taking input in either <code>FASTA</code> format <code>FASTQ</code> format, or unaligned <code>BAM</code> (<code>uBAM</code>) format.  When you pass the raw reads to <code>oarfish</code> via the <code>--reads</code> flag, <code>oarfish</code> will attempt to infer the type of the input by looking at the file suffix.  If it matches one of <code>.fa</code>, <code>.fasta</code>, <code>.FA</code>, <code>.FASTA</code>, <code>.fq</code>, <code>.fastq</code>, <code>.FQ</code>, <code>.FASTQ</code>, <code>.fa.gz</code>, <code>.fasta.gz</code>, <code>.FA.GZ</code>, <code>.FASTA.GZ</code>, <code>.fq.gz</code>, <code>.fastq.gz</code>, <code>.FQ.GZ</code>, or <code>.FASTQ.GZ</code>, then the input file will be assumed to be an (appropriately compressed) <code>FASTA</code> or <code>FASTQ</code> format. Otherwise, if it ends in <code>.bam</code> or <code>.ubam</code> or <code>.BAM</code> or <code>.UBAM</code>, it will be assumed to be in <code>uBAM</code> format. If  the format cannot be inferred via the file suffix (e.g. if the file is being provided via process substitution), then an attempt will be made to parse it as a (possibly compressed) <code>FASTA</code>/<code>FASTQ</code> format file.</p>
 <h2 id="input-to-oarfish">Input to <code>oarfish</code></h2>
 <p><code>Oarfish</code> can accept as input either a <code>bam</code> file containing reads aligned to the transcriptome as specified <a href="./#alignment-based-input">below</a>, or
 raw sequencing reads themselves (along with a reference transcriptome), which are then mapped to the reference using <a href="https://github.com/jguhlin/minimap2-rs">minimap2-rs</a>
@@ -833,6 +831,8 @@ type of the reads to be mapped.</p>
 <p>Given these inputs, <code>oarfish</code> will either load the pre-built <code>minimap2</code> index, or build one according to the parameter specified by <code>--seq-tech</code>, and will then align
 the reads to this index using <a href="https://github.com/jguhlin/minimap2-rs"><code>minimap2-rs</code></a>.  Optionally, the maximum multimapping rate (i.e. the number of secondary alignments 
 corresponding to the <code>minimap2</code> parameter <code>-N</code>) can be specified with the command line parameter <code>--best-n</code>. The default value of this parameter is 100.</p>
+<h4 id="read-based-input-formats">Read-based input formats</h4>
+<p><code>oarfish</code> is capable of taking input in either <code>FASTA</code> format <code>FASTQ</code> format, or unaligned <code>BAM</code> (<code>uBAM</code>) format.  When you pass the raw reads to <code>oarfish</code> via the <code>--reads</code> flag, <code>oarfish</code> will attempt to infer the type of the input by looking at the file suffix.  If it matches one of <code>.fa</code>, <code>.fasta</code>, <code>.FA</code>, <code>.FASTA</code>, <code>.fq</code>, <code>.fastq</code>, <code>.FQ</code>, <code>.FASTQ</code>, <code>.fa.gz</code>, <code>.fasta.gz</code>, <code>.FA.GZ</code>, <code>.FASTA.GZ</code>, <code>.fq.gz</code>, <code>.fastq.gz</code>, <code>.FQ.GZ</code>, or <code>.FASTQ.GZ</code>, then the input file will be assumed to be an (appropriately compressed) <code>FASTA</code> or <code>FASTQ</code> format. Otherwise, if it ends in <code>.bam</code> or <code>.ubam</code> or <code>.BAM</code> or <code>.UBAM</code>, it will be assumed to be in <code>uBAM</code> format. If  the format cannot be inferred via the file suffix (e.g. if the file is being provided via process substitution), then an attempt will be made to parse it as a (possibly compressed) <code>FASTA</code>/<code>FASTQ</code> format file.</p>
 <h3 id="alignmment-based-input">Alignmment-based input</h3>
 <p>In alignment-based mode, <code>oarfish</code> processes pre-computed alignments of hte read to the transcriptome. The input should be a <code>bam</code> format file, with reads aligned using <a href="https://github.com/lh3/minimap2"><code>minimap2</code></a> against the <em>transcriptome</em>. That is, <code>oarfish</code> does not currently handle spliced alignment to the genome. Further, the output alignments should be name sorted (the default order produced by <code>minimap2</code> should be fine). <em>Specifically</em>, <code>oarfish</code> relies on the existence of the <code>AS</code> tag in the <code>bam</code> records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read. ### Choosing <code>minimap2</code> alignment options Since the purpose of <code>oarfish</code> is to estimate transcript abundance from a collection of alignments to the target transcriptome, it is important that the alignments are generated in a fashion that is compatible with this goal.  Primarily, this means that the aligner should be configured to report as many optimal (and near-optimal) alignments as exist, so that <code>oarfish</code> can observe all of this information and determine how to allocate reads to transcripts.  We recommend using the following options with <code>minimap2</code> when aligning data for later processing by <code>oarfish</code> * For ONT data (either dRNA or cDNA): please use the flags <code>--eqx -N 100 -ax map-ont</code> For PacBio data: please use the flags <code>--eqx -N 100 -ax pacbio</code> <strong>Note (1)</strong>: It may be worthwile using an even larger <code>N</code> value (e.g. the <a href="https://www.biorxiv.org/content/10.1101/2024.04.13.589356v1.full">TranSigner manuscript</a> recommends <code>-N 181</code>). A larger value should not diminish the accuracy of <code>oarfish</code>, but it may make alignment take longer and produce a larger <code>bam</code> file.</p>
 <p><strong>Note (2)</strong>: For very high quality PacBio data, it may be most appropriate to use the <code>-ax map-hifi</code> flag in place of <code>-ax pacbio</code>.  We are currently evaluating the effect of this option, and also welcome feedback if you have experiences to share on the use of data aligned with these different flags with <code>oarfish</code>.</p>
