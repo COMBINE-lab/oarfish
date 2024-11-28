@@ -57,8 +57,8 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
     let mut aligner = match args.seq_tech {
         Some(SequencingTech::OntCDNA) | Some(SequencingTech::OntDRNA) => {
             minimap2::Aligner::builder()
-                .with_index_threads(*idx_threads)
                 .map_ont()
+                .with_index_threads(*idx_threads)
                 .with_cigar()
                 .with_index(
                     args.reference
@@ -69,8 +69,8 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
                 .expect("could not construct minimap2 index")
         }
         Some(SequencingTech::PacBio) => minimap2::Aligner::builder()
-            .with_index_threads(*idx_threads)
             .map_pb()
+            .with_index_threads(*idx_threads)
             .with_cigar()
             .with_index(
                 args.reference
@@ -80,8 +80,8 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
             )
             .expect("could not construct minimap2 index"),
         Some(SequencingTech::PacBioHifi) => minimap2::Aligner::builder()
-            .with_index_threads(*idx_threads)
             .map_hifi()
+            .with_index_threads(*idx_threads)
             .with_cigar()
             .with_index(
                 args.reference
