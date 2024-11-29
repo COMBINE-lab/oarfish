@@ -265,7 +265,7 @@ pub fn parse_alignments<R: io::BufRead>(
     // `recs`, **if** we are keeping read names for the purpose of reporting read
     // assignment probabilities.
     let mut add_read_name = |recs: &Vec<noodles_sam::alignment::record_buf::RecordBuf>| {
-        if let Some(ref mut nvec) = name_vec {
+        if let &mut Some(ref mut nvec) = name_vec {
             let first_aln = recs.first().expect("alignment group should be non-empty");
             let read_name = first_aln
                 .name()

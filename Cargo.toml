@@ -1,7 +1,7 @@
 [package]
 name = "oarfish"
 version = "0.6.5"
-edition = "2021"
+edition = "2024"
 authors = [
   "Zahra Zare Jousheghani <zzare@umd.edu>",
   "Noor Pratap Singh <npsingh@umd.edu>",
