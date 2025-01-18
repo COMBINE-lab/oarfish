@@ -31,7 +31,7 @@ mod util;
 use crate::prog_opts::{Args, FilterGroup, SequencingTech};
 use crate::util::normalize_probability::normalize_read_probs;
 use crate::util::oarfish_types::{AlignmentFilters, TranscriptInfo};
-use crate::util::{binomial_probability::binomial_continuous_prob, kde_utils};
+use crate::util::{binomial_probability::binomial_continuous_prob, kde_utils, logistic_probability::logistic_prob};
 
 type HeaderReaderAligner = (
     noodles_sam::header::Header,

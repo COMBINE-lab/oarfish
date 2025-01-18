@@ -11,7 +11,7 @@ use crate::util::oarfish_types::{
 };
 use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::{write_infrep_file, write_out_prob, write_output};
-use crate::{binomial_continuous_prob, normalize_read_probs};
+use crate::{binomial_continuous_prob, normalize_read_probs, logistic_prob};
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use crossbeam::channel::bounded;
 use crossbeam::channel::Receiver;
@@ -87,7 +87,7 @@ fn perform_inference_and_write_output(
 
     if store.filter_opts.model_coverage {
         //obtaining the Cumulative Distribution Function (CDF) for each transcript
-        binomial_continuous_prob(txps, &args.bin_width, args.threads);
+        logistic_prob(txps, &args.bin_width, args.threads);
         //Normalize the probabilities for the records of each read
         normalize_read_probs(store, txps, &args.bin_width);
     }
