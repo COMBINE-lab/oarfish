@@ -36,35 +36,35 @@ pub fn logstic_function(
         )
         .collect();
 
-    let logistic_prob: Vec<f32> = difference
+    let logistic_prob: Vec<f64> = difference
         .iter()
         .map(|&diff|
-            logistic(diff, 0.5)
+            logistic(diff, 4.0) as f64
         )
         .collect();
 
     //==============================================================================================
     //// Normalize the probabilities by dividing each element by the sum
     ////let normalized_prob: Vec<f64> = result.iter().map(|&prob| prob / sum).collect();
-    let sum = logistic_prob.iter().sum::<f32>();
-    let normalized_prob: Vec<f64> = logistic_prob
-        .iter()
-        .map(|&prob| {
-            let normalized = prob / sum;
-            if normalized.is_nan() {
-                error!(
-                    "Warning: Division resulted in NaN. prob: {}, sum: {}",
-                    prob, sum
-                );
-                //error!("interval_counts = {:?}", interval_count_modified);
-                //error!("Warning: result: {:?}", result);
-                //panic!("prob_function, normalized_prob is not valid!");
-            }
-            normalized as f64
-        })
-        .collect();
+    //let sum = logistic_prob.iter().sum::<f32>();
+    //let normalized_prob: Vec<f64> = logistic_prob
+    //    .iter()
+    //    .map(|&prob| {
+    //        let normalized = prob / sum;
+    //        if normalized.is_nan() {
+    //            error!(
+    //                "Warning: Division resulted in NaN. prob: {}, sum: {}",
+    //                prob, sum
+    //            );
+    //            //error!("interval_counts = {:?}", interval_count_modified);
+    //            //error!("Warning: result: {:?}", result);
+    //            //panic!("prob_function, normalized_prob is not valid!");
+    //        }
+    //        normalized as f64
+    //    })
+    //    .collect();
 
-    normalized_prob
+    logistic_prob
 }
 
 pub fn logistic_prob(txps: &mut [TranscriptInfo], bins: &u32, threads: usize) {
