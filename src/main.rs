@@ -103,7 +103,7 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
     // minimap2 uses.
     aligner.mapopt.seed = 11;
 
-    let mmi: Arc<*mut mm_ffi::mm_idx_t> = Arc::clone(&aligner.idx.as_ref().unwrap());
+    let mmi: Arc<*mut mm_ffi::mm_idx_t> = Arc::clone(aligner.idx.as_ref().unwrap());
     let n_seq = unsafe { (**mmi).n_seq };
     // Or now:
     // let n_seq = aligner.n_seq();
