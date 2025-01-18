@@ -28,7 +28,10 @@ pub fn logstic_function(interval_count: &[f32], interval_length: &[f32]) -> Vec<
         .map(|&count| (expected_count - (count as f64)) / expected_count as f64)
         .collect();
 
-    let logistic_prob: Vec<f64> = difference.iter().map(|&diff| logistic(diff, 0.0)).collect();
+    let logistic_prob: Vec<f64> = difference
+        .iter()
+        .map(|&diff| logistic(diff, 4.0) as f64)
+        .collect();
 
     //==============================================================================================
     //// Normalize the probabilities by dividing each element by the sum
