@@ -88,7 +88,7 @@ pub fn normalize_read_probs(
             if cov_prob.is_nan() || cov_prob.is_infinite() {
                 let expected_cov_prob =
                     cov_prob / ((end_aln - start_aln) as f64 / bin_length as f64);
-                let final_cov_prob = expected_cov_prob * (tlen as f64 / bin_length as f64);
+                let final_cov_prob = expected_cov_prob; //* (tlen as f64 / bin_length as f64);
                 error!("cov_prob: {:?}", cov_prob);
                 error!(
                     "length: {:?}",
@@ -101,7 +101,8 @@ pub fn normalize_read_probs(
                 error!("start_aln: {}, end_aln: {}", start_aln, end_aln);
                 panic!("Error: Invalid result. normalize_read_probs function.");
             }
-            normalize_probs_temp.push(cov_prob);
+            let expected_cov_prob = cov_prob / ((end_aln - start_aln) as f64 / bin_length as f64);
+            normalize_probs_temp.push(expected_cov_prob);
         }
 
         let nprob_sum = normalize_probs_temp.iter().sum::<f64>();

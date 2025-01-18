@@ -4,7 +4,7 @@ use std::num::NonZeroUsize;
 use anyhow::Context;
 
 use core::ffi;
-use minimap2_sys as mm_ffi;
+use minimap2_sys::MmIdx;
 // Or now
 // use minimap2::ffi as mm_ffi;
 //use minimap2_temp as minimap2;
@@ -103,8 +103,8 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
     // minimap2 uses.
     aligner.mapopt.seed = 11;
 
-    let mmi: Arc<*mut mm_ffi::mm_idx_t> = Arc::clone(&aligner.idx.as_ref().unwrap());
-    let n_seq = unsafe { (**mmi).n_seq };
+    let mmi: Arc<MmIdx> = Arc::clone(aligner.idx.as_ref().unwrap());
+    let n_seq = unsafe { (*(mmi.idx)).n_seq };
     // Or now:
     // let n_seq = aligner.n_seq();
 
@@ -124,7 +124,7 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
 
     // TODO: better creation of the header
     for i in 0..n_seq {
-        let _seq = unsafe { *(**mmi).seq.offset(i as isize) };
+        let _seq = unsafe { *(mmi).seq.offset(i as isize) };
         // Or now:
         // let _seq = aligner.get_seq(i as usize).unwrap();
         let c_str = unsafe { ffi::CStr::from_ptr(_seq.name) };

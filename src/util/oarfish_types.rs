@@ -36,7 +36,7 @@ pub(crate) trait ReadSource {
     fn add_to_read_group(&self, rg: &mut ReadChunkWithNames);
 }
 
-impl<'a> ReadSource for needletail::parser::SequenceRecord<'a> {
+impl ReadSource for needletail::parser::SequenceRecord<'_> {
     #[inline(always)]
     fn add_to_read_group(&self, rg: &mut ReadChunkWithNames) {
         let read_str = B(self.id())
@@ -146,7 +146,7 @@ impl<'a> Iterator for ReadChunkIter<'a> {
     }
 }
 
-impl<'a> ExactSizeIterator for ReadChunkIter<'a> {}
+impl ExactSizeIterator for ReadChunkIter<'_> {}
 
 pub trait AlnRecordLike {
     fn opt_sequence_len(&self) -> Option<usize>;
@@ -579,7 +579,7 @@ pub struct InMemoryAlignmentStore<'h> {
     pub num_unique_alignments: usize,
 }
 
-impl<'h> InMemoryAlignmentStore<'h> {
+impl InMemoryAlignmentStore<'_> {
     #[inline]
     pub fn len(&self) -> usize {
         self.boundaries.len().saturating_sub(1)
@@ -595,7 +595,7 @@ pub struct InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'h, 'b> {
     pub rand_inds: std::slice::Iter<'b, usize>,
 }
 
-impl<'a, 'b, 'h> Iterator for InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'b, 'h> {
+impl<'a> Iterator for InMemoryAlignmentStoreSamplingWithReplacementIter<'a, '_, '_> {
     type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
 
     #[inline]
@@ -619,17 +619,14 @@ impl<'a, 'b, 'h> Iterator for InMemoryAlignmentStoreSamplingWithReplacementIter<
     }
 }
 
-impl<'a, 'b, 'h> ExactSizeIterator
-    for InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'b, 'h>
-{
-}
+impl ExactSizeIterator for InMemoryAlignmentStoreSamplingWithReplacementIter<'_, '_, '_> {}
 
 pub struct InMemoryAlignmentStoreIter<'a, 'h> {
     pub store: &'a InMemoryAlignmentStore<'h>,
     pub idx: usize,
 }
 
-impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
+impl<'a> Iterator for InMemoryAlignmentStoreIter<'a, '_> {
     type Item = (&'a [AlnInfo], &'a [f32], &'a [f64]);
 
     #[inline]
@@ -657,7 +654,7 @@ impl<'a, 'h> Iterator for InMemoryAlignmentStoreIter<'a, 'h> {
     }
 }
 
-impl<'a, 'h> ExactSizeIterator for InMemoryAlignmentStoreIter<'a, 'h> {}
+impl ExactSizeIterator for InMemoryAlignmentStoreIter<'_, '_> {}
 
 impl<'h> InMemoryAlignmentStore<'h> {
     pub fn new(fo: AlignmentFilters, header: &'h Header) -> Self {
@@ -683,7 +680,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
     pub fn random_sampling_iter<'a, 'b>(
         &'a self,
         inds: &'b [usize],
-    ) -> InMemoryAlignmentStoreSamplingWithReplacementIter
+    ) -> InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'h, 'b>
     where
         'b: 'a,
     {

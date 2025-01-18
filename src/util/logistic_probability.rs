@@ -4,49 +4,37 @@ use rayon::prelude::*;
 use statrs::function::gamma::ln_gamma;
 use tracing::{error, warn};
 
-fn logistic(
-    x: f32, 
-    a: f32
-) -> f32 {
+/// implements a scaled (by `a`) logistic function
+/// that is clamped (>= 1e-8, <= 0.99999)
+fn logistic(x: f64, a: f64) -> f64 {
     let result = 1.0 / (1.0 + (-a * x).exp());
     result.clamp(1e-8, 0.99999)
 }
 
-pub fn logstic_function(
-    interval_count: &[f32],
-    interval_length: &[f32],
-) -> Vec<f64> {
+pub fn logstic_function(interval_count: &[f32], interval_length: &[f32]) -> Vec<f64> {
     let interval_counts = interval_count;
     let interval_lengths = interval_length;
-    let count_sum = interval_counts.iter().sum::<f32>();
+    let count_sum = interval_counts.iter().map(|&x| x as f64).sum::<f64>();
 
     if count_sum == 0.0 {
         return vec![0.0; interval_counts.len()];
     }
 
+    // compute the expected value of the counts
+    let expected_count = count_sum / interval_counts.len() as f64;
 
-    // compute the expected value of the counts 
-
-    let expected_count = count_sum / interval_counts.len() as f32;
-
-    let difference : Vec<f32> = interval_counts
+    let difference: Vec<f64> = interval_counts
         .iter()
-        .map(|&count| 
-            (expected_count - count) / expected_count as f32
-        )
+        .map(|&count| (expected_count - (count as f64)) / expected_count as f64)
         .collect();
 
-    let logistic_prob: Vec<f32> = difference
-        .iter()
-        .map(|&diff|
-            logistic(diff, 0.5)
-        )
-        .collect();
+    let logistic_prob: Vec<f64> = difference.iter().map(|&diff| logistic(diff, 0.0)).collect();
 
     //==============================================================================================
     //// Normalize the probabilities by dividing each element by the sum
     ////let normalized_prob: Vec<f64> = result.iter().map(|&prob| prob / sum).collect();
-    let sum = logistic_prob.iter().sum::<f32>();
+    /*
+    let sum = logistic_prob.iter().sum::<f64>();
     let normalized_prob: Vec<f64> = logistic_prob
         .iter()
         .map(|&prob| {
@@ -65,6 +53,8 @@ pub fn logstic_function(
         .collect();
 
     normalized_prob
+    */
+    logistic_prob
 }
 
 pub fn logistic_prob(txps: &mut [TranscriptInfo], bins: &u32, threads: usize) {
