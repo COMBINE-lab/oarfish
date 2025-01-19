@@ -26,40 +26,13 @@ pub fn logstic_function(
     // bin counts divided by the number of bins.
     let expected_count = count_sum / interval_counts.len() as f64;
 
-    let relative_deviations: Vec<f64> = interval_counts
+    let logistic_prob: Vec<f64> = interval_counts
         .iter()
-        .map(|&count| (expected_count - (count as f64)) / expected_count)
-        .collect();
-
-    let logistic_prob: Vec<f64> = relative_deviations
-        .iter()
-        .map(|&diff| logistic(diff, growth_rate))
-        .collect();
-
-    //==============================================================================================
-    //// Normalize the probabilities by dividing each element by the sum
-    ////let normalized_prob: Vec<f64> = result.iter().map(|&prob| prob / sum).collect();
-    /*
-    let sum = logistic_prob.iter().sum::<f64>();
-    let normalized_prob: Vec<f64> = logistic_prob
-        .iter()
-        .map(|&prob| {
-            let normalized = prob / sum;
-            if normalized.is_nan() {
-                error!(
-                    "Warning: Division resulted in NaN. prob: {}, sum: {}",
-                    prob, sum
-                );
-                //error!("interval_counts = {:?}", interval_count_modified);
-                //error!("Warning: result: {:?}", result);
-                //panic!("prob_function, normalized_prob is not valid!");
-            }
-            normalized as f64
+        .map(|&count| {
+            let diff = (expected_count - (count as f64)) / expected_count;
+            logistic(diff, growth_rate)
         })
         .collect();
-
-    normalized_prob
-    */
     logistic_prob
 }
 
