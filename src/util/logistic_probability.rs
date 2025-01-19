@@ -1,8 +1,6 @@
 use crate::util::oarfish_types::TranscriptInfo;
-use itertools::izip;
 use rayon::prelude::*;
-use statrs::function::gamma::ln_gamma;
-use tracing::{error, warn};
+use tracing::{info, instrument, warn};
 
 /// implements a scaled (by `a`) logistic function
 /// that is clamped (>= 1e-8, <= 0.99999)
@@ -11,26 +9,31 @@ fn logistic(x: f64, a: f64) -> f64 {
     result.clamp(1e-8, 0.99999)
 }
 
-pub fn logstic_function(interval_count: &[f32], interval_length: &[f32]) -> Vec<f64> {
+pub fn logstic_function(
+    growth_rate: f64,
+    interval_count: &[f32],
+    interval_length: &[f32],
+) -> Vec<f64> {
     let interval_counts = interval_count;
-    let interval_lengths = interval_length;
+    let _interval_lengths = interval_length;
     let count_sum = interval_counts.iter().map(|&x| x as f64).sum::<f64>();
 
-    if count_sum == 0.0 {
+    if count_sum <= 1e-8 {
         return vec![0.0; interval_counts.len()];
     }
 
-    // compute the expected value of the counts
+    // compute the expected value of the counts; just the sum of
+    // bin counts divided by the number of bins.
     let expected_count = count_sum / interval_counts.len() as f64;
 
-    let difference: Vec<f64> = interval_counts
+    let relative_deviations: Vec<f64> = interval_counts
         .iter()
-        .map(|&count| (expected_count - (count as f64)) / expected_count as f64)
+        .map(|&count| (expected_count - (count as f64)) / expected_count)
         .collect();
 
-    let logistic_prob: Vec<f64> = difference
+    let logistic_prob: Vec<f64> = relative_deviations
         .iter()
-        .map(|&diff| logistic(diff, 4.0) as f64)
+        .map(|&diff| logistic(diff, growth_rate))
         .collect();
 
     //==============================================================================================
@@ -60,20 +63,15 @@ pub fn logstic_function(interval_count: &[f32], interval_length: &[f32]) -> Vec<
     logistic_prob
 }
 
-pub fn logistic_prob(txps: &mut [TranscriptInfo], bins: &u32, threads: usize) {
-    use tracing::info;
-    use tracing::info_span;
-
-    let _log_span = info_span!("logistic_prob").entered();
+#[instrument(skip(txps))]
+pub fn logistic_prob(txps: &mut [TranscriptInfo], growth_rate: f64, bins: &u32, threads: usize) {
     info!("computing coverage probabilities");
-
     let compute_txp_coverage_probs = |_i: usize, t: &mut TranscriptInfo| {
         let temp_prob: Vec<f64> = if *bins != 0 {
             let min_cov = t.total_weight / 100.;
             t.coverage_bins.iter_mut().for_each(|elem| *elem += min_cov);
             let (bin_counts, bin_lengths) = t.get_normalized_counts_and_lengths();
-
-            logstic_function(&bin_counts, &bin_lengths)
+            logstic_function(growth_rate, &bin_counts, &bin_lengths)
         } else {
             std::unimplemented!("coverage model with 0 bins is not currently implemented");
         };

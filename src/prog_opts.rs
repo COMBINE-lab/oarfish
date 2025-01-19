@@ -316,6 +316,16 @@ pub struct Args {
     #[arg(long, help_heading = "coverage model", value_parser)]
     pub model_coverage: bool,
 
+    /// if using the coverage model, use this as the value of `k` in the logistic equation
+    #[arg(
+        short = 'k',
+        long,
+        help_heading = "coverage model",
+        value_parser,
+        default_value_t = 1.0
+    )]
+    pub growth_rate: f64,
+
     /// write output alignment probabilites (optionally compressed) for each mapped read.
     /// If <WRITE_ASSIGNMENT_PROBS> is present, it must be one of `uncompressed` (default) or
     /// `compressed`, which will cause the output file to be lz4 compressed.

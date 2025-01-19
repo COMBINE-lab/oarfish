@@ -31,7 +31,9 @@ mod util;
 use crate::prog_opts::{Args, FilterGroup, SequencingTech};
 use crate::util::normalize_probability::normalize_read_probs;
 use crate::util::oarfish_types::{AlignmentFilters, TranscriptInfo};
-use crate::util::{binomial_probability::binomial_continuous_prob, kde_utils, logistic_probability::logistic_prob};
+use crate::util::{
+    binomial_probability::binomial_continuous_prob, kde_utils, logistic_probability::logistic_prob,
+};
 
 type HeaderReaderAligner = (
     noodles_sam::header::Header,
@@ -179,6 +181,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .min_aligned_len(mal)
                 .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
+                .logistic_growth_rate(args.growth_rate)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .build())
@@ -213,6 +216,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .min_aligned_len(mal)
                 .which_strand(bio_types::strand::Strand::Forward)
                 .model_coverage(args.model_coverage)
+                .logistic_growth_rate(args.growth_rate)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .build())
@@ -227,6 +231,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .min_aligned_len(args.min_aligned_len.try_as_u32()?)
                 .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
+                .logistic_growth_rate(args.growth_rate)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .build())
@@ -393,5 +398,6 @@ fn main() -> anyhow::Result<()> {
         )?;
     }
 
+    info!("oarfish completed successfully.");
     Ok(())
 }

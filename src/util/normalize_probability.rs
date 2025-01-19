@@ -102,6 +102,7 @@ pub fn normalize_read_probs(
                 panic!("Error: Invalid result. normalize_read_probs function.");
             }
             let expected_cov_prob = cov_prob / ((end_aln - start_aln) as f64 / bin_length as f64);
+            //let expected_cov_prob = cov_prob / ((end_bin - start_bin + 1) as f64);
             normalize_probs_temp.push(expected_cov_prob);
         }
 

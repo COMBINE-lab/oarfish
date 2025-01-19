@@ -782,6 +782,9 @@ pub struct AlignmentFilters {
     // True if we are enabling our coverage model and
     // false otherwise.
     pub model_coverage: bool,
+    // The growth rate (or `k`) parameter of the logistic
+    // function. This only matters if `model_coverage` is true.
+    pub logistic_growth_rate: f64,
     // True if we are enabling to output the alignment probability and
     // false otherwise.
     pub write_assignment_probs: bool,
