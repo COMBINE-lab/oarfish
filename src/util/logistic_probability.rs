@@ -37,16 +37,22 @@ pub fn logstic_function(
 }
 
 #[instrument(skip(txps))]
-pub fn logistic_prob(txps: &mut [TranscriptInfo], growth_rate: f64, bins: &u32, threads: usize) {
+pub fn logistic_prob(
+    txps: &mut [TranscriptInfo],
+    growth_rate: f64,
+    bin_width: &u32,
+    threads: usize,
+) {
     info!("computing coverage probabilities");
     let compute_txp_coverage_probs = |_i: usize, t: &mut TranscriptInfo| {
-        let temp_prob: Vec<f64> = if *bins != 0 {
+        let temp_prob: Vec<f64> = if *bin_width != 0 {
+            assert!(!t.coverage_bins.is_empty());
             let min_cov = t.total_weight / 100.;
             t.coverage_bins.iter_mut().for_each(|elem| *elem += min_cov);
             let (bin_counts, bin_lengths) = t.get_normalized_counts_and_lengths();
             logstic_function(growth_rate, &bin_counts, &bin_lengths)
         } else {
-            std::unimplemented!("coverage model with 0 bins is not currently implemented");
+            std::unimplemented!("coverage model with 0 bin width is not currently implemented");
         };
         t.coverage_prob = temp_prob;
     };

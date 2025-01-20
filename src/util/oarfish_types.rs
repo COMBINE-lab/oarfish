@@ -488,7 +488,7 @@ impl TranscriptInfo {
         Self {
             len,
             total_weight: 0.0_f64,
-            coverage_bins: vec![0.0_f64; ((len.get() as f64) / (bin_width as f64).ceil()) as usize],
+            coverage_bins: vec![0.0_f64; ((len.get() as f64) / (bin_width as f64)).ceil() as usize],
             coverage_prob: Vec::new(),
             lenf: len.get() as f64,
         }
