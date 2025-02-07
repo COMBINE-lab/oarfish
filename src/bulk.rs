@@ -261,7 +261,7 @@ fn get_source_type(pb: &std::path::Path) -> InputSourceType {
 #[allow(clippy::too_many_arguments)]
 pub fn quantify_bulk_alignments_raw_reads(
     header: &noodles_sam::Header,
-    aligner: minimap2::Aligner<minimap2::Built>,
+    mut aligner: minimap2::Aligner<minimap2::Built>,
     filter_opts: AlignmentFilters,
     read_paths: &[std::path::PathBuf],
     txps: &mut [TranscriptInfo],
@@ -281,6 +281,9 @@ pub fn quantify_bulk_alignments_raw_reads(
     // at least one mapping thread, otherwise everything but the fastx parser
     // and the in memory alignment store populator
     let map_threads = args.threads.saturating_sub(2).max(1);
+
+    let per_thread_cap_kalloc = (1_000_000_000_f64 / (args.threads as f64)).ceil() as i64;
+    aligner.mapopt.cap_kalloc = per_thread_cap_kalloc;
 
     type ReadGroup = ReadChunkWithNames;
     type AlignmentGroupInfo = (Vec<AlnInfo>, Vec<f32>, Vec<usize>, Option<Vec<String>>);
