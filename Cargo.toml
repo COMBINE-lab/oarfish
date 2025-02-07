@@ -66,7 +66,7 @@ sprs = "0.11.2"
 
 # alternative sources for dev
 minimap2-sys = { version = "0.1.21" } #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
-minimap2 = { version = "0.1.23" }     #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
+minimap2 = { version = "=0.1.21" }    #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
 
 needletail = "0.6.0"
 indicatif = "0.17.9"
