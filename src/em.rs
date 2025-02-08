@@ -5,7 +5,7 @@ use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
 use atomic_float::AtomicF64;
 use itertools::izip;
 use num_format::{Locale, ToFormattedString};
-use rand::thread_rng;
+use rand::rng as trng;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use tracing::{info, span, trace};
 
@@ -272,7 +272,7 @@ pub fn em(em_info: &EMInfo, _nthreads: usize) -> Vec<f64> {
 }
 
 pub fn do_bootstrap(em_info: &EMInfo) -> Vec<f64> {
-    let mut rng = thread_rng();
+    let mut rng = trng();
     let n = em_info.eq_map.len();
     let inds = bootstrap::get_sample_inds(n, &mut rng);
 
