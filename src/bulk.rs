@@ -282,7 +282,8 @@ pub fn quantify_bulk_alignments_raw_reads(
     // and the in memory alignment store populator
     let map_threads = args.threads.saturating_sub(2).max(1);
 
-    let per_thread_cap_kalloc = (1_000_000_000_f64 / (args.threads as f64)).ceil() as i64;
+    let per_thread_cap_kalloc =
+        ((args.thread_buff_size as f64) / (args.threads as f64)).ceil() as i64;
     aligner.mapopt.cap_kalloc = per_thread_cap_kalloc;
 
     type ReadGroup = ReadChunkWithNames;

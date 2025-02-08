@@ -1,4 +1,5 @@
 use clap::{builder::ArgPredicate, Parser};
+use parse_size::parse_size;
 use serde::Serialize;
 use std::fmt;
 use std::path::PathBuf;
@@ -269,6 +270,17 @@ pub struct Args {
     )]
     pub best_n: usize,
 
+    /// total memory to allow for thread-local alignment buffers (each buffer will get this value /
+    /// # of alignment threads)
+    #[arg(
+        long,
+        conflicts_with = "alignments",
+        help_heading = "raw read mode",
+        default_value = "1GB",
+        value_parser = |s: &str| parse_size(s)
+    )]
+    pub thread_buff_size: u64,
+
     /// location where output quantification file should be written
     #[arg(short, long, required = true)]
     pub output: PathBuf,
@@ -322,7 +334,7 @@ pub struct Args {
         long,
         help_heading = "coverage model",
         value_parser,
-        default_value_t = 1.0
+        default_value_t = 2.0
     )]
     pub growth_rate: f64,
 
