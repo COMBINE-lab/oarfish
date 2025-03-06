@@ -27,7 +27,10 @@ struct QuantOutputInfo {
 /// Produce a [serde_json::Value] that encodes the relevant arguments and
 /// parameters of the run that we wish to record to file. Ultimately, this
 /// will be written to the corresponding `meta_info.json` file for this run.
-fn get_single_cell_json_info(args: &Args, seqcol_digest: &str) -> serde_json::Value {
+fn get_single_cell_json_info(
+    args: &Args,
+    seqcol_digest: &seqcol_rs::DigestResult,
+) -> serde_json::Value {
     let prob = if args.model_coverage {
         "scaled_binomial"
     } else {
@@ -47,7 +50,7 @@ fn get_single_cell_json_info(args: &Args, seqcol_digest: &str) -> serde_json::Va
         "threads": &args.threads,
         "filter_group": &args.filter_group,
         "short_quant": &args.short_quant,
-        "seqcol_digest": seqcol_digest
+        "digest": seqcol_digest.to_json()
     })
 }
 
@@ -57,7 +60,7 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
     reader: &mut bam::io::Reader<R>,
     txps: &mut [TranscriptInfo],
     args: &Args,
-    seqcol_digest: String,
+    seqcol_digest: seqcol_rs::DigestResult,
 ) -> anyhow::Result<()> {
     // if there is a parent directory
     if let Some(p) = args.output.parent() {

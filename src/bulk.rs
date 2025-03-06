@@ -31,7 +31,11 @@ use tracing::{info, warn};
 /// Produce a [serde_json::Value] that encodes the relevant arguments and
 /// parameters of the run that we wish to record to file. Ultimately, this
 /// will be written to the corresponding `meta_info.json` file for this run.
-fn get_json_info(args: &Args, emi: &EMInfo, seqcol_digest: &str) -> serde_json::Value {
+fn get_json_info(
+    args: &Args,
+    emi: &EMInfo,
+    seqcol_digest: &seqcol_rs::DigestResult,
+) -> serde_json::Value {
     let prob = if args.model_coverage {
         "scaled_binomial"
     } else {
@@ -62,7 +66,7 @@ fn get_json_info(args: &Args, emi: &EMInfo, seqcol_digest: &str) -> serde_json::
         "write_assignment_probs": &emi.eq_map.filter_opts.write_assignment_probs_type,
         "short_quant": &args.short_quant,
         "num_bootstraps": &args.num_bootstraps,
-        "seqcol_digest": seqcol_digest
+        "digest": seqcol_digest.to_json()
     })
 }
 
@@ -72,7 +76,7 @@ fn perform_inference_and_write_output(
     name_vec: Option<SwapVec<String>>,
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
-    seqcol_digest: String,
+    seqcol_digest: seqcol_rs::DigestResult,
     args: &Args,
 ) -> anyhow::Result<()> {
     // print discard table information in which the user might be interested.
@@ -188,7 +192,7 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
     args: &Args,
-    seqcol_digest: String,
+    seqcol_digest: seqcol_rs::DigestResult,
 ) -> anyhow::Result<()> {
     let mut name_vec = if filter_opts.write_assignment_probs {
         Some(SwapVec::<String>::with_config(SwapVecConfig {
@@ -267,7 +271,7 @@ pub fn quantify_bulk_alignments_raw_reads(
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
     args: &Args,
-    seqcol_digest: String,
+    seqcol_digest: seqcol_rs::DigestResult,
 ) -> anyhow::Result<()> {
     // now parse the actual alignments for the reads and store the results
     // in our in-memory stor

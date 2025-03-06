@@ -35,14 +35,27 @@ use crate::util::{
     binomial_probability::binomial_continuous_prob, kde_utils, logistic_probability::logistic_prob,
 };
 
-type HeaderReaderAligner = (
+type HeaderReaderAlignerDigest = (
     noodles_sam::header::Header,
     Option<bam::io::Reader<bgzf::MultithreadedReader<File>>>,
     Option<minimap2::Aligner<minimap2::Built>>,
+    seqcol_rs::DigestResult,
 );
 
-fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
+fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
     info!("oarfish is operating in read-based mode");
+
+    info!("generating reference digest");
+    let seqcol_obj = seqcol_rs::SeqCol::try_from_fasta_file(
+        args.reference
+            .clone()
+            .expect("must provide reference sequence"),
+    )?;
+    let digest = seqcol_obj.digest(seqcol_rs::DigestConfig {
+        level: seqcol_rs::DigestLevel::Level1,
+        with_seqname_pairs: false,
+    })?;
+    info!("done");
 
     // set the number of indexing threads
     let idx_threads = &args.threads.max(1);
@@ -145,7 +158,7 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAligner> {
     );
 
     let header = header.build();
-    Ok((header, None, Some(aligner)))
+    Ok((header, None, Some(aligner), digest))
 }
 
 fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
@@ -267,7 +280,7 @@ fn main() -> anyhow::Result<()> {
 
     let filter_opts = get_filter_opts(&args)?;
 
-    let (header, reader, aligner) = if args.alignments.is_none() {
+    let (header, reader, aligner, digest) = if args.alignments.is_none() {
         get_aligner_from_args(&args)?
     } else {
         let alignments = args.alignments.clone().unwrap();
@@ -301,23 +314,23 @@ fn main() -> anyhow::Result<()> {
         // parse the header, and ensure that the reads were mapped with minimap2 (as far as we
         // can tell).
         let header = alignment_parser::read_and_verify_header(&mut reader, &alignments)?;
-        (header, Some(reader), None)
+        let seqcol_digest = {
+            info!("calculating seqcol digest");
+            let sc = seqcol_rs::SeqCol::from_sam_header(
+                header
+                    .reference_sequences()
+                    .iter()
+                    .map(|(k, v)| (k.as_slice(), v.length().into())),
+            );
+            let d = sc.digest(seqcol_rs::DigestConfig{level: seqcol_rs::DigestLevel::Level1, with_seqname_pairs: false}).context(
+                "failed to compute the seqcol digest for the information from the alignment header",
+            )?;
+            info!("done calculating seqcol digest");
+            d
+        };
+        (header, Some(reader), None, seqcol_digest)
     };
 
-    let seqcol_digest = {
-        info!("calculating seqcol digest");
-        let sc = seqcol_rs::SeqCol::from_sam_header(
-            header
-                .reference_sequences()
-                .iter()
-                .map(|(k, v)| (k.as_slice(), v.length().into())),
-        );
-        let d = sc.digest(seqcol_rs::DigestConfig::default()).context(
-            "failed to compute the seqcol digest for the information from the alignment header",
-        )?;
-        info!("done calculating seqcol digest");
-        d
-    };
     let num_ref_seqs = header.reference_sequences().len();
 
     // where we'll write down the per-transcript information we need
@@ -373,7 +386,7 @@ fn main() -> anyhow::Result<()> {
             &mut reader.unwrap(),
             &mut txps,
             &args,
-            seqcol_digest,
+            digest,
         )?;
     } else if args.alignments.is_some() {
         bulk::quantify_bulk_alignments_from_bam(
@@ -383,7 +396,7 @@ fn main() -> anyhow::Result<()> {
             &mut txps,
             &txps_name,
             &args,
-            seqcol_digest,
+            digest,
         )?;
     } else {
         bulk::quantify_bulk_alignments_raw_reads(
@@ -394,7 +407,7 @@ fn main() -> anyhow::Result<()> {
             &mut txps,
             &txps_name,
             &args,
-            seqcol_digest,
+            digest,
         )?;
     }
 
