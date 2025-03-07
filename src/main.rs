@@ -1,18 +1,17 @@
 use clap::Parser;
 use std::num::NonZeroUsize;
 
-use anyhow::Context;
-
 use core::ffi;
 use minimap2_sys::MmIdx;
 // Or now
 // use minimap2::ffi as mm_ffi;
 //use minimap2_temp as minimap2;
 use num_format::{Locale, ToFormattedString};
+use std::io::Read;
 use std::sync::Arc;
 use std::{fs::File, io};
 
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
 
 use noodles_bam as bam;
@@ -29,6 +28,7 @@ mod single_cell;
 mod util;
 
 use crate::prog_opts::{Args, FilterGroup, SequencingTech};
+use crate::util::digest_utils;
 use crate::util::normalize_probability::normalize_read_probs;
 use crate::util::oarfish_types::{AlignmentFilters, TranscriptInfo};
 use crate::util::{
@@ -42,28 +42,57 @@ type HeaderReaderAlignerDigest = (
     seqcol_rs::DigestResult,
 );
 
-fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
+fn is_fasta(fname: &std::path::Path) -> anyhow::Result<bool> {
+    if let Ok(mut file) = std::fs::OpenOptions::new().read(true).open(fname) {
+        let mut first_char = vec![0_u8];
+        file.read_exact(&mut first_char)?;
+        drop(file);
+        Ok(first_char[0] == b'>' || first_char[0] == b'@')
+    } else {
+        Ok(false)
+    }
+}
+
+fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
     info!("oarfish is operating in read-based mode");
 
     let ref_file = args
         .reference
         .clone()
         .expect("must provide reference sequence");
-    let digest_handle = std::thread::spawn(|| {
-        info!("generating reference digest");
-        let seqcol_obj = seqcol_rs::SeqCol::try_from_fasta_file(ref_file).unwrap();
-        let digest = seqcol_obj
-            .digest(seqcol_rs::DigestConfig {
-                level: seqcol_rs::DigestLevel::Level1,
-                with_seqname_pairs: false,
-            })
-            .unwrap();
-        info!("done");
-        digest
-    });
 
+    let ref_file_clone = ref_file.clone();
+    // The `ref_file` input argument is either a FASTA file with reference
+    // sequences, in which case we will compute the proper digest in a separate
+    // thread, OR an existing minimap2 index, in which case we won't attempt
+    // to treat it as a FASTA file and we will later get the digest from
+    // the index.
+    let digest_handle = if is_fasta(&ref_file).unwrap_or(false) {
+        Some(std::thread::spawn(|| {
+            info!("generating reference digest");
+            let seqcol_obj = seqcol_rs::SeqCol::try_from_fasta_file(ref_file_clone).unwrap();
+            let digest = seqcol_obj
+                .digest(seqcol_rs::DigestConfig {
+                    level: seqcol_rs::DigestLevel::Level1,
+                    with_seqname_pairs: false,
+                })
+                .unwrap();
+            info!("done");
+            digest
+        }))
+    } else {
+        // if the input was not a FASTA file, then don't attempt to
+        // write out another index, because we are reading one in!
+        if args.index_out.is_some() {
+            warn!("The `--index-out` flag is set, but the input already appears to be an index; skipping writing of output index");
+            args.index_out = None;
+        }
+        None
+    };
+
+    let thread_sub = if digest_handle.is_some() { 1 } else { 0 };
     // set the number of indexing threads
-    let idx_threads = &args.threads.saturating_sub(1).max(1);
+    let idx_threads = &args.threads.saturating_sub(thread_sub).max(1);
 
     // if the user requested to write the output index to disk, prepare for that
     let idx_out_as_str = args.index_out.clone().map_or(String::new(), |x| {
@@ -123,10 +152,7 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAlignerDiges
     // minimap2 uses.
     aligner.mapopt.seed = 11;
 
-    let mmi: Arc<MmIdx> = Arc::clone(aligner.idx.as_ref().unwrap());
-    let n_seq = unsafe { (*(mmi.idx)).n_seq };
-    // Or now:
-    // let n_seq = aligner.n_seq();
+    let n_seq = aligner.n_seq();
 
     info!(
         "index contains {} sequences",
@@ -143,18 +169,21 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAlignerDiges
     }
 
     // TODO: better creation of the header
-    for i in 0..n_seq {
-        let _seq = unsafe { *(mmi).seq.offset(i as isize) };
-        // Or now:
-        // let _seq = aligner.get_seq(i as usize).unwrap();
-        let c_str = unsafe { ffi::CStr::from_ptr(_seq.name) };
-        let rust_str = c_str.to_str().unwrap().to_string();
-        header = header.add_reference_sequence(
-            rust_str,
-            HeaderMap::<header_val::map::ReferenceSequence>::new(NonZeroUsize::try_from(
-                _seq.len as usize,
-            )?),
-        );
+    {
+        let mmi: Arc<MmIdx> = Arc::clone(aligner.idx.as_ref().unwrap());
+        for i in 0..n_seq {
+            let _seq = unsafe { *(mmi).seq.offset(i as isize) };
+            // Or now:
+            // let _seq = aligner.get_seq(i as usize).unwrap();
+            let c_str = unsafe { ffi::CStr::from_ptr(_seq.name) };
+            let rust_str = c_str.to_str().unwrap().to_string();
+            header = header.add_reference_sequence(
+                rust_str,
+                HeaderMap::<header_val::map::ReferenceSequence>::new(NonZeroUsize::try_from(
+                    _seq.len as usize,
+                )?),
+            );
+        }
     }
 
     header = header.add_program(
@@ -162,8 +191,26 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAlignerDiges
         HeaderMap::<header_val::map::Program>::default(),
     );
 
-    let digest = digest_handle.join().expect("valid digest");
     let header = header.build();
+
+    let digest = if let Some(digest_handle_inner) = digest_handle {
+        let digest = digest_handle_inner.join().expect("valid digest");
+        // if we created an index, append the digest
+        if let Some(idx_file) = idx_output {
+            digest_utils::append_digest_to_mm2_index(idx_file, &digest)?;
+        }
+        digest
+    } else {
+        // attempt to read from index
+        if let Ok(d) = digest_utils::read_digest_from_mm2_index(
+            ref_file.to_str().expect("could not convert to string"),
+        ) {
+            d
+        } else {
+            digest_utils::digest_from_header(&header)?
+        }
+    };
+
     Ok((header, None, Some(aligner), digest))
 }
 
@@ -287,7 +334,7 @@ fn main() -> anyhow::Result<()> {
     let filter_opts = get_filter_opts(&args)?;
 
     let (header, reader, aligner, digest) = if args.alignments.is_none() {
-        get_aligner_from_args(&args)?
+        get_aligner_from_args(&mut args)?
     } else {
         let alignments = args.alignments.clone().unwrap();
         let afile = File::open(&alignments)?;
@@ -320,20 +367,7 @@ fn main() -> anyhow::Result<()> {
         // parse the header, and ensure that the reads were mapped with minimap2 (as far as we
         // can tell).
         let header = alignment_parser::read_and_verify_header(&mut reader, &alignments)?;
-        let seqcol_digest = {
-            info!("calculating seqcol digest");
-            let sc = seqcol_rs::SeqCol::from_sam_header(
-                header
-                    .reference_sequences()
-                    .iter()
-                    .map(|(k, v)| (k.as_slice(), v.length().into())),
-            );
-            let d = sc.digest(seqcol_rs::DigestConfig{level: seqcol_rs::DigestLevel::Level1, with_seqname_pairs: false}).context(
-                "failed to compute the seqcol digest for the information from the alignment header",
-            )?;
-            info!("done calculating seqcol digest");
-            d
-        };
+        let seqcol_digest = digest_utils::digest_from_header(&header)?;
         (header, Some(reader), None, seqcol_digest)
     };
 

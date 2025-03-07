@@ -1,9 +1,10 @@
 pub mod aux_counts;
 pub mod binomial_probability;
-pub mod logistic_probability;
 pub mod constants;
 pub mod count_function;
+pub mod digest_utils;
 pub mod kde_utils;
+pub mod logistic_probability;
 pub mod normalize_probability;
 pub mod oarfish_types;
 pub mod parquet_utils;
