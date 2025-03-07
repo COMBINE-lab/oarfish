@@ -74,7 +74,7 @@ fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerD
             let digest = seqcol_obj
                 .digest(seqcol_rs::DigestConfig {
                     level: seqcol_rs::DigestLevel::Level1,
-                    with_seqname_pairs: false,
+                    with_seqname_pairs: true,
                 })
                 .unwrap();
             info!("done");

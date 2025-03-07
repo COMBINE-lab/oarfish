@@ -74,6 +74,13 @@ pub(crate) fn read_digest_from_mm2_index(
             let seqs = seq_col_digests["sequences"]
                 .as_str()
                 .expect("should have sequences");
+            let sorted_name_length_pairs =
+                seq_col_digests.get("sorted_name_length_pairs").map(|v| {
+                    v.as_str()
+                        .expect("sorted_name_length_pairs should have a string value")
+                        .to_owned()
+                });
+
             let sha_digests = value["sha256_digests"]
                 .as_object()
                 .expect("should be an object");
@@ -89,7 +96,7 @@ pub(crate) fn read_digest_from_mm2_index(
                     lengths: lengths.to_owned(),
                     names: names.to_owned(),
                     sequences: Some(seqs.to_owned()),
-                    sorted_name_length_pairs: None,
+                    sorted_name_length_pairs,
                 }),
                 sha256_seqs: Some(sha256_seqs.to_owned()),
                 sha256_names: Some(sha256_names.to_owned()),
@@ -116,7 +123,7 @@ pub(crate) fn digest_from_header(
         let d = sc
             .digest(seqcol_rs::DigestConfig {
                 level: seqcol_rs::DigestLevel::Level1,
-                with_seqname_pairs: false,
+                with_seqname_pairs: true,
             })
             .context(
                 "failed to compute the seqcol digest for the information from the alignment header",
