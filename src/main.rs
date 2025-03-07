@@ -45,20 +45,25 @@ type HeaderReaderAlignerDigest = (
 fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
     info!("oarfish is operating in read-based mode");
 
-    info!("generating reference digest");
-    let seqcol_obj = seqcol_rs::SeqCol::try_from_fasta_file(
-        args.reference
-            .clone()
-            .expect("must provide reference sequence"),
-    )?;
-    let digest = seqcol_obj.digest(seqcol_rs::DigestConfig {
-        level: seqcol_rs::DigestLevel::Level1,
-        with_seqname_pairs: false,
-    })?;
-    info!("done");
+    let ref_file = args
+        .reference
+        .clone()
+        .expect("must provide reference sequence");
+    let digest_handle = std::thread::spawn(|| {
+        info!("generating reference digest");
+        let seqcol_obj = seqcol_rs::SeqCol::try_from_fasta_file(ref_file).unwrap();
+        let digest = seqcol_obj
+            .digest(seqcol_rs::DigestConfig {
+                level: seqcol_rs::DigestLevel::Level1,
+                with_seqname_pairs: false,
+            })
+            .unwrap();
+        info!("done");
+        digest
+    });
 
     // set the number of indexing threads
-    let idx_threads = &args.threads.max(1);
+    let idx_threads = &args.threads.saturating_sub(1).max(1);
 
     // if the user requested to write the output index to disk, prepare for that
     let idx_out_as_str = args.index_out.clone().map_or(String::new(), |x| {
@@ -157,6 +162,7 @@ fn get_aligner_from_args(args: &Args) -> anyhow::Result<HeaderReaderAlignerDiges
         HeaderMap::<header_val::map::Program>::default(),
     );
 
+    let digest = digest_handle.join().expect("valid digest");
     let header = header.build();
     Ok((header, None, Some(aligner), digest))
 }
