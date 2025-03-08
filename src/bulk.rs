@@ -340,7 +340,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                 }
                 s @ (InputSourceType::Fastx | InputSourceType::Unknown) => {
                     if matches!(s, InputSourceType::Unknown) {
-                        warn!("could not determine input file type for {} from suffix; assuming (possibly gzipped) fastx", &read_path.display());
+                        warn!("could not determine input file type for {} from suffix; assuming (possibly gzipped) fastx", read_path.display());
                     }
                     let mut reader =
                         parse_fastx_file(read_path).expect("valid path/file to read sequences");

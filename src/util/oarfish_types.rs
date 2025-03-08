@@ -322,11 +322,13 @@ impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for
     }
 
     fn aln_score(&self) -> Option<i64> {
-        self.data()
+        let x = self
+            .data()
             .get(&AlnTag::ALIGNMENT_SCORE)
             .unwrap()
             .expect("could not get value")
-            .as_int()
+            .as_int();
+        x
     }
 
     fn aln_start(&self) -> u32 {

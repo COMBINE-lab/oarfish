@@ -1,7 +1,7 @@
 [package]
 name = "oarfish"
 version = "0.7.0"
-edition = "2021"
+edition = "2024"
 authors = [
   "Zahra Zare Jousheghani <zzare@umd.edu>",
   "Noor Pratap Singh <npsingh@umd.edu>",
@@ -27,15 +27,15 @@ categories = ["command-line-utilities", "science"]
 # at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
 seqcol_rs = { git = "https://github.com/COMBINE-lab/seqcol_rs", branch = "dev", version = "0.2.0" }
-anyhow = "1.0.95"
+anyhow = "1.0.97"
 bstr = "1.11.3"
 bio-types = { version = "1.0.4", features = ["serde"] }
-clap = { version = "4.5.28", features = ["derive"] }
+clap = { version = "4.5.31", features = ["derive"] }
 noodles-bam = "0.76.0"
 noodles-sam = "0.72.0"
 num-format = "0.4.4"
 lz4 = "1.28.1"
-either = "1.13.0"
+either = "1.15.0"
 tabled = "0.18.0"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
@@ -45,7 +45,7 @@ statrs = "0.18"
 csv = "1.3"
 serde = { version = "1", features = ["derive"] }
 itertools = "0.14.0"
-serde_json = "1.0.138"
+serde_json = "1.0.140"
 path-tools = "0.1.0"
 atomic_float = "1.1.0"
 sendable-swapvec = "0.4.3"
@@ -68,7 +68,7 @@ sprs = "0.11.3"
 minimap2-sys = { version = "0.1.21" } #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
 minimap2 = { version = "0.1.23" }     #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
 
-needletail = "0.6.1"
+needletail = "0.6.3"
 indicatif = "0.17.11"
 rustc-hash = "2.1.1"
 parse-size = "1.1.0"

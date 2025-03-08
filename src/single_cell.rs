@@ -232,7 +232,8 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
 
         let mut total_cells = 0_usize;
         for h in thread_handles {
-            match h.join() {
+            let hj = h.join();
+            match hj {
                 Ok(Ok(nc)) => {
                     total_cells += nc;
                 }

@@ -43,14 +43,14 @@ type HeaderReaderAlignerDigest = (
 );
 
 fn is_fasta(fname: &std::path::Path) -> anyhow::Result<bool> {
-    if let Ok(mut file) = std::fs::OpenOptions::new().read(true).open(fname) {
+    match std::fs::OpenOptions::new().read(true).open(fname) { Ok(mut file) => {
         let mut first_char = vec![0_u8];
         file.read_exact(&mut first_char)?;
         drop(file);
         Ok(first_char[0] == b'>' || first_char[0] == b'@')
-    } else {
+    } _ => {
         Ok(false)
-    }
+    }}
 }
 
 fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
@@ -193,23 +193,23 @@ fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerD
 
     let header = header.build();
 
-    let digest = if let Some(digest_handle_inner) = digest_handle {
+    let digest = match digest_handle { Some(digest_handle_inner) => {
         let digest = digest_handle_inner.join().expect("valid digest");
         // if we created an index, append the digest
         if let Some(idx_file) = idx_output {
             digest_utils::append_digest_to_mm2_index(idx_file, &digest)?;
         }
         digest
-    } else {
+    } _ => {
         // attempt to read from index
-        if let Ok(d) = digest_utils::read_digest_from_mm2_index(
+        match digest_utils::read_digest_from_mm2_index(
             ref_file.to_str().expect("could not convert to string"),
-        ) {
+        ) { Ok(d) => {
             d
-        } else {
+        } _ => {
             digest_utils::digest_from_header(&header)?
-        }
-    };
+        }}
+    }};
 
     Ok((header, None, Some(aligner), digest))
 }
