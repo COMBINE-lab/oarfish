@@ -31,8 +31,8 @@ anyhow = "1.0.97"
 bstr = "1.11.3"
 bio-types = { version = "1.0.4", features = ["serde"] }
 clap = { version = "4.5.31", features = ["derive"] }
-noodles-bam = "0.76.0"
-noodles-sam = "0.72.0"
+noodles-bam = "0.77.0"
+noodles-sam = "0.73.0"
 num-format = "0.4.4"
 lz4 = "1.28.1"
 either = "1.15.0"
@@ -57,7 +57,7 @@ arrow2 = { version = "0.18.0", features = [
   "io_parquet_snappy",
 ] }
 kders = { git = "https://github.com/COMBINE-lab/kde-rs.git", branch = "dev", version = "0.1.1" }
-noodles-bgzf = { version = "0.36.0" }
+noodles-bgzf = { version = "0.37.0" }
 crossbeam = { version = "0.8.4", features = [
   "crossbeam-queue",
   "crossbeam-channel",
