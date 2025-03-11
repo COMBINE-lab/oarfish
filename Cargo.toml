@@ -26,7 +26,7 @@ categories = ["command-line-utilities", "science"]
 # See more keys and their definitions 
 # at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-seqcol_rs = { git = "https://github.com/COMBINE-lab/seqcol_rs", branch = "dev", version = "0.2.0" }
+seqcol_rs = { git = "https://github.com/COMBINE-lab/seqcol_rs", branch = "dev", version = "0.3.0" }
 anyhow = "1.0.97"
 bstr = "1.11.3"
 bio-types = { version = "1.0.4", features = ["serde"] }

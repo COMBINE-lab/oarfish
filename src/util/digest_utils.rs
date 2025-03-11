@@ -1,8 +1,12 @@
-use anyhow::{bail, Context};
+use anyhow::{Context, bail};
+use minimap2_sys::MmIdx;
 use seqcol_rs;
 use std::io::{Read, Seek, Write};
 use std::str;
-use tracing::{debug, info};
+use std::sync::Arc;
+use tracing::{debug, info, warn};
+
+const DIGEST_VERSION: u8 = 2;
 
 pub(crate) fn append_digest_to_mm2_index(
     idx_file: &str,
@@ -19,7 +23,7 @@ pub(crate) fn append_digest_to_mm2_index(
         let str_len = json_str.len();
         let len_bytes = str_len.to_le_bytes();
 
-        let version = 1u8;
+        let version = DIGEST_VERSION;
         let ver_bytes = version.to_le_bytes();
 
         const OARFISH_FOOTER_MAGIC: &str = "OARFISHSIG";
@@ -49,7 +53,21 @@ pub(crate) fn read_digest_from_mm2_index(
 
         if str::from_utf8(&buf)? == OARFISH_FOOTER_MAGIC {
             info!("succesfully detected oarfish magic footer in minimap2 index");
-            let str_size_offset = magic_len + 1 + 8;
+            let ver_offset = magic_len + 1;
+            file.seek(std::io::SeekFrom::End(-ver_offset))?;
+            let mut ver_buf: [u8; 1] = [0];
+            file.read_exact(&mut ver_buf)?;
+            let stored_ver = u8::from_le_bytes(ver_buf);
+            if stored_ver < DIGEST_VERSION {
+                warn!(
+                    "the provided index has oarfish signature version {}, but the current version is {}.",
+                    u32::from(stored_ver),
+                    u32::from(DIGEST_VERSION)
+                );
+                warn!("please consider re-creating the index.");
+            }
+
+            let str_size_offset = ver_offset + 8;
             file.seek(std::io::SeekFrom::End(-str_size_offset))?;
             let mut sig_len_buf: [u8; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
             file.read_exact(&mut sig_len_buf)?;
@@ -132,4 +150,17 @@ pub(crate) fn digest_from_header(
         d
     };
     Ok(seqcol_digest)
+}
+
+pub(crate) fn digest_from_index(mmi: &Arc<MmIdx>) -> anyhow::Result<seqcol_rs::DigestResult> {
+    let idx_iter = crate::util::mm_utils::MMIdxNameSeqIter::from_idx(mmi);
+    let sq = seqcol_rs::SeqCol::try_from_name_seq_iter(idx_iter)?;
+    let d = sq
+        .digest(seqcol_rs::DigestConfig {
+            level: seqcol_rs::DigestLevel::Level1,
+            with_seqname_pairs: true,
+        })
+        .context("failed to compute the seqcol digest for the information from the index")?;
+    info!("done calculating seqcol digest");
+    Ok(d)
 }

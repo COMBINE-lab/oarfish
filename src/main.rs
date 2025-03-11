@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::{fs::File, io};
 
 use tracing::{info, warn};
-use tracing_subscriber::{filter::LevelFilter, fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, filter::LevelFilter, fmt, prelude::*};
 
 use noodles_bam as bam;
 use noodles_bgzf as bgzf;
@@ -43,14 +43,15 @@ type HeaderReaderAlignerDigest = (
 );
 
 fn is_fasta(fname: &std::path::Path) -> anyhow::Result<bool> {
-    match std::fs::OpenOptions::new().read(true).open(fname) { Ok(mut file) => {
-        let mut first_char = vec![0_u8];
-        file.read_exact(&mut first_char)?;
-        drop(file);
-        Ok(first_char[0] == b'>' || first_char[0] == b'@')
-    } _ => {
-        Ok(false)
-    }}
+    match std::fs::OpenOptions::new().read(true).open(fname) {
+        Ok(mut file) => {
+            let mut first_char = vec![0_u8];
+            file.read_exact(&mut first_char)?;
+            drop(file);
+            Ok(first_char[0] == b'>' || first_char[0] == b'@')
+        }
+        _ => Ok(false),
+    }
 }
 
 fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
@@ -84,9 +85,12 @@ fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerD
         // if the input was not a FASTA file, then don't attempt to
         // write out another index, because we are reading one in!
         if args.index_out.is_some() {
-            warn!("The `--index-out` flag is set, but the input already appears to be an index; skipping writing of output index");
+            warn!(
+                "The `--index-out` flag is set, but the input already appears to be an index; skipping writing of output index"
+            );
             args.index_out = None;
         }
+        info!("Reading existing minimap2 index that was not created by oarfish.");
         None
     };
 
@@ -170,17 +174,19 @@ fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerD
 
     // TODO: better creation of the header
     {
-        let mmi: Arc<MmIdx> = Arc::clone(aligner.idx.as_ref().unwrap());
         for i in 0..n_seq {
-            let _seq = unsafe { *(mmi).seq.offset(i as isize) };
-            // Or now:
-            // let _seq = aligner.get_seq(i as usize).unwrap();
-            let c_str = unsafe { ffi::CStr::from_ptr(_seq.name) };
+            let seq = aligner.get_seq(i as usize).unwrap_or_else(|| {
+                panic!(
+                    "{} was not a valid reference sequence index. (n_seq = {})",
+                    i, n_seq
+                )
+            });
+            let c_str = unsafe { ffi::CStr::from_ptr(seq.name) };
             let rust_str = c_str.to_str().unwrap().to_string();
             header = header.add_reference_sequence(
                 rust_str,
                 HeaderMap::<header_val::map::ReferenceSequence>::new(NonZeroUsize::try_from(
-                    _seq.len as usize,
+                    seq.len as usize,
                 )?),
             );
         }
@@ -193,23 +199,39 @@ fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerD
 
     let header = header.build();
 
-    let digest = match digest_handle { Some(digest_handle_inner) => {
-        let digest = digest_handle_inner.join().expect("valid digest");
-        // if we created an index, append the digest
-        if let Some(idx_file) = idx_output {
-            digest_utils::append_digest_to_mm2_index(idx_file, &digest)?;
+    let digest = match digest_handle {
+        // we are building the digest from an input fasta file
+        Some(digest_handle_inner) => {
+            let digest = digest_handle_inner.join().expect("valid digest");
+            // if we created an index, append the digest
+            if let Some(idx_file) = idx_output {
+                digest_utils::append_digest_to_mm2_index(idx_file, &digest)?;
+            }
+            digest
         }
-        digest
-    } _ => {
-        // attempt to read from index
-        match digest_utils::read_digest_from_mm2_index(
-            ref_file.to_str().expect("could not convert to string"),
-        ) { Ok(d) => {
-            d
-        } _ => {
-            digest_utils::digest_from_header(&header)?
-        }}
-    }};
+        _ => {
+            match digest_utils::read_digest_from_mm2_index(
+                ref_file.to_str().expect("could not convert to string"),
+            ) {
+                // we read a pre-computed digest from an oarfish-constructed
+                // minimap2 index
+                Ok(d) => d,
+                _ => {
+                    // We have been given a minimap2 index, but without the oarfish
+                    // footer. Now, we can build the digest we want from the index
+                    // itself.
+                    warn!(
+                        "computing sequence signatures from a minimap2 index that was not built with oarfish."
+                    );
+                    warn!(
+                        "if you are quantifying multiple samples, it will save time to let oarfish build a minimap2 index from the transcriptome reference, so that the reference signature can be reused."
+                    );
+                    let mmi: Arc<MmIdx> = Arc::clone(aligner.idx.as_ref().unwrap());
+                    digest_utils::digest_from_index(&mmi)?
+                }
+            }
+        }
+    };
 
     Ok((header, None, Some(aligner), digest))
 }
