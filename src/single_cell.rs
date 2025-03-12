@@ -10,7 +10,7 @@ use noodles_bam as bam;
 use noodles_sam::alignment::RecordBuf;
 use path_tools::WithAdditionalExtension;
 use serde_json::json;
-use std::fs::{create_dir_all, File};
+use std::fs::{File, create_dir_all};
 use std::io::{BufRead, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};

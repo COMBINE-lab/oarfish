@@ -16,9 +16,9 @@ use swapvec::SwapVec;
 use std::path::{Path, PathBuf};
 use std::{
     fs,
-    fs::create_dir_all,
     fs::File,
     fs::OpenOptions,
+    fs::create_dir_all,
     io::{self, BufWriter, Write},
 };
 

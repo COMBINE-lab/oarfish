@@ -3,8 +3,8 @@ use arrow2::{
     chunk::Chunk,
     datatypes::Schema,
     io::parquet::write::{
-        transverse, CompressionOptions, Encoding, FileWriter, RowGroupIterator, Version,
-        WriteOptions,
+        CompressionOptions, Encoding, FileWriter, RowGroupIterator, Version, WriteOptions,
+        transverse,
     },
 };
 use std::fs::File;

@@ -1,5 +1,5 @@
-use rand::distr::{Distribution, Uniform};
 use rand::Rng;
+use rand::distr::{Distribution, Uniform};
 
 /// Get a random uniform sample of `n` numbers in the range [0,n).
 /// Duplicates are explicitly allowed. The numbers are returned in

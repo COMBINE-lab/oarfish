@@ -171,11 +171,10 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
     let mut _fl_prob = 0.5f64;
 
     let density_fn = |x, y| -> f64 {
-        match em_info.kde_model { Some(ref kde_model) => {
-            kde_model[(x, y)]
-        } _ => {
-            1.
-        }}
+        match em_info.kde_model {
+            Some(ref kde_model) => kde_model[(x, y)],
+            _ => 1.,
+        }
     };
 
     // for up to the maximum number of iterations
@@ -356,11 +355,10 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
     let mut _fl_prob = 0.5f64;
 
     let density_fn = |x, y| -> f64 {
-        match em_info.kde_model { Some(ref kde_model) => {
-            kde_model[(x, y)]
-        } _ => {
-            1.
-        }}
+        match em_info.kde_model {
+            Some(ref kde_model) => kde_model[(x, y)],
+            _ => 1.,
+        }
     };
 
     pool.install(|| {

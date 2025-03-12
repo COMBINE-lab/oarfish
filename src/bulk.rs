@@ -13,9 +13,9 @@ use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::{write_infrep_file, write_out_prob, write_output};
 use crate::{logistic_prob, normalize_read_probs};
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
-use crossbeam::channel::bounded;
 use crossbeam::channel::Receiver;
 use crossbeam::channel::Sender;
+use crossbeam::channel::bounded;
 #[allow(unused_imports)]
 use minimap2_sys as mm_ffi;
 //use minimap2_temp as minimap2;
@@ -340,7 +340,10 @@ pub fn quantify_bulk_alignments_raw_reads(
                 }
                 s @ (InputSourceType::Fastx | InputSourceType::Unknown) => {
                     if matches!(s, InputSourceType::Unknown) {
-                        warn!("could not determine input file type for {} from suffix; assuming (possibly gzipped) fastx", read_path.display());
+                        warn!(
+                            "could not determine input file type for {} from suffix; assuming (possibly gzipped) fastx",
+                            read_path.display()
+                        );
                     }
                     let mut reader =
                         parse_fastx_file(read_path).expect("valid path/file to read sequences");

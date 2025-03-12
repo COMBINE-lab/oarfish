@@ -1,4 +1,4 @@
-use clap::{builder::ArgPredicate, Parser};
+use clap::{Parser, builder::ArgPredicate};
 use parse_size::parse_size;
 use serde::Serialize;
 use std::fmt;

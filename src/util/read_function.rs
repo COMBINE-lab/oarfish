@@ -41,7 +41,9 @@ pub fn read_short_quant_vec(
             .iter()
             .all(|(k, _v)| txps_name_set.contains(k.as_str()))
         {
-            bail!("There were transcripts in the short read quantification file that didn't appear in the BAM header; cannot proceed.");
+            bail!(
+                "There were transcripts in the short read quantification file that didn't appear in the BAM header; cannot proceed."
+            );
         }
     }
 
@@ -65,7 +67,10 @@ pub fn read_short_quant_vec(
         .collect();
 
     if num_missing > 0 {
-        warn!("There were {} transcripts appearing in the BAM header but missing from the short read quatifications; they have been assumed to have 0 abunance.", num_missing);
+        warn!(
+            "There were {} transcripts appearing in the BAM header but missing from the short read quatifications; they have been assumed to have 0 abunance.",
+            num_missing
+        );
     }
 
     Ok(ordered_rec)

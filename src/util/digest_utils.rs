@@ -38,6 +38,9 @@ pub(crate) fn append_digest_to_mm2_index(
     }
 }
 
+/// Computes a `DigestResult` from a provided minimap2 index
+/// file, *if* that index was originally created with oarfish.
+/// Otherwise, it return an error.
 pub(crate) fn read_digest_from_mm2_index(
     idx_file: &str,
 ) -> anyhow::Result<seqcol_rs::DigestResult> {

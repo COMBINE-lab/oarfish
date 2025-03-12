@@ -11,11 +11,11 @@ use serde::Serialize;
 use typed_builder::TypedBuilder;
 
 use bio_types::strand::Strand;
-use bstr::{ByteSlice, B};
+use bstr::{B, ByteSlice};
 //use minimap2_temp as minimap2;
 use minimap2;
 use noodles_sam as sam;
-use sam::{alignment::record::data::field::tag::Tag as AlnTag, Header};
+use sam::{Header, alignment::record::data::field::tag::Tag as AlnTag};
 
 #[allow(unused_imports)]
 use tracing::{error, info, warn};
@@ -554,8 +554,13 @@ impl TranscriptInfo {
             *bin += olfrac;
             if olfrac > ONE_PLUS_EPSILON {
                 error!("first_bin = {start_bin}, last_bin = {end_bin}");
-                error!("bin = {}, olfrac = {}, olap = {}, curr_bin_start = {}, curr_bin_end = {}, start = {start}, stop = {stop}", *bin, olfrac, olap, curr_bin_start, curr_bin_end);
-                panic!("coverage computation error; please report this error at https://github.com/COMBINE-lab/oarfish.")
+                error!(
+                    "bin = {}, olfrac = {}, olap = {}, curr_bin_start = {}, curr_bin_end = {}, start = {start}, stop = {stop}",
+                    *bin, olfrac, olap, curr_bin_start, curr_bin_end
+                );
+                panic!(
+                    "coverage computation error; please report this error at https://github.com/COMBINE-lab/oarfish."
+                )
             }
         }
         self.total_weight += weight;

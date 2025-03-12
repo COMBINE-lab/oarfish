@@ -2,7 +2,7 @@ use crate::util::constants::EMPTY_READ_NAME;
 use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
 use noodles_bam as bam;
 use noodles_sam::header::record::value::map::tag;
-use noodles_sam::{alignment::RecordBuf, Header};
+use noodles_sam::{Header, alignment::RecordBuf};
 use num_format::{Locale, ToFormattedString};
 use std::io;
 use std::path::Path;
@@ -321,13 +321,15 @@ pub fn parse_alignments<R: io::BufRead>(
                 prev_read = rstring;
                 if rg_num < check_order_thresh {
                     if !read_name_map.insert(prev_read.clone()) {
-                        error!("It appears that the input BAM file is not name-collated. oarfish is not designed to process coordinate sorted BAM files.");
+                        error!(
+                            "It appears that the input BAM file is not name-collated. oarfish is not designed to process coordinate sorted BAM files."
+                        );
                         anyhow::bail!(
-                                "You appear to have provided a coordinate-sorted BAM, but oarfish does not support processing these.\n\
+                            "You appear to have provided a coordinate-sorted BAM, but oarfish does not support processing these.\n\
                                     You should provide a BAM file collated by record name (which is the \"natural\" minimap2 order).\n\
-                                    Alignment records for the same read {} were observed twice in a non-contiguous block.", 
-                                &prev_read
-                            );
+                                    Alignment records for the same read {} were observed twice in a non-contiguous block.",
+                            &prev_read
+                        );
                     }
                     rg_num += 1;
                 }

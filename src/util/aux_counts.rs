@@ -1,5 +1,5 @@
-use crate::util::oarfish_types::InMemoryAlignmentStore;
 use crate::TranscriptInfo;
+use crate::util::oarfish_types::InMemoryAlignmentStore;
 use anyhow;
 use itertools::izip;
 
