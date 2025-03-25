@@ -71,13 +71,11 @@ fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerD
     let digest_handle = if is_fasta(&ref_file).unwrap_or(false) {
         Some(std::thread::spawn(|| {
             info!("generating reference digest");
-            let seqcol_obj = seqcol_rs::SeqCol::try_from_fasta_file(ref_file_clone).unwrap();
-            let digest = seqcol_obj
-                .digest(seqcol_rs::DigestConfig {
-                    level: seqcol_rs::DigestLevel::Level1,
-                    with_seqname_pairs: true,
-                })
-                .unwrap();
+            let mut seqcol_obj = seqcol_rs::SeqCol::try_from_fasta_file(ref_file_clone).unwrap();
+            let digest = seqcol_obj.digest(seqcol_rs::DigestConfig {
+                level: seqcol_rs::DigestLevel::Level1,
+                additional_attr: vec![seqcol_rs::KnownAttr::SortedNameLengthPairs],
+            });
             info!("done");
             digest
         }))
@@ -202,7 +200,8 @@ fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerD
     let digest = match digest_handle {
         // we are building the digest from an input fasta file
         Some(digest_handle_inner) => {
-            let digest = digest_handle_inner.join().expect("valid digest");
+            let digest_res = digest_handle_inner.join().expect("valid digest");
+            let digest = digest_res?;
             // if we created an index, append the digest
             if let Some(idx_file) = idx_output {
                 digest_utils::append_digest_to_mm2_index(idx_file, &digest)?;

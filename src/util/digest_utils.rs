@@ -83,24 +83,30 @@ pub(crate) fn read_digest_from_mm2_index(
             let value: serde_json::Value = serde_json::from_slice(&buf)?;
 
             debug!("{}", value);
-            let seq_col_digests = value["seqcol_digest"]
+            let seq_col_digests_value = value
+                .get("seqcol_digest")
+                .expect("seqcol_digest should exist");
+            let seq_col_digests = seq_col_digests_value
                 .as_object()
-                .expect("should be an object");
-            let lengths = seq_col_digests["lengths"]
-                .as_str()
-                .expect("should be a string");
-            let names = seq_col_digests["names"]
-                .as_str()
-                .expect("should be a string");
-            let seqs = seq_col_digests["sequences"]
-                .as_str()
-                .expect("should have sequences");
-            let sorted_name_length_pairs =
-                seq_col_digests.get("sorted_name_length_pairs").map(|v| {
-                    v.as_str()
-                        .expect("sorted_name_length_pairs should have a string value")
-                        .to_owned()
-                });
+                .expect("seqcol_digest should be an object");
+
+            // ensure we have the appropriate values
+            let _lengths = seq_col_digests
+                .get("lengths")
+                .expect("lengths field should exist")
+                .is_string();
+            let _names = seq_col_digests
+                .get("names")
+                .expect("names field should exist")
+                .is_string();
+            let _seqs = seq_col_digests
+                .get("sequences")
+                .expect("sequences field should exist")
+                .is_string();
+            let _sorted_name_length_pairs = seq_col_digests
+                .get("sorted_name_length_pairs")
+                .expect("sorted_name_length_pairs field should exist")
+                .is_string();
 
             let sha_digests = value["sha256_digests"]
                 .as_object()
@@ -114,10 +120,7 @@ pub(crate) fn read_digest_from_mm2_index(
 
             Ok(seqcol_rs::DigestResult {
                 sq_digest: seqcol_rs::DigestLevelResult::Level1(seqcol_rs::Level1Digest {
-                    lengths: lengths.to_owned(),
-                    names: names.to_owned(),
-                    sequences: Some(seqs.to_owned()),
-                    sorted_name_length_pairs,
+                    digests: seq_col_digests_value.clone(),
                 }),
                 sha256_seqs: Some(sha256_seqs.to_owned()),
                 sha256_names: Some(sha256_names.to_owned()),
@@ -135,7 +138,7 @@ pub(crate) fn digest_from_header(
 ) -> anyhow::Result<seqcol_rs::DigestResult> {
     let seqcol_digest = {
         info!("calculating seqcol digest");
-        let sc = seqcol_rs::SeqCol::from_sam_header(
+        let mut sc = seqcol_rs::SeqCol::from_sam_header(
             header
                 .reference_sequences()
                 .iter()
@@ -144,7 +147,7 @@ pub(crate) fn digest_from_header(
         let d = sc
             .digest(seqcol_rs::DigestConfig {
                 level: seqcol_rs::DigestLevel::Level1,
-                with_seqname_pairs: true,
+                additional_attr: vec![seqcol_rs::KnownAttr::SortedNameLengthPairs],
             })
             .context(
                 "failed to compute the seqcol digest for the information from the alignment header",
@@ -157,11 +160,11 @@ pub(crate) fn digest_from_header(
 
 pub(crate) fn digest_from_index(mmi: &Arc<MmIdx>) -> anyhow::Result<seqcol_rs::DigestResult> {
     let idx_iter = crate::util::mm_utils::MMIdxNameSeqIter::from_idx(mmi);
-    let sq = seqcol_rs::SeqCol::try_from_name_seq_iter(idx_iter)?;
+    let mut sq = seqcol_rs::SeqCol::try_from_name_seq_iter(idx_iter)?;
     let d = sq
         .digest(seqcol_rs::DigestConfig {
             level: seqcol_rs::DigestLevel::Level1,
-            with_seqname_pairs: true,
+            additional_attr: vec![seqcol_rs::KnownAttr::SortedNameLengthPairs],
         })
         .context("failed to compute the seqcol digest for the information from the index")?;
     info!("done calculating seqcol digest");
