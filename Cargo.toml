@@ -30,7 +30,7 @@ seqcol_rs = { git = "https://github.com/COMBINE-lab/seqcol_rs", branch = "dev", 
 anyhow = "1.0.97"
 bstr = "1.11.3"
 bio-types = { version = "1.0.4", features = ["serde"] }
-clap = { version = "4.5.31", features = ["derive"] }
+clap = { version = "4.5.34", features = ["derive"] }
 noodles-bam = "0.77.0"
 noodles-sam = "0.73.0"
 num-format = "0.4.4"
@@ -39,7 +39,7 @@ either = "1.15.0"
 tabled = "0.18.0"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-typed-builder = "0.20.0"
+typed-builder = "0.21.0"
 rayon = "1.10"
 statrs = "0.18"
 csv = "1.3"

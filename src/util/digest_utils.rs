@@ -6,7 +6,7 @@ use std::str;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
-const DIGEST_VERSION: u8 = 2;
+const DIGEST_VERSION: u8 = 3;
 
 pub(crate) fn append_digest_to_mm2_index(
     idx_file: &str,
