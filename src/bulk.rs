@@ -179,7 +179,7 @@ fn perform_inference_and_write_output(
     if args.write_assignment_probs.is_some() {
         let name_vec = name_vec
             .expect("cannot write assignment probabilities without valid vector of read names");
-        write_out_prob(&args.output, &emi, name_vec, txps_name)?;
+        write_out_prob(&args.output, &emi, &counts, name_vec, txps_name)?;
     }
 
     Ok(())

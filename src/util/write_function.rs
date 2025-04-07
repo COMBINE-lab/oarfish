@@ -211,6 +211,7 @@ pub(crate) fn write_infrep_file(
 pub fn write_out_prob(
     output: &PathBuf,
     emi: &EMInfo,
+    counts: &[f64],
     names_vec: SwapVec<String>,
     txps_name: &[String],
 ) -> anyhow::Result<()> {
@@ -262,10 +263,11 @@ pub fn write_out_prob(
     for ((alns, probs, coverage_probs), name) in izip!(emi.eq_map.iter(), names_iter) {
         let mut denom = 0.0_f64;
 
-        for (_a, p, cp) in izip!(alns, probs, coverage_probs) {
+        for (a, p, cp) in izip!(alns, probs, coverage_probs) {
+            let target_id = a.ref_id as usize;
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
-            denom += prob * cov_prob;
+            denom += counts[target_id] * prob * cov_prob;
         }
 
         let rn = name.expect("could not extract read name from file");
@@ -283,7 +285,7 @@ pub fn write_out_prob(
             let target_id = a.ref_id as usize;
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
-            let nprob = ((prob * cov_prob) / denom).clamp(0.0, 1.0);
+            let nprob = ((counts[target_id] * prob * cov_prob) / denom).clamp(0.0, 1.0);
             if nprob >= DISPLAY_THRESH {
                 txps.push(target_id);
                 txp_probs.push(nprob);
