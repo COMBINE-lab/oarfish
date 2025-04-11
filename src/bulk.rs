@@ -37,7 +37,7 @@ fn get_json_info(
     seqcol_digest: &seqcol_rs::DigestResult,
 ) -> serde_json::Value {
     let prob = if args.model_coverage {
-        "scaled_binomial"
+        "logistic_coverage"
     } else {
         "no_coverage"
     };
