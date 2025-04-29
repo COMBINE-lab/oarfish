@@ -184,7 +184,7 @@ corresponding to the `minimap2` parameter `-N`) can be specified with the comman
 
 ### Alignmment-based input
 
-In alignment-based mode, `oarfish` processes pre-computed alignments of hte read to the transcriptome. The input should be a `bam` format file, with reads aligned using [`minimap2`](https://github.com/lh3/minimap2) against the _transcriptome_. That is, `oarfish` does not currently handle spliced alignment to the genome. Further, the output alignments should be name sorted (the default order produced by `minimap2` should be fine). _Specifically_, `oarfish` relies on the existence of the `AS` tag in the `bam` records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read. 
+In alignment-based mode, `oarfish` processes pre-computed alignments of the read to the transcriptome. The input should be a `bam` format file, with reads aligned using [`minimap2`](https://github.com/lh3/minimap2) against the _transcriptome_. That is, `oarfish` does not currently handle spliced alignment to the genome. Further, the output alignments should be name sorted (the default order produced by `minimap2` should be fine). _Specifically_, `oarfish` relies on the existence of the `AS` tag in the `bam` records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read. 
 
 ### Choosing `minimap2` alignment options 
 
