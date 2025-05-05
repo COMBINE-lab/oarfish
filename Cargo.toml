@@ -96,7 +96,7 @@ ci = "github"
 # The installers to generate for each app
 installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
-# ubuntu 22.04
+# using ubuntu 22.04
 targets = [
   "aarch64-apple-darwin",
   "aarch64-unknown-linux-gnu",
