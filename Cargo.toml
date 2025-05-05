@@ -93,6 +93,8 @@ lto = "thin"
 cargo-dist-version = "0.28.0"
 # CI backends to support
 ci = "github"
+# Ignore out-of-date contents
+allow-dirty = ["ci"]
 # The installers to generate for each app
 installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
@@ -112,5 +114,6 @@ install-path = "CARGO_HOME"
 
 [workspace.metadata.dist.github-custom-runners]
 aarch64-apple-darwin = "macos-13"
+x86_64-unknown-linux-gnu = "ubuntu-22.04"
 # don't have linux arm builders on GitHub yet
 # aarch64-unknown-linux-gnu = "buildjet-8vcpu-ubuntu-2204-arm"
