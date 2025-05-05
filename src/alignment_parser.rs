@@ -24,20 +24,31 @@ pub fn read_and_verify_header<R: io::BufRead>(
             .to_formatted_string(&Locale::en)
     );
 
-    // sort order tag
-    let so = tag::Other::try_from([b'S', b'O'])?;
-    let so_type = header
-        .header()
-        .expect("has inner header")
-        .other_fields()
-        .get(&so)
-        .expect("BAM file should have @SO field");
+    // if we have an inner header field (@HD) then check for
+    // the sort-order tag ane ensure it is *not* "coordinate".
+    if let Some(inner_header) = header.header() {
+        let so = tag::Other::try_from([b'S', b'O'])?;
+        let so_type_opt = inner_header.other_fields().get(&so);
 
-    if so_type == "coordinate" {
-        error!("oarfish is not designed to process coordinate sorted BAM files.");
-        anyhow::bail!(
-        "You provided a coordinate-sorted BAM, but oarfish does not support processing these.
-         You should provide a BAM file collated by record name (which is the \"natural\" minimap2 order)."
+        // we have an SO flag, ensure it's not "coordinate"
+        if let Some(so_type) = so_type_opt {
+            if so_type == "coordinate" {
+                error!("oarfish is not designed to process coordinate sorted BAM files.");
+                anyhow::bail!(
+                "You provided a coordinate-sorted BAM, but oarfish does not support processing these.
+                    You should provide a BAM file collated by record name (which is the \"natural\" minimap2 order)."
+            );
+            }
+        } else {
+            // we had no SO flag
+            info!(
+                "BAM file had \"inner header\", but that header did not have the @SO field; cannot determine sort order from header alone."
+            );
+        }
+    } else {
+        // we had no inner header
+        info!(
+            "BAM file did not have \"inner header\", so cannot determine the sort order from the header alone."
         );
     }
 
