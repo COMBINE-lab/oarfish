@@ -46,6 +46,7 @@ type HeaderReaderAlignerDigest = (
     NamedDigestVec,
 );
 
+#[allow(dead_code)]
 enum SourceType {
     Fastx(PathBuf),
     ExistingMM2Index(PathBuf),
@@ -70,11 +71,19 @@ impl SourceType {
         }
     }
 
+    #[allow(dead_code)]
+    pub fn is_raw_mm2_index(&self) -> bool {
+        matches!(&self, Self::ExistingMM2Index(_))
+    }
+
+    #[allow(dead_code)]
+    pub fn is_oarfish_index(&self) -> bool {
+        matches!(&self, Self::ExistingOarfishIndex(_))
+    }
+
+    #[allow(dead_code)]
     pub fn is_fasta(&self) -> bool {
-        match self {
-            Self::Fastx(_) => true,
-            _ => false,
-        }
+        matches!(&self, Self::Fastx(_))
     }
 }
 
@@ -310,8 +319,129 @@ fn get_aligner_from_fastas(args: &mut Args) -> anyhow::Result<HeaderReaderAligne
     Ok((header, None, Some(aligner), digests))
 }
 
-fn get_aligner_from_index(_args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
-    unimplemented!();
+fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
+    let idx_file = args.index.clone().expect("index file should exist");
+
+    if let SourceType::ExistingMM2Index(_idx) = SourceType::from_path(&idx_file) {
+        warn!(
+            "You are using an existing minimap2 index (constructed outside of oarfish). This means that the parameters provided at index construction time will be applied."
+        );
+        warn!(
+            "Thus, the parameters implied by your `--seq-tech` option will be ignored. If you have not done this intentionally, please make sure the proper parameters were used when building the index."
+        );
+    }
+    // set the number of indexing threads
+    let idx_threads = &args.threads;
+
+    // if the user requested to write the output index to disk, prepare for that
+    let idx_out_as_str = args.index_out.clone().map_or(String::new(), |x| {
+        x.to_str()
+            .expect("could not convert PathBuf to &str")
+            .to_owned()
+    });
+    let idx_output = args.index_out.as_ref().map(|_| idx_out_as_str.as_str());
+
+    // create the aligner
+    let mut aligner = match args.seq_tech {
+        Some(SequencingTech::OntCDNA) | Some(SequencingTech::OntDRNA) => {
+            minimap2::Aligner::builder()
+                .map_ont()
+                .with_index_threads(*idx_threads)
+                .with_cigar()
+                .with_index(idx_file.clone(), idx_output)
+                .expect("could not construct minimap2 index")
+        }
+        Some(SequencingTech::PacBio) => minimap2::Aligner::builder()
+            .map_pb()
+            .with_index_threads(*idx_threads)
+            .with_cigar()
+            .with_index(idx_file.clone(), idx_output)
+            .expect("could not construct minimap2 index"),
+        Some(SequencingTech::PacBioHifi) => minimap2::Aligner::builder()
+            .map_hifi()
+            .with_index_threads(*idx_threads)
+            .with_cigar()
+            .with_index(idx_file.clone(), idx_output)
+            .expect("could not construct minimap2 index"),
+        None => {
+            anyhow::bail!("sequencing tech must be provided in read mode, but it was not!");
+        }
+    };
+
+    info!("created aligner index opts : {:?}", aligner.idxopt);
+    // get up to the best_n hits for each read
+    // default value is 100.
+    aligner.mapopt.best_n = args.best_n as i32;
+    // set the seed to be the same as what command-line
+    // minimap2 uses.
+    aligner.mapopt.seed = 11;
+
+    let n_seq = aligner.n_seq();
+
+    info!(
+        "index contains {} sequences",
+        n_seq.to_formatted_string(&Locale::en)
+    );
+
+    let mut header = noodles_sam::header::Header::builder();
+
+    #[derive(Debug, PartialEq, Eq)]
+    pub struct SeqMetaData {
+        pub name: String,
+        pub length: u32,
+        pub is_alt: bool,
+    }
+
+    // TODO: better creation of the header
+    {
+        for i in 0..n_seq {
+            let seq = aligner.get_seq(i as usize).unwrap_or_else(|| {
+                panic!(
+                    "{} was not a valid reference sequence index. (n_seq = {})",
+                    i, n_seq
+                )
+            });
+            let c_str = unsafe { ffi::CStr::from_ptr(seq.name) };
+            let rust_str = c_str.to_str().unwrap().to_string();
+            header = header.add_reference_sequence(
+                rust_str,
+                HeaderMap::<header_val::map::ReferenceSequence>::new(NonZeroUsize::try_from(
+                    seq.len as usize,
+                )?),
+            );
+        }
+    }
+
+    header = header.add_program(
+        "minimap2-rs",
+        HeaderMap::<header_val::map::Program>::default(),
+    );
+
+    let header = header.build();
+
+    let digests = match digest_utils::read_digest_from_mm2_index(
+        idx_file.to_str().expect("could not convert to string"),
+    ) {
+        // we read a pre-computed digest from an oarfish-constructed
+        // minimap2 index
+        Ok(d) => d,
+        _ => {
+            // We have been given a minimap2 index, but without the oarfish
+            // footer. Now, we can build the digest we want from the index
+            // itself.
+            warn!(
+                "computing sequence signatures from a minimap2 index that was not built with oarfish."
+            );
+            warn!(
+                "if you are quantifying multiple samples, it will save time to let oarfish build a minimap2 index from the transcriptome reference, so that the reference signature can be reused."
+            );
+            let mmi: Arc<MmIdx> = Arc::clone(aligner.idx.as_ref().unwrap());
+            let d = digest_utils::digest_from_index(&mmi)?;
+            vec![("prexisting_mm2_index".to_string(), d)].into()
+        }
+    };
+
+    Ok((header, None, Some(aligner), digests))
 }
 
 fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
