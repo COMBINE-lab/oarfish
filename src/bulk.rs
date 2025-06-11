@@ -1,3 +1,4 @@
+use crate::NamedDigestVec;
 use crate::alignment_parser;
 use crate::em;
 use crate::kde_utils;
@@ -31,11 +32,7 @@ use tracing::{info, warn};
 /// Produce a [serde_json::Value] that encodes the relevant arguments and
 /// parameters of the run that we wish to record to file. Ultimately, this
 /// will be written to the corresponding `meta_info.json` file for this run.
-fn get_json_info(
-    args: &Args,
-    emi: &EMInfo,
-    seqcol_digest: &seqcol_rs::DigestResult,
-) -> serde_json::Value {
+fn get_json_info(args: &Args, emi: &EMInfo, seqcol_digest: &NamedDigestVec) -> serde_json::Value {
     let prob = if args.model_coverage {
         "logistic_coverage"
     } else {
@@ -76,7 +73,7 @@ fn perform_inference_and_write_output(
     name_vec: Option<SwapVec<String>>,
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
-    seqcol_digest: seqcol_rs::DigestResult,
+    seqcol_digest: NamedDigestVec,
     args: &Args,
 ) -> anyhow::Result<()> {
     // print discard table information in which the user might be interested.
@@ -192,7 +189,7 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
     args: &Args,
-    seqcol_digest: seqcol_rs::DigestResult,
+    seqcol_digest: NamedDigestVec,
 ) -> anyhow::Result<()> {
     let mut name_vec = if filter_opts.write_assignment_probs {
         Some(SwapVec::<String>::with_config(SwapVecConfig {
@@ -271,7 +268,7 @@ pub fn quantify_bulk_alignments_raw_reads(
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
     args: &Args,
-    seqcol_digest: seqcol_rs::DigestResult,
+    seqcol_digest: NamedDigestVec,
 ) -> anyhow::Result<()> {
     // now parse the actual alignments for the reads and store the results
     // in our in-memory stor

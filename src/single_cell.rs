@@ -2,7 +2,7 @@ use crate::alignment_parser;
 use crate::em;
 use crate::prog_opts::Args;
 use crate::util::oarfish_types::{
-    AlignmentFilters, EMInfo, InMemoryAlignmentStore, TranscriptInfo,
+    AlignmentFilters, EMInfo, InMemoryAlignmentStore, NamedDigestVec, TranscriptInfo,
 };
 use crate::util::write_function;
 use crossbeam::queue::ArrayQueue;
@@ -27,10 +27,7 @@ struct QuantOutputInfo {
 /// Produce a [serde_json::Value] that encodes the relevant arguments and
 /// parameters of the run that we wish to record to file. Ultimately, this
 /// will be written to the corresponding `meta_info.json` file for this run.
-fn get_single_cell_json_info(
-    args: &Args,
-    seqcol_digest: &seqcol_rs::DigestResult,
-) -> serde_json::Value {
+fn get_single_cell_json_info(args: &Args, seqcol_digest: &NamedDigestVec) -> serde_json::Value {
     let prob = if args.model_coverage {
         "logistic_coverage"
     } else {
@@ -60,7 +57,7 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
     reader: &mut bam::io::Reader<R>,
     txps: &mut [TranscriptInfo],
     args: &Args,
-    seqcol_digest: seqcol_rs::DigestResult,
+    seqcol_digest: NamedDigestVec,
 ) -> anyhow::Result<()> {
     // if there is a parent directory
     if let Some(p) = args.output.parent() {

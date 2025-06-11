@@ -1,9 +1,22 @@
 use crate::util::oarfish_types::ShortReadRecord;
 use anyhow::bail;
 use csv::ReaderBuilder;
+use niffler;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use tracing::warn;
+
+pub fn is_fasta(fname: &std::path::Path) -> anyhow::Result<bool> {
+    match niffler::from_path(fname) {
+        Ok((mut reader, _format)) => {
+            let mut first_char = vec![0_u8];
+            reader.read_exact(&mut first_char)?;
+            drop(reader);
+            Ok(first_char[0] == b'>' || first_char[0] == b'@')
+        }
+        _ => Ok(false),
+    }
+}
 
 /// Read the short read quantification from the file `short_read_path`
 pub fn read_short_quant_vec(

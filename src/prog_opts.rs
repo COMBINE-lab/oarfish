@@ -214,6 +214,15 @@ fn parse_filter_f32(arg: &str) -> anyhow::Result<FilterArg> {
     .required(true)
     .args(["alignments", "reads"])
 ))]
+#[command(group(
+    clap::ArgGroup::new("raw_input_type")
+    .multiple(true)
+    .args(["reference", "novel_transcripts"])
+))]
+#[command(group(
+    clap::ArgGroup::new("raw_ref_type")
+    .args(["raw_input_type", "index"])
+))]
 pub struct Args {
     /// be quiet (i.e. don't output log messages that aren't at least warnings)
     #[arg(long, conflicts_with = "verbose")]
@@ -244,9 +253,24 @@ pub struct Args {
     pub reads: Option<Vec<PathBuf>>,
 
     /// path to the file containing the reference transcriptome (or existing index) against which
-    /// to map
+    /// to map.
     #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]
     pub reference: Option<PathBuf>,
+
+    /// path to the file containing novel (de novo, or reference-guided assembled) transcripts against which
+    /// to map. These are ultimately indexed together with reference transcripts, but passed in
+    /// separately for the purposes of provenance tracking.
+    #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]
+    pub novel_transcripts: Option<PathBuf>,
+
+    /// path where minimap2 index will be written (if provided)
+    #[arg(
+        long,
+        conflicts_with = "alignments",
+        conflicts_with = "raw_input_type",
+        help_heading = "raw read mode"
+    )]
+    pub index: Option<PathBuf>,
 
     /// path where minimap2 index will be written (if provided)
     #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]

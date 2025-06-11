@@ -1,5 +1,8 @@
+use anyhow::bail;
 use clap::Parser;
 use std::num::NonZeroUsize;
+use std::path::{Path, PathBuf};
+use util::oarfish_types::NamedDigestVec;
 
 use core::ffi;
 use minimap2_sys::MmIdx;
@@ -10,8 +13,7 @@ use num_format::{Locale, ToFormattedString};
 use std::io::Read;
 use std::sync::Arc;
 use std::{fs::File, io};
-
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter, fmt, prelude::*};
 
 use noodles_bam as bam;
@@ -29,8 +31,10 @@ mod util;
 
 use crate::prog_opts::{Args, FilterGroup, SequencingTech};
 use crate::util::digest_utils;
+use crate::util::file_utils::create_fifo_if_absent;
 use crate::util::normalize_probability::normalize_read_probs;
 use crate::util::oarfish_types::{AlignmentFilters, TranscriptInfo};
+use crate::util::read_function::is_fasta;
 use crate::util::{
     binomial_probability::binomial_continuous_prob, kde_utils, logistic_probability::logistic_prob,
 };
@@ -39,62 +43,144 @@ type HeaderReaderAlignerDigest = (
     noodles_sam::header::Header,
     Option<bam::io::Reader<bgzf::MultithreadedReader<File>>>,
     Option<minimap2::Aligner<minimap2::Built>>,
-    seqcol_rs::DigestResult,
+    NamedDigestVec,
 );
 
-fn is_fasta(fname: &std::path::Path) -> anyhow::Result<bool> {
-    match std::fs::OpenOptions::new().read(true).open(fname) {
-        Ok(mut file) => {
-            let mut first_char = vec![0_u8];
-            file.read_exact(&mut first_char)?;
-            drop(file);
-            Ok(first_char[0] == b'>' || first_char[0] == b'@')
+enum SourceType {
+    Fastx(PathBuf),
+    ExistingMM2Index(PathBuf),
+    ExistingOarfishIndex(PathBuf),
+}
+
+impl SourceType {
+    /// determine the type of the source and return the path
+    /// wrapped in the correct variant.
+    pub fn from_path<P: AsRef<Path>>(p: P) -> Self {
+        if is_fasta(p.as_ref()).unwrap_or(false) {
+            Self::Fastx(PathBuf::from(p.as_ref()))
+        } else {
+            match digest_utils::read_digest_from_mm2_index(
+                p.as_ref().to_str().expect("can be represented as a str"),
+            ) {
+                // we read a pre-computed digest from an oarfish-constructed
+                // minimap2 index
+                Ok(_d) => Self::ExistingOarfishIndex(PathBuf::from(p.as_ref())),
+                _ => Self::ExistingMM2Index(PathBuf::from(p.as_ref())),
+            }
         }
-        _ => Ok(false),
+    }
+
+    pub fn is_fasta(&self) -> bool {
+        match self {
+            Self::Fastx(_) => true,
+            _ => false,
+        }
     }
 }
 
-fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
-    info!("oarfish is operating in read-based mode");
+fn get_digest_from_fasta(
+    fpath: &std::path::PathBuf,
+) -> std::thread::JoinHandle<anyhow::Result<seqcol_rs::DigestResult>> {
+    let fpath_clone = fpath.clone();
+    std::thread::spawn(|| {
+        info!("generating reference digest for {}", fpath_clone.display());
+        let mut seqcol_obj = seqcol_rs::SeqCol::try_from_fasta_file(fpath_clone).unwrap();
+        let digest = seqcol_obj.digest(seqcol_rs::DigestConfig {
+            level: seqcol_rs::DigestLevel::Level1,
+            additional_attr: vec![seqcol_rs::KnownAttr::SortedNameLengthPairs],
+        });
+        info!("done");
+        digest
+    })
+}
 
-    let ref_file = args
-        .reference
-        .clone()
-        .expect("must provide reference sequence");
+#[derive(Debug)]
+struct RefSource {
+    file_path: std::path::PathBuf,
+    concat_handle: Option<std::thread::JoinHandle<anyhow::Result<()>>>,
+}
 
-    let ref_file_clone = ref_file.clone();
+fn get_ref_source(
+    reference: Option<PathBuf>,
+    novel_transcripts: Option<PathBuf>,
+) -> anyhow::Result<RefSource> {
+    let concat_handle: Option<std::thread::JoinHandle<_>>;
+
+    if reference.as_ref().or(novel_transcripts.as_ref()).is_none() {
+        bail!("at least one of --reference or --novel-transcripts but be provided");
+    }
+
     // The `ref_file` input argument is either a FASTA file with reference
     // sequences, in which case we will compute the proper digest in a separate
     // thread, OR an existing minimap2 index, in which case we won't attempt
     // to treat it as a FASTA file and we will later get the digest from
     // the index.
-    let digest_handle = if is_fasta(&ref_file).unwrap_or(false) {
-        Some(std::thread::spawn(|| {
-            info!("generating reference digest");
-            let mut seqcol_obj = seqcol_rs::SeqCol::try_from_fasta_file(ref_file_clone).unwrap();
-            let digest = seqcol_obj.digest(seqcol_rs::DigestConfig {
-                level: seqcol_rs::DigestLevel::Level1,
-                additional_attr: vec![seqcol_rs::KnownAttr::SortedNameLengthPairs],
-            });
-            info!("done");
-            digest
-        }))
+    let input_path = if reference.is_some() && novel_transcripts.is_some() {
+        create_fifo_if_absent("combined_transcripts.fifo")?;
+        let ref_paths = reference.clone().expect("references should exist");
+        let novel_paths = novel_transcripts.clone().expect("novel txps should exist");
+        concat_handle = Some(std::thread::spawn(|| {
+            let fifo_path = std::path::Path::new("combined_transcripts.fifo");
+            let mut ff = std::fs::File::options().write(true).open(fifo_path)?;
+            let ref_read = std::io::BufReader::new(std::fs::File::open(ref_paths)?);
+            let novel_read = std::io::BufReader::new(std::fs::File::open(novel_paths)?);
+            let mut reader = ref_read.chain(novel_read);
+            info!("before copy");
+            match std::io::copy(&mut reader, &mut ff) {
+                Err(e) => {
+                    error!("Error: {:#?}, in copying input to output", e);
+                }
+                Ok(nb) => {
+                    error!("Copied {} bytes from input to output", nb)
+                }
+            }
+            drop(reader);
+            drop(ff);
+            Ok(())
+        }));
+        PathBuf::from("combined_transcripts.fifo")
     } else {
-        // if the input was not a FASTA file, then don't attempt to
-        // write out another index, because we are reading one in!
-        if args.index_out.is_some() {
-            warn!(
-                "The `--index-out` flag is set, but the input already appears to be an index; skipping writing of output index"
-            );
-            args.index_out = None;
-        }
-        info!("Reading existing minimap2 index that was not created by oarfish.");
-        None
+        concat_handle = None;
+        reference
+            .clone()
+            .or(novel_transcripts.clone())
+            .expect("either reference or novel transcripts must be provided")
     };
 
-    let thread_sub = if digest_handle.is_some() { 1 } else { 0 };
+    Ok(RefSource {
+        file_path: input_path.clone(),
+        concat_handle,
+    })
+}
+
+fn get_aligner_from_fastas(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
+    let ref_digest_handle = args
+        .reference
+        .clone()
+        .map(|refs| get_digest_from_fasta(&refs));
+
+    let novel_digest_handle = args
+        .novel_transcripts
+        .clone()
+        .map(|refs| get_digest_from_fasta(&refs));
+
+    // we are using either 1 or 2 background threads to compute the digests
+    let thread_sub = if ref_digest_handle
+        .as_ref()
+        .xor(novel_digest_handle.as_ref())
+        .is_some()
+    {
+        1
+    } else {
+        2
+    };
+
     // set the number of indexing threads
     let idx_threads = &args.threads.saturating_sub(thread_sub).max(1);
+
+    // if we need to combine the reference and novel sequences into the index,
+    // spawn off a thread to do that
+    let input_source = get_ref_source(args.reference.clone(), args.novel_transcripts.clone())?;
 
     // if the user requested to write the output index to disk, prepare for that
     let idx_out_as_str = args.index_out.clone().map_or(String::new(), |x| {
@@ -111,35 +197,20 @@ fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerD
                 .map_ont()
                 .with_index_threads(*idx_threads)
                 .with_cigar()
-                .with_index(
-                    args.reference
-                        .clone()
-                        .expect("must provide reference sequence"),
-                    idx_output,
-                )
+                .with_index(&input_source.file_path, idx_output)
                 .expect("could not construct minimap2 index")
         }
         Some(SequencingTech::PacBio) => minimap2::Aligner::builder()
             .map_pb()
             .with_index_threads(*idx_threads)
             .with_cigar()
-            .with_index(
-                args.reference
-                    .clone()
-                    .expect("must provide reference sequence"),
-                idx_output,
-            )
+            .with_index(&input_source.file_path, idx_output)
             .expect("could not construct minimap2 index"),
         Some(SequencingTech::PacBioHifi) => minimap2::Aligner::builder()
             .map_hifi()
             .with_index_threads(*idx_threads)
             .with_cigar()
-            .with_index(
-                args.reference
-                    .clone()
-                    .expect("must provide reference sequence"),
-                idx_output,
-            )
+            .with_index(&input_source.file_path, idx_output)
             .expect("could not construct minimap2 index"),
         None => {
             anyhow::bail!("sequencing tech must be provided in read mode, but it was not!");
@@ -160,6 +231,19 @@ fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerD
         "index contains {} sequences",
         n_seq.to_formatted_string(&Locale::en)
     );
+
+    // if we concatenated reference and novel transcripts to build the index, remove the fifo here
+    if let Some(concat_handle) = input_source.concat_handle {
+        if let Err(e) = concat_handle.join() {
+            bail!(
+                "Failed to concatenate reference and novel input transcript sequences: {:#?}",
+                e
+            );
+        } else {
+            info!("joined successfully!");
+        }
+        std::fs::remove_file(input_source.file_path)?;
+    }
 
     let mut header = noodles_sam::header::Header::builder();
 
@@ -197,42 +281,40 @@ fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerD
 
     let header = header.build();
 
-    let digest = match digest_handle {
-        // we are building the digest from an input fasta file
-        Some(digest_handle_inner) => {
-            let digest_res = digest_handle_inner.join().expect("valid digest");
-            let digest = digest_res?;
-            // if we created an index, append the digest
-            if let Some(idx_file) = idx_output {
-                digest_utils::append_digest_to_mm2_index(idx_file, &digest)?;
-            }
-            digest
-        }
-        _ => {
-            match digest_utils::read_digest_from_mm2_index(
-                ref_file.to_str().expect("could not convert to string"),
-            ) {
-                // we read a pre-computed digest from an oarfish-constructed
-                // minimap2 index
-                Ok(d) => d,
-                _ => {
-                    // We have been given a minimap2 index, but without the oarfish
-                    // footer. Now, we can build the digest we want from the index
-                    // itself.
-                    warn!(
-                        "computing sequence signatures from a minimap2 index that was not built with oarfish."
-                    );
-                    warn!(
-                        "if you are quantifying multiple samples, it will save time to let oarfish build a minimap2 index from the transcriptome reference, so that the reference signature can be reused."
-                    );
-                    let mmi: Arc<MmIdx> = Arc::clone(aligner.idx.as_ref().unwrap());
-                    digest_utils::digest_from_index(&mmi)?
-                }
-            }
-        }
+    let mut digests = NamedDigestVec::new();
+    // we have a reference file
+    if let Some(digest_handle_inner) = ref_digest_handle {
+        let digest_res = digest_handle_inner.join().expect("valid digest");
+        let digest = digest_res?;
+        digests.push(("reference_digest".to_string(), digest));
+    };
+    // we have a novel transcripts file
+    if let Some(digest_handle_inner) = novel_digest_handle {
+        let digest_res = digest_handle_inner.join().expect("valid digest");
+        let digest = digest_res?;
+        digests.push(("novel_transcripts_digest".to_string(), digest));
     };
 
-    Ok((header, None, Some(aligner), digest))
+    info!("HERE!");
+    // if we created an index, append the digest
+    if let Some(idx_file) = idx_output {
+        //digest_utils::append_digest_to_mm2_index(idx_file, &digest)?;
+    }
+
+    Ok((header, None, Some(aligner), digests))
+}
+
+fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
+    unimplemented!();
+}
+
+fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
+    info!("oarfish is operating in read-based mode");
+    if args.index.is_some() {
+        get_aligner_from_index(args)
+    } else {
+        get_aligner_from_fastas(args)
+    }
 }
 
 fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
@@ -389,7 +471,12 @@ fn main() -> anyhow::Result<()> {
         // can tell).
         let header = alignment_parser::read_and_verify_header(&mut reader, &alignments)?;
         let seqcol_digest = digest_utils::digest_from_header(&header)?;
-        (header, Some(reader), None, seqcol_digest)
+        (
+            header,
+            Some(reader),
+            None,
+            vec![("bam_digest".to_string(), seqcol_digest)].into(),
+        )
     };
 
     let num_ref_seqs = header.reference_sequences().len();

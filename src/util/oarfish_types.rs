@@ -7,7 +7,9 @@ use std::iter::FromIterator;
 use tabled::builder::Builder;
 use tabled::settings::Style;
 
+use seqcol_rs::DigestResult;
 use serde::Serialize;
+use serde_json::json;
 use typed_builder::TypedBuilder;
 
 use bio_types::strand::Strand;
@@ -22,6 +24,30 @@ use tracing::{error, info, warn};
 
 use crate::prog_opts::ReadAssignmentProbOut;
 use crate::util::constants::EMPTY_READ_NAME;
+
+pub(crate) struct NamedDigestVec(Vec<(String, DigestResult)>);
+
+impl From<Vec<(String, DigestResult)>> for NamedDigestVec {
+    fn from(o: Vec<(String, DigestResult)>) -> Self {
+        Self { 0: o }
+    }
+}
+
+impl NamedDigestVec {
+    pub fn new() -> Self {
+        NamedDigestVec(Vec::new())
+    }
+
+    pub fn push(&mut self, x: (String, DigestResult)) {
+        self.0.push(x);
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut op = serde_json::Map::new();
+        op.extend(self.0.iter().map(|(k, v)| (k.clone(), v.to_json())));
+        json!(op)
+    }
+}
 
 // how we can get our raw input
 pub(crate) enum InputSourceType {
