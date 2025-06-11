@@ -6,11 +6,13 @@ use std::str;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+use crate::NamedDigestVec;
+
 const DIGEST_VERSION: u8 = 3;
 
 pub(crate) fn append_digest_to_mm2_index(
     idx_file: &str,
-    digest: &seqcol_rs::DigestResult,
+    digest: &NamedDigestVec,
 ) -> anyhow::Result<()> {
     if std::fs::exists(idx_file)? {
         let mut writer = std::fs::OpenOptions::new()

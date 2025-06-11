@@ -116,11 +116,17 @@ fn get_ref_source(
     // to treat it as a FASTA file and we will later get the digest from
     // the index.
     let input_path = if reference.is_some() && novel_transcripts.is_some() {
-        create_fifo_if_absent("combined_transcripts.fifo")?;
+        let pid = std::process::id();
+        let fifo_fname = format!("combine_transcripts_{}.fifo", pid);
+        create_fifo_if_absent(&fifo_fname)?;
+
+        let fifo_fname_clone = fifo_fname.to_string().clone();
         let ref_paths = reference.clone().expect("references should exist");
         let novel_paths = novel_transcripts.clone().expect("novel txps should exist");
-        concat_handle = Some(std::thread::spawn(|| {
-            let fifo_path = std::path::Path::new("combined_transcripts.fifo");
+        // a thread that will concatenate the reference transcripts and then the novel
+        // trancsripts
+        concat_handle = Some(std::thread::spawn(move || {
+            let fifo_path = std::path::Path::new(fifo_fname_clone.as_str());
             let mut ff = std::fs::File::options().write(true).open(fifo_path)?;
             let ref_read = std::io::BufReader::new(std::fs::File::open(ref_paths)?);
             let novel_read = std::io::BufReader::new(std::fs::File::open(novel_paths)?);
@@ -131,14 +137,15 @@ fn get_ref_source(
                     error!("Error: {:#?}, in copying input to output", e);
                 }
                 Ok(nb) => {
-                    error!("Copied {} bytes from input to output", nb)
+                    info!("copied {} bytes from input to output across fifo", nb)
                 }
             }
             drop(reader);
             drop(ff);
             Ok(())
         }));
-        PathBuf::from("combined_transcripts.fifo")
+
+        PathBuf::from(&fifo_fname)
     } else {
         concat_handle = None;
         reference
@@ -295,16 +302,15 @@ fn get_aligner_from_fastas(args: &mut Args) -> anyhow::Result<HeaderReaderAligne
         digests.push(("novel_transcripts_digest".to_string(), digest));
     };
 
-    info!("HERE!");
     // if we created an index, append the digest
     if let Some(idx_file) = idx_output {
-        //digest_utils::append_digest_to_mm2_index(idx_file, &digest)?;
+        digest_utils::append_digest_to_mm2_index(idx_file, &digests)?;
     }
 
     Ok((header, None, Some(aligner), digests))
 }
 
-fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
+fn get_aligner_from_index(_args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
     unimplemented!();
 }
 
@@ -313,6 +319,16 @@ fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerD
     if args.index.is_some() {
         get_aligner_from_index(args)
     } else {
+        assert!(
+            args.reference
+                .as_ref()
+                .is_none_or(|f| is_fasta(f).expect("couldn't read input file."))
+        );
+        assert!(
+            args.novel_transcripts
+                .as_ref()
+                .is_none_or(|f| is_fasta(f).expect("couldn't read input file."))
+        );
         get_aligner_from_fastas(args)
     }
 }
