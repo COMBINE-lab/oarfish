@@ -109,29 +109,26 @@ struct RefSource {
     concat_handle: Option<std::thread::JoinHandle<anyhow::Result<()>>>,
 }
 
-fn get_ref_source(
-    reference: Option<PathBuf>,
-    novel_transcripts: Option<PathBuf>,
-) -> anyhow::Result<RefSource> {
+fn get_ref_source(annotated: Option<PathBuf>, novel: Option<PathBuf>) -> anyhow::Result<RefSource> {
     let concat_handle: Option<std::thread::JoinHandle<_>>;
 
-    if reference.as_ref().or(novel_transcripts.as_ref()).is_none() {
-        bail!("at least one of --reference or --novel-transcripts but be provided");
+    if annotated.as_ref().or(novel.as_ref()).is_none() {
+        bail!("at least one of --annotated or --novel but be provided");
     }
 
-    // The `ref_file` input argument is either a FASTA file with reference
+    // The `ref_file` input argument is either a FASTA file with annotated
     // sequences, in which case we will compute the proper digest in a separate
     // thread, OR an existing minimap2 index, in which case we won't attempt
     // to treat it as a FASTA file and we will later get the digest from
     // the index.
-    let input_path = if reference.is_some() && novel_transcripts.is_some() {
+    let input_path = if annotated.is_some() && novel.is_some() {
         let pid = std::process::id();
         let fifo_fname = format!("combine_transcripts_{}.fifo", pid);
         create_fifo_if_absent(&fifo_fname)?;
 
         let fifo_fname_clone = fifo_fname.to_string().clone();
-        let ref_paths = reference.clone().expect("references should exist");
-        let novel_paths = novel_transcripts.clone().expect("novel txps should exist");
+        let ref_paths = annotated.clone().expect("annotated should exist");
+        let novel_paths = novel.clone().expect("novel txps should exist");
         // a thread that will concatenate the reference transcripts and then the novel
         // trancsripts
         concat_handle = Some(std::thread::spawn(move || {
@@ -157,9 +154,9 @@ fn get_ref_source(
         PathBuf::from(&fifo_fname)
     } else {
         concat_handle = None;
-        reference
+        annotated
             .clone()
-            .or(novel_transcripts.clone())
+            .or(novel.clone())
             .expect("either reference or novel transcripts must be provided")
     };
 
@@ -171,14 +168,11 @@ fn get_ref_source(
 
 fn get_aligner_from_fastas(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
     let ref_digest_handle = args
-        .reference
+        .annotated
         .clone()
         .map(|refs| get_digest_from_fasta(&refs));
 
-    let novel_digest_handle = args
-        .novel_transcripts
-        .clone()
-        .map(|refs| get_digest_from_fasta(&refs));
+    let novel_digest_handle = args.novel.clone().map(|refs| get_digest_from_fasta(&refs));
 
     // we are using either 1 or 2 background threads to compute the digests
     let thread_sub = if ref_digest_handle
@@ -194,9 +188,9 @@ fn get_aligner_from_fastas(args: &mut Args) -> anyhow::Result<HeaderReaderAligne
     // set the number of indexing threads
     let idx_threads = &args.threads.saturating_sub(thread_sub).max(1);
 
-    // if we need to combine the reference and novel sequences into the index,
+    // if we need to combine the annotated and novel sequences into the index,
     // spawn off a thread to do that
-    let input_source = get_ref_source(args.reference.clone(), args.novel_transcripts.clone())?;
+    let input_source = get_ref_source(args.annotated.clone(), args.novel.clone())?;
 
     // if the user requested to write the output index to disk, prepare for that
     let idx_out_as_str = args.index_out.clone().map_or(String::new(), |x| {
@@ -302,7 +296,7 @@ fn get_aligner_from_fastas(args: &mut Args) -> anyhow::Result<HeaderReaderAligne
     if let Some(digest_handle_inner) = ref_digest_handle {
         let digest_res = digest_handle_inner.join().expect("valid digest");
         let digest = digest_res?;
-        digests.push(("reference_digest".to_string(), digest));
+        digests.push(("annotated_transcripts_digest".to_string(), digest));
     };
     // we have a novel transcripts file
     if let Some(digest_handle_inner) = novel_digest_handle {
@@ -450,12 +444,12 @@ fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerD
         get_aligner_from_index(args)
     } else {
         assert!(
-            args.reference
+            args.annotated
                 .as_ref()
                 .is_none_or(|f| is_fasta(f).expect("couldn't read input file."))
         );
         assert!(
-            args.novel_transcripts
+            args.novel
                 .as_ref()
                 .is_none_or(|f| is_fasta(f).expect("couldn't read input file."))
         );

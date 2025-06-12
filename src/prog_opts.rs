@@ -217,7 +217,7 @@ fn parse_filter_f32(arg: &str) -> anyhow::Result<FilterArg> {
 #[command(group(
     clap::ArgGroup::new("raw_input_type")
     .multiple(true)
-    .args(["reference", "novel_transcripts"])
+    .args(["annotated", "novel"])
 ))]
 #[command(group(
     clap::ArgGroup::new("raw_ref_type")
@@ -246,7 +246,7 @@ pub struct Args {
         help_heading = "raw read mode",
         value_delimiter = ',',
         requires_ifs([
-            (ArgPredicate::IsPresent, "reference"),
+            (ArgPredicate::IsPresent, "raw_ref_type"),
             (ArgPredicate::IsPresent, "seq_tech")
         ])
     )]
@@ -255,13 +255,13 @@ pub struct Args {
     /// path to the file containing the reference transcriptome (or existing index) against which
     /// to map.
     #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]
-    pub reference: Option<PathBuf>,
+    pub annotated: Option<PathBuf>,
 
     /// path to the file containing novel (de novo, or reference-guided assembled) transcripts against which
     /// to map. These are ultimately indexed together with reference transcripts, but passed in
     /// separately for the purposes of provenance tracking.
     #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]
-    pub novel_transcripts: Option<PathBuf>,
+    pub novel: Option<PathBuf>,
 
     /// path where minimap2 index will be written (if provided)
     #[arg(
