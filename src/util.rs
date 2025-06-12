@@ -1,3 +1,4 @@
+pub mod aligner;
 pub mod aux_counts;
 pub mod binomial_probability;
 pub mod constants;
