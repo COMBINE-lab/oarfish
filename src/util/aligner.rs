@@ -3,6 +3,7 @@ use crate::util::digest_utils;
 use crate::util::file_utils::{get_ref_source, is_fasta};
 use crate::util::oarfish_types::NamedDigestVec;
 
+use minimap2::Aligner;
 use minimap2_sys::MmIdx;
 
 use noodles_bam as bam;
@@ -25,6 +26,25 @@ pub(crate) type HeaderReaderAlignerDigest = (
     Option<minimap2::Aligner<minimap2::Built>>,
     NamedDigestVec,
 );
+
+pub(crate) fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
+    info!("oarfish is operating in read-based mode");
+    if args.index.is_some() {
+        get_aligner_from_index(args)
+    } else {
+        assert!(
+            args.annotated
+                .as_ref()
+                .is_none_or(|f| is_fasta(f).expect("couldn't read input file."))
+        );
+        assert!(
+            args.novel
+                .as_ref()
+                .is_none_or(|f| is_fasta(f).expect("couldn't read input file."))
+        );
+        get_aligner_from_fastas(args)
+    }
+}
 
 fn get_aligner_from_fastas(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
     let ref_digest_handle = args
@@ -64,31 +84,12 @@ fn get_aligner_from_fastas(args: &mut Args) -> anyhow::Result<HeaderReaderAligne
     let idx_output = args.index_out.as_ref().map(|_| idx_out_as_str.as_str());
 
     // create the aligner
-    let mut aligner = match args.seq_tech {
-        Some(SequencingTech::OntCDNA) | Some(SequencingTech::OntDRNA) => {
-            minimap2::Aligner::builder()
-                .map_ont()
-                .with_index_threads(*idx_threads)
-                .with_cigar()
-                .with_index(input_source.file_path(), idx_output)
-                .expect("could not construct minimap2 index")
-        }
-        Some(SequencingTech::PacBio) => minimap2::Aligner::builder()
-            .map_pb()
-            .with_index_threads(*idx_threads)
-            .with_cigar()
-            .with_index(input_source.file_path(), idx_output)
-            .expect("could not construct minimap2 index"),
-        Some(SequencingTech::PacBioHifi) => minimap2::Aligner::builder()
-            .map_hifi()
-            .with_index_threads(*idx_threads)
-            .with_cigar()
-            .with_index(input_source.file_path(), idx_output)
-            .expect("could not construct minimap2 index"),
-        None => {
-            anyhow::bail!("sequencing tech must be provided in read mode, but it was not!");
-        }
-    };
+    let mut aligner = make_aligner(
+        &args.seq_tech,
+        *idx_threads,
+        input_source.file_path(),
+        idx_output,
+    )?;
 
     info!("created aligner index opts : {:?}", aligner.idxopt);
     // get up to the best_n hits for each read
@@ -108,41 +109,7 @@ fn get_aligner_from_fastas(args: &mut Args) -> anyhow::Result<HeaderReaderAligne
     // if we concatenated reference and novel transcripts to build the index, remove the fifo here
     input_source.join_if_needed()?;
 
-    let mut header = noodles_sam::header::Header::builder();
-
-    #[derive(Debug, PartialEq, Eq)]
-    pub struct SeqMetaData {
-        pub name: String,
-        pub length: u32,
-        pub is_alt: bool,
-    }
-
-    // TODO: better creation of the header
-    {
-        for i in 0..n_seq {
-            let seq = aligner.get_seq(i as usize).unwrap_or_else(|| {
-                panic!(
-                    "{} was not a valid reference sequence index. (n_seq = {})",
-                    i, n_seq
-                )
-            });
-            let c_str = unsafe { ffi::CStr::from_ptr(seq.name) };
-            let rust_str = c_str.to_str().unwrap().to_string();
-            header = header.add_reference_sequence(
-                rust_str,
-                HeaderMap::<header_val::map::ReferenceSequence>::new(NonZeroUsize::try_from(
-                    seq.len as usize,
-                )?),
-            );
-        }
-    }
-
-    header = header.add_program(
-        "minimap2-rs",
-        HeaderMap::<header_val::map::Program>::default(),
-    );
-
-    let header = header.build();
+    let header = make_header(&mut aligner)?;
 
     let mut digests = NamedDigestVec::new();
     // we have a reference file
@@ -188,31 +155,7 @@ fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAligner
     let idx_output = args.index_out.as_ref().map(|_| idx_out_as_str.as_str());
 
     // create the aligner
-    let mut aligner = match args.seq_tech {
-        Some(SequencingTech::OntCDNA) | Some(SequencingTech::OntDRNA) => {
-            minimap2::Aligner::builder()
-                .map_ont()
-                .with_index_threads(*idx_threads)
-                .with_cigar()
-                .with_index(idx_file.clone(), idx_output)
-                .expect("could not construct minimap2 index")
-        }
-        Some(SequencingTech::PacBio) => minimap2::Aligner::builder()
-            .map_pb()
-            .with_index_threads(*idx_threads)
-            .with_cigar()
-            .with_index(idx_file.clone(), idx_output)
-            .expect("could not construct minimap2 index"),
-        Some(SequencingTech::PacBioHifi) => minimap2::Aligner::builder()
-            .map_hifi()
-            .with_index_threads(*idx_threads)
-            .with_cigar()
-            .with_index(idx_file.clone(), idx_output)
-            .expect("could not construct minimap2 index"),
-        None => {
-            anyhow::bail!("sequencing tech must be provided in read mode, but it was not!");
-        }
-    };
+    let mut aligner = make_aligner(&args.seq_tech, *idx_threads, &idx_file, idx_output)?;
 
     info!("created aligner index opts : {:?}", aligner.idxopt);
     // get up to the best_n hits for each read
@@ -229,41 +172,7 @@ fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAligner
         n_seq.to_formatted_string(&Locale::en)
     );
 
-    let mut header = noodles_sam::header::Header::builder();
-
-    #[derive(Debug, PartialEq, Eq)]
-    pub struct SeqMetaData {
-        pub name: String,
-        pub length: u32,
-        pub is_alt: bool,
-    }
-
-    // TODO: better creation of the header
-    {
-        for i in 0..n_seq {
-            let seq = aligner.get_seq(i as usize).unwrap_or_else(|| {
-                panic!(
-                    "{} was not a valid reference sequence index. (n_seq = {})",
-                    i, n_seq
-                )
-            });
-            let c_str = unsafe { ffi::CStr::from_ptr(seq.name) };
-            let rust_str = c_str.to_str().unwrap().to_string();
-            header = header.add_reference_sequence(
-                rust_str,
-                HeaderMap::<header_val::map::ReferenceSequence>::new(NonZeroUsize::try_from(
-                    seq.len as usize,
-                )?),
-            );
-        }
-    }
-
-    header = header.add_program(
-        "minimap2-rs",
-        HeaderMap::<header_val::map::Program>::default(),
-    );
-
-    let header = header.build();
+    let header = make_header(&mut aligner)?;
 
     let digests = match digest_utils::read_digest_from_mm2_index(
         idx_file.to_str().expect("could not convert to string"),
@@ -290,21 +199,71 @@ fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAligner
     Ok((header, None, Some(aligner), digests))
 }
 
-pub(crate) fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
-    info!("oarfish is operating in read-based mode");
-    if args.index.is_some() {
-        get_aligner_from_index(args)
-    } else {
-        assert!(
-            args.annotated
-                .as_ref()
-                .is_none_or(|f| is_fasta(f).expect("couldn't read input file."))
-        );
-        assert!(
-            args.novel
-                .as_ref()
-                .is_none_or(|f| is_fasta(f).expect("couldn't read input file."))
-        );
-        get_aligner_from_fastas(args)
+fn make_aligner(
+    seq_tech: &Option<SequencingTech>,
+    idx_threads: usize,
+    input: &std::path::Path,
+    idx_output: Option<&str>,
+) -> anyhow::Result<Aligner<minimap2::Built>> {
+    // create the aligner
+    match seq_tech {
+        Some(SequencingTech::OntCDNA) | Some(SequencingTech::OntDRNA) => {
+            minimap2::Aligner::builder()
+                .map_ont()
+                .with_index_threads(idx_threads)
+                .with_cigar()
+                .with_index(input.to_path_buf().clone(), idx_output)
+                .map_err(anyhow::Error::msg)
+        }
+        Some(SequencingTech::PacBio) => minimap2::Aligner::builder()
+            .map_pb()
+            .with_index_threads(idx_threads)
+            .with_cigar()
+            .with_index(input.to_path_buf().clone(), idx_output)
+            .map_err(anyhow::Error::msg),
+
+        Some(SequencingTech::PacBioHifi) => minimap2::Aligner::builder()
+            .map_hifi()
+            .with_index_threads(idx_threads)
+            .with_cigar()
+            .with_index(input.to_path_buf().clone(), idx_output)
+            .map_err(anyhow::Error::msg),
+        None => {
+            anyhow::bail!("sequencing tech must be provided in read mode, but it was not!");
+        }
     }
+}
+
+fn make_header(
+    aligner: &mut Aligner<minimap2::Built>,
+) -> anyhow::Result<noodles_sam::header::Header> {
+    let n_seq = aligner.n_seq();
+    let mut header = noodles_sam::header::Header::builder();
+
+    // TODO: better creation of the header
+    {
+        for i in 0..n_seq {
+            let seq = aligner.get_seq(i as usize).unwrap_or_else(|| {
+                panic!(
+                    "{} was not a valid reference sequence index. (n_seq = {})",
+                    i, n_seq
+                )
+            });
+            let c_str = unsafe { ffi::CStr::from_ptr(seq.name) };
+            let rust_str = c_str.to_str().unwrap().to_string();
+            header = header.add_reference_sequence(
+                rust_str,
+                HeaderMap::<header_val::map::ReferenceSequence>::new(NonZeroUsize::try_from(
+                    seq.len as usize,
+                )?),
+            );
+        }
+    }
+
+    header = header.add_program(
+        "minimap2-rs",
+        HeaderMap::<header_val::map::Program>::default(),
+    );
+
+    Ok(header.build())
 }
