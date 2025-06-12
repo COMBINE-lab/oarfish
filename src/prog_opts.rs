@@ -266,14 +266,13 @@ pub struct Args {
     /// path where minimap2 index will be written (if provided)
     #[arg(
         long,
-        conflicts_with = "alignments",
-        conflicts_with = "raw_input_type",
+        conflicts_with_all = ["alignments", "raw_input_type"],
         help_heading = "raw read mode"
     )]
     pub index: Option<PathBuf>,
 
     /// path where minimap2 index will be written (if provided)
-    #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]
+    #[arg(long, conflicts_with_all = ["alignments", "index"], help_heading = "raw read mode")]
     pub index_out: Option<PathBuf>,
 
     /// sequencing technology in which to expect reads if using mapping based mode

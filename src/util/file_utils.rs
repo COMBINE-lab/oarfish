@@ -21,6 +21,7 @@ pub(crate) enum SourceType {
 impl SourceType {
     /// determine the type of the source and return the path
     /// wrapped in the correct variant.
+    #[allow(dead_code)]
     pub fn from_path<P: AsRef<Path>>(p: P) -> Self {
         if is_fasta(p.as_ref()).unwrap_or(false) {
             Self::Fastx(PathBuf::from(p.as_ref()))

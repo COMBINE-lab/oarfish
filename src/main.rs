@@ -28,7 +28,7 @@ mod util;
 
 use crate::prog_opts::{Args, FilterGroup, SequencingTech};
 use crate::util::digest_utils;
-use crate::util::file_utils::{SourceType, get_ref_source, is_fasta};
+use crate::util::file_utils::{get_ref_source, is_fasta};
 use crate::util::normalize_probability::normalize_read_probs;
 use crate::util::oarfish_types::{AlignmentFilters, TranscriptInfo};
 use crate::util::{
@@ -185,14 +185,13 @@ fn get_aligner_from_fastas(args: &mut Args) -> anyhow::Result<HeaderReaderAligne
 fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
     let idx_file = args.index.clone().expect("index file should exist");
 
-    if let SourceType::ExistingMM2Index(_idx) = SourceType::from_path(&idx_file) {
-        warn!(
-            "You are using an existing minimap2 index (constructed outside of oarfish). This means that the parameters provided at index construction time will be applied."
-        );
-        warn!(
-            "Thus, the parameters implied by your `--seq-tech` option will be ignored. If you have not done this intentionally, please make sure the proper parameters were used when building the index."
-        );
-    }
+    warn!(
+        "You are using an existing minimap2 index. This means that the parameters provided at index construction time will be applied."
+    );
+    warn!(
+        "Thus, any *indexing-related* parameters implied by your `--seq-tech` option will be ignored. If you have not done this intentionally, please make sure the proper parameters were used when building the index."
+    );
+
     // set the number of indexing threads
     let idx_threads = &args.threads;
 
