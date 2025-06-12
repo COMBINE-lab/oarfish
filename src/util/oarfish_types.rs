@@ -29,7 +29,7 @@ pub(crate) struct NamedDigestVec(Vec<(String, DigestResult)>);
 
 impl From<Vec<(String, DigestResult)>> for NamedDigestVec {
     fn from(o: Vec<(String, DigestResult)>) -> Self {
-        Self { 0: o }
+        Self(o)
     }
 }
 
@@ -348,13 +348,11 @@ impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for
     }
 
     fn aln_score(&self) -> Option<i64> {
-        let x = self
-            .data()
+        self.data()
             .get(&AlnTag::ALIGNMENT_SCORE)
             .unwrap()
             .expect("could not get value")
-            .as_int();
-        x
+            .as_int()
     }
 
     fn aln_start(&self) -> u32 {

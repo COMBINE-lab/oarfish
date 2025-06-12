@@ -10,6 +10,22 @@ use crate::NamedDigestVec;
 
 const DIGEST_VERSION: u8 = 4;
 
+pub fn get_digest_from_fasta(
+    fpath: &std::path::Path,
+) -> std::thread::JoinHandle<anyhow::Result<seqcol_rs::DigestResult>> {
+    let fpath_clone = fpath.to_path_buf();
+    std::thread::spawn(|| {
+        info!("generating reference digest for {}", fpath_clone.display());
+        let mut seqcol_obj = seqcol_rs::SeqCol::try_from_fasta_file(fpath_clone).unwrap();
+        let digest = seqcol_obj.digest(seqcol_rs::DigestConfig {
+            level: seqcol_rs::DigestLevel::Level1,
+            additional_attr: vec![seqcol_rs::KnownAttr::SortedNameLengthPairs],
+        });
+        info!("done");
+        digest
+    })
+}
+
 pub(crate) fn append_digest_to_mm2_index(
     idx_file: &str,
     digest: &NamedDigestVec,
