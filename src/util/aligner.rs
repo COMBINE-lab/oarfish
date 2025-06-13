@@ -27,6 +27,14 @@ pub(crate) type HeaderReaderAlignerDigest = (
     NamedDigestVec,
 );
 
+/// Obtain a `HeaderReaderAlignerDigest` object from the provided arguments. This
+/// function properly dispatches on the appropriate argument type, so that it will just
+/// *do the right thing* if the user provides an --annotated (and/or a --nove) set of sequences
+/// or if they provide an existing index via --index.  It has all of the logic to verify
+/// that the provided input configuration is correct, and to take the appropriate actions
+/// (i.e. generate the correct digests) if it is.  It returns a `Result` so that an
+/// `anyhow::Error` will be returned describing any error encountered during the process
+/// of constructing the aligner, or an `Ok(Aligner)` if successful.
 pub(crate) fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
     info!("oarfish is operating in read-based mode");
     if args.index.is_some() {
@@ -46,6 +54,8 @@ pub(crate) fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderRea
     }
 }
 
+/// The user provided FASTA files (possibly gzipped) via --annotated (and/or --novel), so
+/// create the appropriate digests and build an aligner based on these sequences.
 fn get_aligner_from_fastas(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
     let ref_digest_handle = args
         .annotated
@@ -133,6 +143,7 @@ fn get_aligner_from_fastas(args: &mut Args) -> anyhow::Result<HeaderReaderAligne
     Ok((header, None, Some(aligner), digests))
 }
 
+/// The user provided an existing index, so build the proper aligner based on this index.
 fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
     let idx_file = args.index.clone().expect("index file should exist");
 
@@ -199,6 +210,8 @@ fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAligner
     Ok((header, None, Some(aligner), digests))
 }
 
+/// Build the actual aligner based on the sequencing technology, number
+/// of threads, and the provided input (and optional output) file.
 fn make_aligner(
     seq_tech: &Option<SequencingTech>,
     idx_threads: usize,
@@ -234,6 +247,8 @@ fn make_aligner(
     }
 }
 
+/// Make a proper header object from the index (this allows us to rely on the same
+/// header structure in either raw sequence or alignment-based mode).
 fn make_header(
     aligner: &mut Aligner<minimap2::Built>,
 ) -> anyhow::Result<noodles_sam::header::Header> {
