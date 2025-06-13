@@ -252,7 +252,7 @@ pub struct Args {
     )]
     pub reads: Option<Vec<PathBuf>>,
 
-    /// path to the file containing the reference transcriptome (or existing index) against which
+    /// path to the file containing the annotated transcriptome (e.g. GENCODE) against which
     /// to map.
     #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]
     pub annotated: Option<PathBuf>,
@@ -263,7 +263,8 @@ pub struct Args {
     #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]
     pub novel: Option<PathBuf>,
 
-    /// path where minimap2 index will be written (if provided)
+    /// path to an existing minimap2 index (either created with oarfish, which is preferred, or
+    /// with minimap2 itself)
     #[arg(
         long,
         conflicts_with_all = ["alignments", "raw_input_type"],
