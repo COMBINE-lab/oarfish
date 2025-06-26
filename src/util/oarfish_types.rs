@@ -285,8 +285,10 @@ impl AlnRecordLike for minimap2::Mapping {
             }
             error!("Had an alignment but no CIGAR!");
             return None;
+        } else {
+            error!("mapping: {:#?}", self);
+            None
         }
-        None
     }
 
     fn aln_score(&self) -> Option<i64> {
