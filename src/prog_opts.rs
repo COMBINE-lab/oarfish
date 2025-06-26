@@ -212,7 +212,7 @@ fn parse_filter_f32(arg: &str) -> anyhow::Result<FilterArg> {
 #[command(group(
     clap::ArgGroup::new("input")
     .required(true)
-    .args(["alignments", "reads", "just_index"])
+    .args(["alignments", "reads", "only_index"])
 ))]
 #[command(group(
     clap::ArgGroup::new("raw_input_type")
@@ -277,10 +277,10 @@ pub struct Args {
     /// Note: A prebuilt index is not needed to quantify with oarfish; an index can be
     /// written concurrently with quantification using the `--index-out` parameter.
     #[arg(long, help_heading = "indexing")]
-    pub just_index: bool,
+    pub only_index: bool,
 
     /// path where minimap2 index will be written (if provided)
-    #[arg(long, conflicts_with_all = ["alignments", "index"], requires_ifs([(ArgPredicate::IsPresent, "just_index")]), help_heading = "indexing")]
+    #[arg(long, conflicts_with_all = ["alignments", "index"], requires_ifs([(ArgPredicate::IsPresent, "only_index")]), help_heading = "indexing")]
     pub index_out: Option<PathBuf>,
 
     /// sequencing technology in which to expect reads if using mapping based mode
@@ -313,7 +313,7 @@ pub struct Args {
     pub thread_buff_size: u64,
 
     /// location where output quantification file should be written
-    #[arg(short, long, required_unless_present = "just_index")]
+    #[arg(short, long, required_unless_present = "only_index")]
     pub output: Option<PathBuf>,
 
     #[arg(long, help_heading = "filters", value_enum)]

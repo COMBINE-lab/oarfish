@@ -148,7 +148,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     // if we are just indexing, don't bother with anything else
-    if args.just_index {
+    if args.only_index {
         let (header, _reader, _aligner, digest) = get_aligner_from_fastas(&mut args)?;
         info!(
             "indexing completed; index over {} references written to {}",
