@@ -212,7 +212,7 @@ fn parse_filter_f32(arg: &str) -> anyhow::Result<FilterArg> {
 #[command(group(
     clap::ArgGroup::new("input")
     .required(true)
-    .args(["alignments", "reads"])
+    .args(["alignments", "reads", "just_index"])
 ))]
 #[command(group(
     clap::ArgGroup::new("raw_input_type")
@@ -247,7 +247,7 @@ pub struct Args {
         value_delimiter = ',',
         requires_ifs([
             (ArgPredicate::IsPresent, "raw_ref_type"),
-            (ArgPredicate::IsPresent, "seq_tech")
+            (ArgPredicate::IsPresent, "seq_tech"),
         ])
     )]
     pub reads: Option<Vec<PathBuf>>,
@@ -272,8 +272,15 @@ pub struct Args {
     )]
     pub index: Option<PathBuf>,
 
+    /// If this flag is passed, oarfish only performs indexing and not quantification.
+    /// Designed primarily for workflow management systems.
+    /// Note: A prebuilt index is not needed to quantify with oarfish; an index can be
+    /// written concurrently with quantification using the `--index-out` parameter.
+    #[arg(long, help_heading = "indexing")]
+    pub just_index: bool,
+
     /// path where minimap2 index will be written (if provided)
-    #[arg(long, conflicts_with_all = ["alignments", "index"], help_heading = "raw read mode")]
+    #[arg(long, conflicts_with_all = ["alignments", "index"], requires_ifs([(ArgPredicate::IsPresent, "just_index")]), help_heading = "indexing")]
     pub index_out: Option<PathBuf>,
 
     /// sequencing technology in which to expect reads if using mapping based mode
@@ -306,8 +313,8 @@ pub struct Args {
     pub thread_buff_size: u64,
 
     /// location where output quantification file should be written
-    #[arg(short, long, required = true)]
-    pub output: PathBuf,
+    #[arg(short, long, required_unless_present = "just_index")]
+    pub output: Option<PathBuf>,
 
     #[arg(long, help_heading = "filters", value_enum)]
     pub filter_group: Option<FilterGroup>,

@@ -38,7 +38,7 @@ fn get_single_cell_json_info(args: &Args, seqcol_digest: &NamedDigestVec) -> ser
         "prob_model" : prob,
         "bin_width" : args.bin_width,
         "alignments": &args.alignments,
-        "output": &args.output,
+        "output": args.output.as_ref().expect("present"),
         "verbose": &args.verbose,
         "single_cell": &args.single_cell,
         "quiet": &args.quiet,
@@ -59,8 +59,9 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
     args: &Args,
     seqcol_digest: NamedDigestVec,
 ) -> anyhow::Result<()> {
+    let output = args.output.clone().expect("present");
     // if there is a parent directory
-    if let Some(p) = args.output.parent() {
+    if let Some(p) = output.parent() {
         // unless this was a relative path with one component,
         // which we should treat as the file prefix, then grab
         // the non-empty parent and create it.
@@ -71,7 +72,7 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
 
     let nthreads = args.threads;
     std::thread::scope(|s| {
-        let bc_path = args.output.with_additional_extension(".barcodes.txt");
+        let bc_path = output.with_additional_extension(".barcodes.txt");
         let bc_file = File::create(bc_path)?;
         let bc_writer = Arc::new(Mutex::new(QuantOutputInfo {
             barcode_file: std::io::BufWriter::new(bc_file),
@@ -255,7 +256,12 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
             )
         };
         let info = get_single_cell_json_info(args, &seqcol_digest);
-        write_function::write_single_cell_output(&args.output, info, header, &trimat)?;
+        write_function::write_single_cell_output(
+            args.output.as_ref().expect("present"),
+            info,
+            header,
+            &trimat,
+        )?;
         Ok(())
     })
 }

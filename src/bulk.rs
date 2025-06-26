@@ -52,7 +52,7 @@ fn get_json_info(args: &Args, emi: &EMInfo, seqcol_digest: &NamedDigestVec) -> s
         "filter_options" : &emi.eq_map.filter_opts,
         "discard_table" : &emi.eq_map.discard_table,
         "alignments": &args.alignments,
-        "output": &args.output,
+        "output": args.output.as_ref().expect("present"),
         "verbose": &args.verbose,
         "single_cell": &args.single_cell,
         "quiet": &args.quiet,
@@ -151,7 +151,13 @@ fn perform_inference_and_write_output(
     let json_info = get_json_info(args, &emi, &seqcol_digest);
 
     // write the output
-    write_output(&args.output, json_info, header, &counts, &aux_txp_counts)?;
+    write_output(
+        args.output.as_ref().expect("present"),
+        json_info,
+        header,
+        &counts,
+        &aux_txp_counts,
+    )?;
 
     // if the user requested bootstrap replicates,
     // compute and write those out now.
@@ -170,13 +176,19 @@ fn perform_inference_and_write_output(
             new_arrays.push(bs_array.boxed());
         }
         let chunk = Chunk::new(new_arrays);
-        write_infrep_file(&args.output, bs_fields, chunk)?;
+        write_infrep_file(args.output.as_ref().expect("present"), bs_fields, chunk)?;
     }
 
     if args.write_assignment_probs.is_some() {
         let name_vec = name_vec
             .expect("cannot write assignment probabilities without valid vector of read names");
-        write_out_prob(&args.output, &emi, &counts, name_vec, txps_name)?;
+        write_out_prob(
+            args.output.as_ref().expect("present"),
+            &emi,
+            &counts,
+            name_vec,
+            txps_name,
+        )?;
     }
 
     Ok(())

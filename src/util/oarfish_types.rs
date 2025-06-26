@@ -273,7 +273,7 @@ impl AlnRecordLike for minimap2::Mapping {
 
     fn aln_span(&self) -> Option<usize> {
         if let Some(ref aln) = self.alignment {
-            if let Some(ref cigar) = aln.cigar {
+            return if let Some(ref cigar) = aln.cigar {
                 let mut span = 0_usize;
                 for (len, op) in cigar.iter() {
                     let co: CigarOp = (*op).into();
@@ -281,14 +281,13 @@ impl AlnRecordLike for minimap2::Mapping {
                         span += *len as usize;
                     }
                 }
-                return Some(span);
-            }
-            error!("Had an alignment but no CIGAR!");
-            return None;
-        } else {
-            error!("mapping: {:#?}", self);
-            None
+                Some(span)
+            } else {
+                error!("Had an alignment but no CIGAR!");
+                None
+            };
         }
+        None
     }
 
     fn aln_score(&self) -> Option<i64> {

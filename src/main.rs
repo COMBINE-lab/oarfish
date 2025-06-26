@@ -22,7 +22,7 @@ mod single_cell;
 mod util;
 
 use crate::prog_opts::{Args, FilterGroup};
-use crate::util::aligner::get_aligner_from_args;
+use crate::util::aligner::{get_aligner_from_args, get_aligner_from_fastas};
 use crate::util::digest_utils;
 use crate::util::normalize_probability::normalize_read_probs;
 use crate::util::oarfish_types::{AlignmentFilters, TranscriptInfo};
@@ -147,6 +147,22 @@ fn main() -> anyhow::Result<()> {
         reload_handle.modify(|filter| *filter = EnvFilter::new("TRACE"))?;
     }
 
+    // if we are just indexing, don't bother with anything else
+    if args.just_index {
+        let (header, _reader, _aligner, digest) = get_aligner_from_fastas(&mut args)?;
+        info!(
+            "indexing completed; index over {} references written to {}",
+            header.reference_sequences().len(),
+            &args.index_out.expect("nonempty").display()
+        );
+        info!(
+            "reference digest = {}",
+            serde_json::to_string_pretty(&digest.to_json())?
+        );
+        return Ok(());
+    }
+
+    // if we are quantifying, handle this below
     let filter_opts = get_filter_opts(&args)?;
 
     let (header, reader, aligner, digest) = if args.alignments.is_none() {

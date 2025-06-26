@@ -40,23 +40,26 @@ pub(crate) fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderRea
     if args.index.is_some() {
         get_aligner_from_index(args)
     } else {
-        assert!(
-            args.annotated
-                .as_ref()
-                .is_none_or(|f| is_fasta(f).expect("couldn't read input file."))
-        );
-        assert!(
-            args.novel
-                .as_ref()
-                .is_none_or(|f| is_fasta(f).expect("couldn't read input file."))
-        );
         get_aligner_from_fastas(args)
     }
 }
 
 /// The user provided FASTA files (possibly gzipped) via --annotated (and/or --novel), so
 /// create the appropriate digests and build an aligner based on these sequences.
-fn get_aligner_from_fastas(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
+pub(crate) fn get_aligner_from_fastas(
+    args: &mut Args,
+) -> anyhow::Result<HeaderReaderAlignerDigest> {
+    assert!(
+        args.annotated
+            .as_ref()
+            .is_none_or(|f| is_fasta(f).expect("couldn't read input file to `--annotated`."))
+    );
+    assert!(
+        args.novel
+            .as_ref()
+            .is_none_or(|f| is_fasta(f).expect("couldn't read input file to `--novel`."))
+    );
+
     let ref_digest_handle = args
         .annotated
         .clone()

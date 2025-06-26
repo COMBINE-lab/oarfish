@@ -65,9 +65,8 @@ crossbeam = { version = "0.8.4", features = [
 sprs = "0.11.3"
 
 # alternative sources for dev
-minimap2-sys = { version = "0.1.23" }                   #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
-minimap2 = { package = "minimap2", version = "0.1.25" } #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
-#minimap2 = { version = "0.1.23", path = "../minimap2-rs" }                  #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
+minimap2-sys = { version = "0.1.23", git = "https://github.com/rob-p/minimap2-rs.git", branch = "main" }
+minimap2 = { version = "0.1.25", git = "https://github.com/rob-p/minimap2-rs.git", branch = "main" }
 
 needletail = "0.6.3"
 indicatif = "0.17.11"
