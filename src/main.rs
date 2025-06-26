@@ -1,4 +1,5 @@
 use clap::Parser;
+use noodles_sam::Header;
 use std::num::NonZeroUsize;
 use util::oarfish_types::NamedDigestVec;
 
@@ -29,6 +30,37 @@ use crate::util::oarfish_types::{AlignmentFilters, TranscriptInfo};
 use crate::util::{
     binomial_probability::binomial_continuous_prob, kde_utils, logistic_probability::logistic_prob,
 };
+
+fn get_txp_info_from_header(
+    header: &Header,
+    args: &Args,
+) -> anyhow::Result<(Vec<TranscriptInfo>, Vec<String>)> {
+    let num_ref_seqs = header.reference_sequences().len();
+    let mut txps: Vec<TranscriptInfo> = Vec::with_capacity(num_ref_seqs);
+    let mut txps_name: Vec<String> = Vec::with_capacity(num_ref_seqs);
+
+    // loop over the transcripts in the header and fill in the relevant
+    // information here.
+    if args.model_coverage {
+        for (rseq, rmap) in header.reference_sequences().iter() {
+            txps.push(TranscriptInfo::with_len_and_bin_width(
+                rmap.length(),
+                args.bin_width,
+            ));
+            txps_name.push(rseq.to_string());
+        }
+    } else {
+        for (rseq, rmap) in header.reference_sequences().iter() {
+            txps.push(TranscriptInfo::with_len(rmap.length()));
+            txps_name.push(rseq.to_string());
+        }
+    }
+    info!(
+        "parsed reference information for {} transcripts.",
+        txps.len().to_formatted_string(&Locale::en)
+    );
+    Ok((txps, txps_name))
+}
 
 fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
     // set all of the filter options that the user
@@ -208,33 +240,9 @@ fn main() -> anyhow::Result<()> {
         )
     };
 
-    let num_ref_seqs = header.reference_sequences().len();
-
     // where we'll write down the per-transcript information we need
     // to track.
-    let mut txps: Vec<TranscriptInfo> = Vec::with_capacity(num_ref_seqs);
-    let mut txps_name: Vec<String> = Vec::with_capacity(num_ref_seqs);
-
-    // loop over the transcripts in the header and fill in the relevant
-    // information here.
-    if args.model_coverage {
-        for (rseq, rmap) in header.reference_sequences().iter() {
-            txps.push(TranscriptInfo::with_len_and_bin_width(
-                rmap.length(),
-                args.bin_width,
-            ));
-            txps_name.push(rseq.to_string());
-        }
-    } else {
-        for (rseq, rmap) in header.reference_sequences().iter() {
-            txps.push(TranscriptInfo::with_len(rmap.length()));
-            txps_name.push(rseq.to_string());
-        }
-    }
-    info!(
-        "parsed reference information for {} transcripts.",
-        txps.len().to_formatted_string(&Locale::en)
-    );
+    let (mut txps, txps_name) = get_txp_info_from_header(&header, &args)?;
 
     if args.single_cell {
         // TODO: do this better (quiet the EM during single-cell quant)
