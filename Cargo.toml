@@ -1,6 +1,6 @@
 [package]
 name = "oarfish"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 authors = [
   "Zahra Zare Jousheghani <zzare@umd.edu>",
@@ -31,12 +31,12 @@ anyhow = "1.0.98"
 bstr = "1.12.0"
 bio-types = { version = "1.0.4", features = ["serde"] }
 clap = { version = "4.5.37", features = ["derive"] }
-noodles-bam = "0.78.0"
-noodles-sam = "0.74.0"
+noodles-bam = "0.81.0"
+noodles-sam = "0.77.0"
 num-format = "0.4.4"
 lz4 = "1.28.1"
 either = "1.15.0"
-tabled = "0.18.0"
+tabled = "0.20.0"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 typed-builder = "0.21.0"
@@ -65,8 +65,8 @@ crossbeam = { version = "0.8.4", features = [
 sprs = "0.11.3"
 
 # alternative sources for dev
-minimap2-sys = { version = "0.1.21" }                        #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
-minimap2 = { package = "minimap2-temp", version = "0.1.33" } #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
+minimap2-sys = { version = "0.1.23" }                   #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
+minimap2 = { package = "minimap2", version = "0.1.25" } #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
 #minimap2 = { version = "0.1.23", path = "../minimap2-rs" }                  #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
 
 needletail = "0.6.3"

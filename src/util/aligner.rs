@@ -224,21 +224,21 @@ fn make_aligner(
             minimap2::Aligner::builder()
                 .map_ont()
                 .with_index_threads(idx_threads)
-                .with_cigar()
+                .with_cigar_clipping()
                 .with_index(input.to_path_buf().clone(), idx_output)
                 .map_err(anyhow::Error::msg)
         }
         Some(SequencingTech::PacBio) => minimap2::Aligner::builder()
             .map_pb()
             .with_index_threads(idx_threads)
-            .with_cigar()
+            .with_cigar_clipping()
             .with_index(input.to_path_buf().clone(), idx_output)
             .map_err(anyhow::Error::msg),
 
         Some(SequencingTech::PacBioHifi) => minimap2::Aligner::builder()
             .map_hifi()
             .with_index_threads(idx_threads)
-            .with_cigar()
+            .with_cigar_clipping()
             .with_index(input.to_path_buf().clone(), idx_output)
             .map_err(anyhow::Error::msg),
         None => {
