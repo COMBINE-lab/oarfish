@@ -57,7 +57,7 @@ arrow2 = { version = "0.18.0", features = [
   "io_parquet_snappy",
 ] }
 kders = { git = "https://github.com/COMBINE-lab/kde-rs.git", branch = "dev", version = "0.1.1" }
-noodles-bgzf = { version = "0.38.0" }
+noodles-bgzf = { version = "0.41.0" }
 crossbeam = { version = "0.8.4", features = [
   "crossbeam-queue",
   "crossbeam-channel",
@@ -65,8 +65,8 @@ crossbeam = { version = "0.8.4", features = [
 sprs = "0.11.3"
 
 # alternative sources for dev
-minimap2-sys = { version = "0.1.23", git = "https://github.com/rob-p/minimap2-rs.git", branch = "main" }
-minimap2 = { version = "0.1.25", git = "https://github.com/rob-p/minimap2-rs.git", branch = "main" }
+minimap2-sys = { version = "0.1.23" } #, git = "https://github.com/rob-p/minimap2-rs.git", branch = "main" }
+minimap2 = { version = "0.1.27" }     # git = "https://github.com/rob-p/minimap2-rs.git", branch = "main" }
 
 needletail = "0.6.3"
 indicatif = "0.17.11"

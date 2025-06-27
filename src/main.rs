@@ -226,7 +226,7 @@ fn main() -> anyhow::Result<()> {
             args.threads = 1.max(args.threads.saturating_sub(decomp_threads));
         }
 
-        let decoder = bgzf::MultithreadedReader::with_worker_count(worker_count, afile);
+        let decoder = bgzf::io::MultithreadedReader::with_worker_count(worker_count, afile);
         let mut reader = bam::io::Reader::from(decoder);
         // parse the header, and ensure that the reads were mapped with minimap2 (as far as we
         // can tell).

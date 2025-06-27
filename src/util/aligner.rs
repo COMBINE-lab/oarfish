@@ -22,7 +22,7 @@ use tracing::{info, warn};
 
 pub(crate) type HeaderReaderAlignerDigest = (
     noodles_sam::header::Header,
-    Option<bam::io::Reader<bgzf::MultithreadedReader<File>>>,
+    Option<bam::io::Reader<bgzf::io::MultithreadedReader<File>>>,
     Option<minimap2::Aligner<minimap2::Built>>,
     NamedDigestVec,
 );
