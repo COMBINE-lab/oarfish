@@ -73,6 +73,7 @@ indicatif = "0.17.11"
 rustc-hash = "2.1.1"
 parse-size = "1.1.0"
 niffler = "3.0.0"
+humantime = "2.2.0"
 
 [[bin]]
 name = "oarfish"
