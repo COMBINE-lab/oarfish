@@ -238,6 +238,11 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
         args.quiet,
     )?;
     let read_aln_time = read_aln_start.elapsed()?;
+    info!(
+        "Parsing of alignments from input took: {}",
+        humantime::format_duration(read_aln_time).to_string()
+    );
+
     perform_inference_and_write_output(
         header,
         &mut store,
