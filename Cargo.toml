@@ -1,6 +1,6 @@
 [package]
 name = "oarfish"
-version = "0.8.1"
+version = "0.9.0"
 edition = "2024"
 authors = [
   "Zahra Zare Jousheghani <zzare@umd.edu>",
@@ -30,13 +30,13 @@ seqcol_rs = { git = "https://github.com/COMBINE-lab/seqcol_rs", branch = "dev", 
 anyhow = "1.0.98"
 bstr = "1.12.0"
 bio-types = { version = "1.0.4", features = ["serde"] }
-clap = { version = "4.5.37", features = ["derive"] }
-noodles-bam = "0.79.0"
-noodles-sam = "0.75.0"
+clap = { version = "4.5.40", features = ["derive"] }
+noodles-bam = "0.81.0"
+noodles-sam = "0.77.0"
 num-format = "0.4.4"
 lz4 = "1.28.1"
 either = "1.15.0"
-tabled = "0.19.0"
+tabled = "0.20.0"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 typed-builder = "0.21.0"
@@ -57,7 +57,7 @@ arrow2 = { version = "0.18.0", features = [
   "io_parquet_snappy",
 ] }
 kders = { git = "https://github.com/COMBINE-lab/kde-rs.git", branch = "dev", version = "0.1.1" }
-noodles-bgzf = { version = "0.39.0" }
+noodles-bgzf = { version = "0.41.0" }
 crossbeam = { version = "0.8.4", features = [
   "crossbeam-queue",
   "crossbeam-channel",
@@ -65,13 +65,15 @@ crossbeam = { version = "0.8.4", features = [
 sprs = "0.11.3"
 
 # alternative sources for dev
-minimap2-sys = { version = "0.1.21" } #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
-minimap2 = { version = "0.1.23" }     #, git = "https://github.com/jguhlin/minimap2-rs.git", branch = "main" }
+minimap2-sys = { version = "0.1.23" } #, git = "https://github.com/rob-p/minimap2-rs.git", branch = "main" }
+minimap2 = { version = "0.1.27" }     # git = "https://github.com/rob-p/minimap2-rs.git", branch = "main" }
 
 needletail = "0.6.3"
 indicatif = "0.17.11"
 rustc-hash = "2.1.1"
 parse-size = "1.1.0"
+niffler = "3.0.0"
+humantime = "2.2.0"
 
 [[bin]]
 name = "oarfish"
@@ -90,15 +92,12 @@ lto = "thin"
 # Config for 'dist'
 [workspace.metadata.dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
-cargo-dist-version = "0.28.0"
+cargo-dist-version = "0.28.6"
 # CI backends to support
 ci = "github"
-# Ignore out-of-date contents
-allow-dirty = ["ci"]
 # The installers to generate for each app
 installers = ["shell"]
 # Target platforms to build apps for (Rust target-triple syntax)
-# using ubuntu 22.04
 targets = [
   "aarch64-apple-darwin",
   "aarch64-unknown-linux-gnu",
@@ -113,8 +112,6 @@ install-updater = false
 install-path = "CARGO_HOME"
 
 [workspace.metadata.dist.github-custom-runners]
-aarch64-apple-darwin = "macos-13"
-x86_64-unknown-linux-gnu = "ubuntu-22.04"
-aarch64-unknown-linux-gnu = "ubuntu-22.04"
+aarch64-apple-darwin = "macos-14"
 # don't have linux arm builders on GitHub yet
 # aarch64-unknown-linux-gnu = "buildjet-8vcpu-ubuntu-2204-arm"

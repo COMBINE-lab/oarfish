@@ -6,11 +6,29 @@ use std::str;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
-const DIGEST_VERSION: u8 = 3;
+use crate::NamedDigestVec;
+
+const DIGEST_VERSION: u8 = 4;
+
+pub fn get_digest_from_fasta(
+    fpath: &std::path::Path,
+) -> std::thread::JoinHandle<anyhow::Result<seqcol_rs::DigestResult>> {
+    let fpath_clone = fpath.to_path_buf();
+    std::thread::spawn(|| {
+        info!("generating reference digest for {}", fpath_clone.display());
+        let mut seqcol_obj = seqcol_rs::SeqCol::try_from_fasta_file(fpath_clone).unwrap();
+        let digest = seqcol_obj.digest(seqcol_rs::DigestConfig {
+            level: seqcol_rs::DigestLevel::Level1,
+            additional_attr: vec![seqcol_rs::KnownAttr::SortedNameLengthPairs],
+        });
+        info!("done");
+        digest
+    })
+}
 
 pub(crate) fn append_digest_to_mm2_index(
     idx_file: &str,
-    digest: &seqcol_rs::DigestResult,
+    digest: &NamedDigestVec,
 ) -> anyhow::Result<()> {
     if std::fs::exists(idx_file)? {
         let mut writer = std::fs::OpenOptions::new()
@@ -38,12 +56,54 @@ pub(crate) fn append_digest_to_mm2_index(
     }
 }
 
+fn get_digest_from_value(value: &mut serde_json::Value) -> anyhow::Result<seqcol_rs::DigestResult> {
+    let seq_col_digests_value = value
+        .get("seqcol_digest")
+        .expect("a seqcol_digest entry must exist!");
+    let seq_col_digests = seq_col_digests_value
+        .as_object()
+        .expect("seqcol_digest should be an object");
+
+    // ensure we have the appropriate values
+    let _lengths = seq_col_digests
+        .get("lengths")
+        .expect("lengths field should exist")
+        .is_string();
+    let _names = seq_col_digests
+        .get("names")
+        .expect("names field should exist")
+        .is_string();
+    let _seqs = seq_col_digests
+        .get("sequences")
+        .expect("sequences field should exist")
+        .is_string();
+    let _sorted_name_length_pairs = seq_col_digests
+        .get("sorted_name_length_pairs")
+        .expect("sorted_name_length_pairs field should exist")
+        .is_string();
+
+    let sha_digests = value["sha256_digests"]
+        .as_object()
+        .expect("should be an object");
+    let sha256_names = sha_digests["sha256_names"]
+        .as_str()
+        .expect("should be a string");
+    let sha256_seqs = sha_digests["sha256_seqs"]
+        .as_str()
+        .expect("should be a string");
+    Ok(seqcol_rs::DigestResult {
+        sq_digest: seqcol_rs::DigestLevelResult::Level1(seqcol_rs::Level1Digest {
+            digests: seq_col_digests_value.clone(),
+        }),
+        sha256_seqs: Some(sha256_seqs.to_owned()),
+        sha256_names: Some(sha256_names.to_owned()),
+    })
+}
+
 /// Computes a `DigestResult` from a provided minimap2 index
 /// file, *if* that index was originally created with oarfish.
 /// Otherwise, it return an error.
-pub(crate) fn read_digest_from_mm2_index(
-    idx_file: &str,
-) -> anyhow::Result<seqcol_rs::DigestResult> {
+pub(crate) fn read_digest_from_mm2_index(idx_file: &str) -> anyhow::Result<NamedDigestVec> {
     if std::fs::exists(idx_file)? {
         let mut file = std::fs::OpenOptions::new().read(true).open(idx_file)?;
 
@@ -80,51 +140,27 @@ pub(crate) fn read_digest_from_mm2_index(
             buf.resize(sig_len, 0);
             file.seek(std::io::SeekFrom::End(-sig_offset))?;
             file.read_exact(&mut buf)?;
-            let value: serde_json::Value = serde_json::from_slice(&buf)?;
-
+            let mut value: serde_json::Value = serde_json::from_slice(&buf)?;
             debug!("{}", value);
-            let seq_col_digests_value = value
-                .get("seqcol_digest")
-                .expect("seqcol_digest should exist");
-            let seq_col_digests = seq_col_digests_value
-                .as_object()
-                .expect("seqcol_digest should be an object");
 
-            // ensure we have the appropriate values
-            let _lengths = seq_col_digests
-                .get("lengths")
-                .expect("lengths field should exist")
-                .is_string();
-            let _names = seq_col_digests
-                .get("names")
-                .expect("names field should exist")
-                .is_string();
-            let _seqs = seq_col_digests
-                .get("sequences")
-                .expect("sequences field should exist")
-                .is_string();
-            let _sorted_name_length_pairs = seq_col_digests
-                .get("sorted_name_length_pairs")
-                .expect("sorted_name_length_pairs field should exist")
-                .is_string();
+            let mut ndv = NamedDigestVec::new();
 
-            let sha_digests = value["sha256_digests"]
-                .as_object()
-                .expect("should be an object");
-            let sha256_names = sha_digests["sha256_names"]
-                .as_str()
-                .expect("should be a string");
-            let sha256_seqs = sha_digests["sha256_seqs"]
-                .as_str()
-                .expect("should be a string");
-
-            Ok(seqcol_rs::DigestResult {
-                sq_digest: seqcol_rs::DigestLevelResult::Level1(seqcol_rs::Level1Digest {
-                    digests: seq_col_digests_value.clone(),
-                }),
-                sha256_seqs: Some(sha256_seqs.to_owned()),
-                sha256_names: Some(sha256_names.to_owned()),
-            })
+            if let Some(_seq_col_digest_value) = value.get("seqcol_digest") {
+                warn!(
+                    "Found an unannotated seqcol digest entry from an old version of the index! Recording it as \"deprecated\""
+                );
+                let digest = get_digest_from_value(&mut value)?;
+                ndv.push(("deprecated".to_string(), digest));
+            } else if let serde_json::Value::Object(omap) = &mut value {
+                // we have to iterate
+                for (k, v) in omap.iter_mut() {
+                    let digest = get_digest_from_value(v)?;
+                    ndv.push((k.to_string(), digest));
+                }
+            } else {
+                bail!("The top-level value should be an object!");
+            }
+            Ok(ndv)
         } else {
             bail!("minimap2 index did not have an oarfish footer!");
         }

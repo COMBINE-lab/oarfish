@@ -1,3 +1,4 @@
+use crate::NamedDigestVec;
 use crate::alignment_parser;
 use crate::em;
 use crate::kde_utils;
@@ -34,7 +35,8 @@ use tracing::{info, warn};
 fn get_json_info(
     args: &Args,
     emi: &EMInfo,
-    seqcol_digest: &seqcol_rs::DigestResult,
+    seqcol_digest: &NamedDigestVec,
+    aln_time: std::time::Duration,
 ) -> serde_json::Value {
     let prob = if args.model_coverage {
         "logistic_coverage"
@@ -51,11 +53,16 @@ fn get_json_info(
     json!({
         "prob_model" : prob,
         "alignment_source" : source,
+        "alignment_time" : {
+            "comment" : "Time to parse (in alignment mode) or generate (in raw read mode) alignments, as well as apply filters, and compute conditional probabilities.",
+            "human_time" : humantime::format_duration(aln_time).to_string(),
+            "seconds" : aln_time.as_secs_f64()
+        },
         "bin_width" : args.bin_width,
         "filter_options" : &emi.eq_map.filter_opts,
         "discard_table" : &emi.eq_map.discard_table,
         "alignments": &args.alignments,
-        "output": &args.output,
+        "output": args.output.as_ref().expect("present"),
         "verbose": &args.verbose,
         "single_cell": &args.single_cell,
         "quiet": &args.quiet,
@@ -70,13 +77,15 @@ fn get_json_info(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn perform_inference_and_write_output(
     header: &noodles_sam::header::Header,
     store: &mut InMemoryAlignmentStore,
     name_vec: Option<SwapVec<String>>,
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
-    seqcol_digest: seqcol_rs::DigestResult,
+    seqcol_digest: NamedDigestVec,
+    aln_time: std::time::Duration,
     args: &Args,
 ) -> anyhow::Result<()> {
     // print discard table information in which the user might be interested.
@@ -151,10 +160,16 @@ fn perform_inference_and_write_output(
 
     // prepare the JSON object we'll write
     // to meta_info.json
-    let json_info = get_json_info(args, &emi, &seqcol_digest);
+    let json_info = get_json_info(args, &emi, &seqcol_digest, aln_time);
 
     // write the output
-    write_output(&args.output, json_info, header, &counts, &aux_txp_counts)?;
+    write_output(
+        args.output.as_ref().expect("present"),
+        json_info,
+        header,
+        &counts,
+        &aux_txp_counts,
+    )?;
 
     // if the user requested bootstrap replicates,
     // compute and write those out now.
@@ -173,13 +188,19 @@ fn perform_inference_and_write_output(
             new_arrays.push(bs_array.boxed());
         }
         let chunk = Chunk::new(new_arrays);
-        write_infrep_file(&args.output, bs_fields, chunk)?;
+        write_infrep_file(args.output.as_ref().expect("present"), bs_fields, chunk)?;
     }
 
     if args.write_assignment_probs.is_some() {
         let name_vec = name_vec
             .expect("cannot write assignment probabilities without valid vector of read names");
-        write_out_prob(&args.output, &emi, &counts, name_vec, txps_name)?;
+        write_out_prob(
+            args.output.as_ref().expect("present"),
+            &emi,
+            &counts,
+            name_vec,
+            txps_name,
+        )?;
     }
 
     Ok(())
@@ -192,7 +213,7 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
     args: &Args,
-    seqcol_digest: seqcol_rs::DigestResult,
+    seqcol_digest: NamedDigestVec,
 ) -> anyhow::Result<()> {
     let mut name_vec = if filter_opts.write_assignment_probs {
         Some(SwapVec::<String>::with_config(SwapVecConfig {
@@ -206,6 +227,7 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
     // now parse the actual alignments for the reads and store the results
     // in our in-memory stor
     let mut store = InMemoryAlignmentStore::new(filter_opts, header);
+    let read_aln_start = std::time::SystemTime::now();
     alignment_parser::parse_alignments(
         &mut store,
         &mut name_vec,
@@ -215,6 +237,12 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
         args.sort_check_num,
         args.quiet,
     )?;
+    let read_aln_time = read_aln_start.elapsed()?;
+    info!(
+        "Parsing of alignments from input took: {}",
+        humantime::format_duration(read_aln_time).to_string()
+    );
+
     perform_inference_and_write_output(
         header,
         &mut store,
@@ -222,6 +250,7 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
         txps,
         txps_name,
         seqcol_digest,
+        read_aln_time,
         args,
     )
 }
@@ -271,7 +300,7 @@ pub fn quantify_bulk_alignments_raw_reads(
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
     args: &Args,
-    seqcol_digest: seqcol_rs::DigestResult,
+    seqcol_digest: NamedDigestVec,
 ) -> anyhow::Result<()> {
     // now parse the actual alignments for the reads and store the results
     // in our in-memory stor
@@ -365,195 +394,211 @@ pub fn quantify_bulk_alignments_raw_reads(
     });
 
     // we need the scope here so we can borrow the relevant non-'static data
-    let (mut store, name_vec) = std::thread::scope(|s| {
-        const ALN_GROUP_CHUNK_LIMIT: usize = 100;
+    let (mut store, name_vec, aln_time) = std::thread::scope(
+        |s| -> anyhow::Result<(
+            InMemoryAlignmentStore,
+            Option<SwapVec<String>>,
+            std::time::Duration,
+        )> {
+            const ALN_GROUP_CHUNK_LIMIT: usize = 100;
 
-        let (aln_group_sender, aln_group_receiver): (
-            Sender<AlignmentGroupInfo>,
-            Receiver<AlignmentGroupInfo>,
-        ) = bounded(args.threads * 100);
+            let (aln_group_sender, aln_group_receiver): (
+                Sender<AlignmentGroupInfo>,
+                Receiver<AlignmentGroupInfo>,
+            ) = bounded(args.threads * 100);
 
-        // Consumer threads: receive sequences and perform alignment
-        let write_assignment_probs: bool = args.write_assignment_probs.is_some();
-        let consumers: Vec<_> = (0..map_threads)
-            .map(|_| {
-                let receiver = read_receiver.clone();
-                let mut filter = filter_opts.clone();
-                let loc_aligner = aligner.clone();
+            // Consumer threads: receive sequences and perform alignment
+            let write_assignment_probs: bool = args.write_assignment_probs.is_some();
+            let consumers: Vec<_> = (0..map_threads)
+                .map(|_| {
+                    let receiver = read_receiver.clone();
+                    let mut filter = filter_opts.clone();
+                    let loc_aligner = aligner.clone();
 
-                let my_txp_info_view = &txp_info_view;
-                let aln_group_sender = aln_group_sender.clone();
-                s.spawn(move || {
-                    let mut discard_table = DiscardTable::new();
+                    let my_txp_info_view = &txp_info_view;
+                    let aln_group_sender = aln_group_sender.clone();
+                    s.spawn(move || {
+                        let mut discard_table = DiscardTable::new();
 
-                    let mut chunk_size = 0_usize;
-                    let mut aln_group_alns: Vec<AlnInfo> = Vec::new();
-                    let mut aln_group_probs: Vec<f32> = Vec::new();
-                    let mut aln_group_boundaries: Vec<usize> = Vec::new();
-                    let mut aln_group_read_names = write_assignment_probs.then(Vec::new);
-                    aln_group_boundaries.push(0);
+                        let mut chunk_size = 0_usize;
+                        let mut aln_group_alns: Vec<AlnInfo> = Vec::new();
+                        let mut aln_group_probs: Vec<f32> = Vec::new();
+                        let mut aln_group_boundaries: Vec<usize> = Vec::new();
+                        let mut aln_group_read_names = write_assignment_probs.then(Vec::new);
+                        aln_group_boundaries.push(0);
 
-                    // get the next chunk of reads
-                    for read_chunk in receiver {
-                        // iterate over every read
-                        for (name, seq) in read_chunk.iter() {
-                            // map the next read, with cigar string
-                            let map_res_opt =
-                                loc_aligner.map(seq, true, false, None, None, Some(name));
-                            if let Ok(mut mappings) = map_res_opt {
-                                let (ag, aprobs) = filter.filter(
-                                    &mut discard_table,
-                                    header,
-                                    my_txp_info_view,
-                                    &mut mappings,
-                                );
+                        // get the next chunk of reads
+                        for read_chunk in receiver {
+                            // iterate over every read
+                            for (name, seq) in read_chunk.iter() {
+                                // map the next read, with cigar string
+                                let map_res_opt =
+                                    loc_aligner.map(seq, true, false, None, None, Some(name));
+                                if let Ok(mut mappings) = map_res_opt {
+                                    let (ag, aprobs) = filter.filter(
+                                        &mut discard_table,
+                                        header,
+                                        my_txp_info_view,
+                                        &mut mappings,
+                                    );
 
-                                if !ag.is_empty() {
-                                    aln_group_alns.extend_from_slice(&ag);
-                                    aln_group_probs.extend_from_slice(&aprobs);
-                                    aln_group_boundaries.push(aln_group_alns.len());
-                                    // if we are storing read names
-                                    if let Some(ref mut names_vec) = aln_group_read_names {
-                                        let name_str = String::from_utf8_lossy(name).into_owned();
-                                        names_vec.push(name_str);
+                                    if !ag.is_empty() {
+                                        aln_group_alns.extend_from_slice(&ag);
+                                        aln_group_probs.extend_from_slice(&aprobs);
+                                        aln_group_boundaries.push(aln_group_alns.len());
+                                        // if we are storing read names
+                                        if let Some(ref mut names_vec) = aln_group_read_names {
+                                            let name_str =
+                                                String::from_utf8_lossy(name).into_owned();
+                                            names_vec.push(name_str);
+                                        }
+                                        chunk_size += 1;
                                     }
-                                    chunk_size += 1;
+                                    if chunk_size >= ALN_GROUP_CHUNK_LIMIT {
+                                        aln_group_sender
+                                            .send((
+                                                aln_group_alns.clone(),
+                                                aln_group_probs.clone(),
+                                                aln_group_boundaries.clone(),
+                                                aln_group_read_names,
+                                            ))
+                                            .expect("Error sending alignment group");
+                                        aln_group_alns.clear();
+                                        aln_group_probs.clear();
+                                        aln_group_boundaries.clear();
+                                        aln_group_boundaries.push(0);
+                                        aln_group_read_names =
+                                            write_assignment_probs.then(Vec::new);
+                                        chunk_size = 0;
+                                    }
+                                } else {
+                                    warn!(
+                                        "Error encountered mappread_ing read : {}",
+                                        map_res_opt.unwrap_err()
+                                    );
                                 }
-                                if chunk_size >= ALN_GROUP_CHUNK_LIMIT {
-                                    aln_group_sender
-                                        .send((
-                                            aln_group_alns.clone(),
-                                            aln_group_probs.clone(),
-                                            aln_group_boundaries.clone(),
-                                            aln_group_read_names,
-                                        ))
-                                        .expect("Error sending alignment group");
-                                    aln_group_alns.clear();
-                                    aln_group_probs.clear();
-                                    aln_group_boundaries.clear();
-                                    aln_group_boundaries.push(0);
-                                    aln_group_read_names = write_assignment_probs.then(Vec::new);
-                                    chunk_size = 0;
-                                }
-                            } else {
-                                warn!(
-                                    "Error encountered mappread_ing read : {}",
-                                    map_res_opt.unwrap_err()
-                                );
                             }
                         }
-                    }
-                    if chunk_size > 0 {
-                        aln_group_sender
-                            .send((
-                                aln_group_alns,
-                                aln_group_probs,
-                                aln_group_boundaries,
-                                aln_group_read_names,
-                            ))
-                            .expect("Error sending alignment group");
-                    }
-                    discard_table
+                        if chunk_size > 0 {
+                            aln_group_sender
+                                .send((
+                                    aln_group_alns,
+                                    aln_group_probs,
+                                    aln_group_boundaries,
+                                    aln_group_read_names,
+                                ))
+                                .expect("Error sending alignment group");
+                        }
+                        discard_table
+                    })
                 })
-            })
-            .collect();
+                .collect();
 
-        #[allow(clippy::useless_asref)]
-        let txps_mut = txps.as_mut();
-        let filter_opts_store = filter_opts.clone();
-        let aln_group_consumer = s.spawn(move || {
-            let mut name_vec = if filter_opts_store.write_assignment_probs {
-                Some(SwapVec::<String>::with_config(SwapVecConfig {
-                    swap_after: Default::default(),
-                    batch_size: Default::default(),
-                    compression: Some(swapvec::Compression::Lz4),
-                }))
-            } else {
-                None
-            };
-
-            let mut store = InMemoryAlignmentStore::new(filter_opts_store, header);
-
-            let pb = if args.quiet {
-                indicatif::ProgressBar::hidden()
-            } else {
-                indicatif::ProgressBar::new_spinner().with_message("Number of reads mapped")
-            };
-
-            pb.set_style(
-                indicatif::ProgressStyle::with_template(
-                    "[{elapsed_precise}] {spinner:4.green/blue} {msg} {human_pos:>12}",
-                )
-                .unwrap()
-                .tick_chars("⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈⠈"),
-            );
-            pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
-
-            for (ags, aprobs, aln_boundaries, read_names) in aln_group_receiver {
-                // if we are getting read names out then we are going to "reverse" them
-                // here so that we can simply pop the strings off the back to get them
-                // in order. We do this since we cannot otherwise "move" a string out of a
-                // Vec.
-                let mut reversed_read_names = if let Some(mut names_vec) = read_names {
-                    names_vec.reverse();
-                    Some(names_vec)
+            #[allow(clippy::useless_asref)]
+            let txps_mut = txps.as_mut();
+            let filter_opts_store = filter_opts.clone();
+            let aln_group_consumer = s.spawn(move || {
+                let mut name_vec = if filter_opts_store.write_assignment_probs {
+                    Some(SwapVec::<String>::with_config(SwapVecConfig {
+                        swap_after: Default::default(),
+                        batch_size: Default::default(),
+                        compression: Some(swapvec::Compression::Lz4),
+                    }))
                 } else {
                     None
                 };
 
-                for window in aln_boundaries.windows(2) {
-                    pb.inc(1);
-                    let group_start = window[0];
-                    let group_end = window[1];
-                    let ag = &ags[group_start..group_end];
-                    let as_probs = &aprobs[group_start..group_end];
-                    let read_name_opt = if let Some(ref mut names_vec) = reversed_read_names {
-                        names_vec.pop()
+                let mut store = InMemoryAlignmentStore::new(filter_opts_store, header);
+
+                let pb = if args.quiet {
+                    indicatif::ProgressBar::hidden()
+                } else {
+                    indicatif::ProgressBar::new_spinner().with_message("Number of reads mapped")
+                };
+
+                pb.set_style(
+                    indicatif::ProgressStyle::with_template(
+                        "[{elapsed_precise}] {spinner:4.green/blue} {msg} {human_pos:>12}",
+                    )
+                    .unwrap()
+                    .tick_chars("⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈⠈"),
+                );
+                pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
+
+                for (ags, aprobs, aln_boundaries, read_names) in aln_group_receiver {
+                    // if we are getting read names out then we are going to "reverse" them
+                    // here so that we can simply pop the strings off the back to get them
+                    // in order. We do this since we cannot otherwise "move" a string out of a
+                    // Vec.
+                    let mut reversed_read_names = if let Some(mut names_vec) = read_names {
+                        names_vec.reverse();
+                        Some(names_vec)
                     } else {
                         None
                     };
 
-                    if store.add_filtered_group(ag, as_probs, txps_mut) {
-                        if let Some(ref mut nvec) = name_vec {
-                            let read_name = read_name_opt.unwrap_or(EMPTY_READ_NAME.to_string());
-                            nvec.push(read_name)
-                                .expect("cannot push name to read name vector");
-                        }
-                        if ag.len() == 1 {
-                            store.inc_unique_alignments();
+                    for window in aln_boundaries.windows(2) {
+                        pb.inc(1);
+                        let group_start = window[0];
+                        let group_end = window[1];
+                        let ag = &ags[group_start..group_end];
+                        let as_probs = &aprobs[group_start..group_end];
+                        let read_name_opt = if let Some(ref mut names_vec) = reversed_read_names {
+                            names_vec.pop()
+                        } else {
+                            None
+                        };
+
+                        if store.add_filtered_group(ag, as_probs, txps_mut) {
+                            if let Some(ref mut nvec) = name_vec {
+                                let read_name =
+                                    read_name_opt.unwrap_or(EMPTY_READ_NAME.to_string());
+                                nvec.push(read_name)
+                                    .expect("cannot push name to read name vector");
+                            }
+                            if ag.len() == 1 {
+                                store.inc_unique_alignments();
+                            }
                         }
                     }
                 }
+                pb.finish_with_message("Finished aligning reads.");
+                (store, name_vec)
+            });
+
+            let aln_start = std::time::SystemTime::now();
+            // Wait for the producer to finish reading
+            let total_reads = producer.join().expect("Producer thread panicked");
+
+            let mut discard_tables: Vec<DiscardTable> = Vec::with_capacity(map_threads);
+            for consumer in consumers {
+                let dt = consumer.join().expect("Consumer thread panicked");
+                discard_tables.push(dt);
             }
-            pb.finish_with_message("Finished aligning reads.");
-            (store, name_vec)
-        });
 
-        // Wait for the producer to finish reading
-        let total_reads = producer.join().expect("Producer thread panicked");
+            drop(aln_group_sender);
 
-        let mut discard_tables: Vec<DiscardTable> = Vec::with_capacity(map_threads);
-        for consumer in consumers {
-            let dt = consumer.join().expect("Consumer thread panicked");
-            discard_tables.push(dt);
-        }
+            let (mut store, name_vec) = aln_group_consumer
+                .join()
+                .expect("Alignment group consumer panicked");
 
-        drop(aln_group_sender);
+            info!(
+                "Parsed {} total reads",
+                total_reads.to_formatted_string(&Locale::en)
+            );
 
-        let (mut store, name_vec) = aln_group_consumer
-            .join()
-            .expect("Alignment group consumer panicked");
+            let aln_time = aln_start.elapsed()?;
+            info!(
+                "Alignment of raw reads using minimap2-rs took: {}",
+                humantime::format_duration(aln_time).to_string()
+            );
 
-        info!(
-            "Parsed {} total reads",
-            total_reads.to_formatted_string(&Locale::en)
-        );
-
-        for dt in &discard_tables {
-            store.aggregate_discard_table(dt);
-        }
-        (store, name_vec)
-    });
+            for dt in &discard_tables {
+                store.aggregate_discard_table(dt);
+            }
+            Ok((store, name_vec, aln_time))
+        },
+    )?;
 
     perform_inference_and_write_output(
         header,
@@ -562,6 +607,7 @@ pub fn quantify_bulk_alignments_raw_reads(
         txps,
         txps_name,
         seqcol_digest,
+        aln_time,
         args,
     )
 }

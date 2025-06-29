@@ -212,7 +212,16 @@ fn parse_filter_f32(arg: &str) -> anyhow::Result<FilterArg> {
 #[command(group(
     clap::ArgGroup::new("input")
     .required(true)
-    .args(["alignments", "reads"])
+    .args(["alignments", "reads", "only_index"])
+))]
+#[command(group(
+    clap::ArgGroup::new("raw_input_type")
+    .multiple(true)
+    .args(["annotated", "novel"])
+))]
+#[command(group(
+    clap::ArgGroup::new("raw_ref_type")
+    .args(["raw_input_type", "index"])
 ))]
 pub struct Args {
     /// be quiet (i.e. don't output log messages that aren't at least warnings)
@@ -237,19 +246,41 @@ pub struct Args {
         help_heading = "raw read mode",
         value_delimiter = ',',
         requires_ifs([
-            (ArgPredicate::IsPresent, "reference"),
-            (ArgPredicate::IsPresent, "seq_tech")
+            (ArgPredicate::IsPresent, "raw_ref_type"),
+            (ArgPredicate::IsPresent, "seq_tech"),
         ])
     )]
     pub reads: Option<Vec<PathBuf>>,
 
-    /// path to the file containing the reference transcriptome (or existing index) against which
-    /// to map
+    /// path to the file containing the annotated transcriptome (e.g. GENCODE) against which
+    /// to map.
     #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]
-    pub reference: Option<PathBuf>,
+    pub annotated: Option<PathBuf>,
+
+    /// path to the file containing novel (de novo, or reference-guided assembled) transcripts against which
+    /// to map. These are ultimately indexed together with reference transcripts, but passed in
+    /// separately for the purposes of provenance tracking.
+    #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]
+    pub novel: Option<PathBuf>,
+
+    /// path to an existing minimap2 index (either created with oarfish, which is preferred, or
+    /// with minimap2 itself)
+    #[arg(
+        long,
+        conflicts_with_all = ["alignments", "raw_input_type"],
+        help_heading = "raw read mode"
+    )]
+    pub index: Option<PathBuf>,
+
+    /// If this flag is passed, oarfish only performs indexing and not quantification.
+    /// Designed primarily for workflow management systems.
+    /// Note: A prebuilt index is not needed to quantify with oarfish; an index can be
+    /// written concurrently with quantification using the `--index-out` parameter.
+    #[arg(long, help_heading = "indexing")]
+    pub only_index: bool,
 
     /// path where minimap2 index will be written (if provided)
-    #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]
+    #[arg(long, conflicts_with_all = ["alignments", "index"], requires_ifs([(ArgPredicate::IsPresent, "only_index")]), help_heading = "indexing")]
     pub index_out: Option<PathBuf>,
 
     /// sequencing technology in which to expect reads if using mapping based mode
@@ -282,8 +313,8 @@ pub struct Args {
     pub thread_buff_size: u64,
 
     /// location where output quantification file should be written
-    #[arg(short, long, required = true)]
-    pub output: PathBuf,
+    #[arg(short, long, required_unless_present = "only_index")]
+    pub output: Option<PathBuf>,
 
     #[arg(long, help_heading = "filters", value_enum)]
     pub filter_group: Option<FilterGroup>,
