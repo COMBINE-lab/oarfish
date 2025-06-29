@@ -47,7 +47,7 @@ The usage can be provided by passing `-h` at the command line.
 ```
 A fast, accurate and versatile tool for long-read transcript quantification.
 
-Usage: oarfish [OPTIONS] --output <OUTPUT> <--alignments <ALIGNMENTS>|--reads <READS>>
+Usage: oarfish [OPTIONS] <--alignments <ALIGNMENTS>|--reads <READS>|--only-index>
 
 Options:
       --quiet
@@ -59,8 +59,8 @@ Options:
       --single-cell
           input is assumed to be a single-cell BAM and to have the `CB:z` tag for all read records
   -j, --threads <THREADS>
-          number of cores that oarfish will use during different phases of quantification. Note: This value will be at least 2 for bulk quantification and at least 3 for single-cell quantification due to the use of d
-edicated parsing threads [default: 3]
+          number of cores that oarfish will use during different phases of quantification. Note: This value will be at least 2 for bulk quantification and at least 3 for single-cell quantifi
+cation due to the use of dedicated parsing threads [default: 3]
       --num-bootstraps <NUM_BOOTSTRAPS>
           number of bootstrap replicates to produce to assess quantification uncertainty [default: 0]
   -h, --help
@@ -72,11 +72,27 @@ alignment mode:
   -a, --alignments <ALIGNMENTS>  path to the file containing the input alignments
 
 raw read mode:
-      --reads <READS>          path to the file containing the input reads
-      --reference <REFERENCE>  path to the file containing the reference transcriptome (or existing index) against which to map
+      --reads <READS>
+          path to the file containing the input reads; these can be in FASTA/Q format (possibly gzipped), or provided in uBAM (unaligned BAM) format. The format will be inferred from the fil
+e suffixes, and if a format cannot be inferred, it will be assumed to be (possibly gzipped) FASTA/Q
+      --annotated <ANNOTATED>
+          path to the file containing the annotated transcriptome (e.g. GENCODE) against which to map
+      --novel <NOVEL>
+          path to the file containing novel (de novo, or reference-guided assembled) transcripts against which to map. These are ultimately indexed together with reference transcripts, but p
+assed in separately for the purposes of provenance tracking
+      --index <INDEX>
+          path to an existing minimap2 index (either created with oarfish, which is preferred, or with minimap2 itself)
+      --seq-tech <SEQ_TECH>
+          sequencing technology in which to expect reads if using mapping based mode [possible values: ont-cdna, ont-drna, pac-bio, pac-bio-hifi]
+      --best-n <BEST_N>
+          maximum number of secondary mappings to consider when mapping reads to the transcriptome [default: 100]
+      --thread-buff-size <THREAD_BUFF_SIZE>
+          total memory to allow for thread-local alignment buffers (each buffer will get this value / # of alignment threads) [default: 1GB]
+
+indexing:
+      --only-index             If this flag is passed, oarfish only performs indexing and not quantification. Designed primarily for workflow management systems. Note: A prebuilt index is no
+t needed to quantify with oarfish; an index can be written concurrently with quantification using the `--index-out` parameter
       --index-out <INDEX_OUT>  path where minimap2 index will be written (if provided)
-      --seq-tech <SEQ_TECH>    sequencing technology in which to expect reads if using mapping based mode [possible values: ont-cdna, ont-drna, pac-bio, pac-bio-hifi]
-      --best-n <BEST_N>        maximum number of secondary mappings to consider when mapping reads to the transcriptome [default: 100]
 
 filters:
       --filter-group <FILTER_GROUP>
@@ -95,12 +111,14 @@ filters:
           only alignments to this strand will be allowed; options are (fw /+, rc/-, or both/.) [default: .]
 
 coverage model:
-      --model-coverage         apply the coverage model
-  -b, --bin-width <BIN_WIDTH>  width of the bins used in the coverage model [default: 100]
+      --model-coverage             apply the coverage model
+  -k, --growth-rate <GROWTH_RATE>  if using the coverage model, use this as the value of `k` in the logistic equation [default: 2]
+  -b, --bin-width <BIN_WIDTH>      width of the bins used in the coverage model [default: 100]
 
 output read-txps probabilities:
       --write-assignment-probs[=<WRITE_ASSIGNMENT_PROBS>]
-          write output alignment probabilites (optionally compressed) for each mapped read
+          write output alignment probabilites (optionally compressed) for each mapped read. If <WRITE_ASSIGNMENT_PROBS> is present, it must be one of `uncompressed` (default) or `compressed`
+, which will cause the output file to be lz4 compressed
 
 EM:
       --max-em-iter <MAX_EM_ITER>
@@ -133,21 +151,21 @@ This will produce several output files, as described [below](index.md#output).
 In read-based mode, you can quantify the transcript abundances in this sample using the following commands:
 
 ```{bash}
-$ oarfish -j 16 --reads sample1_reads.fq.gz --reference transcripts.fa --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
+$ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
 ```
 
 If you are going to quantify more than one sample against these reference transcripts, it makes sense to save the minimap2 index that the above
 command creates.  This can be done using the following command:
 
 ```{bash}
-$ oarfish -j 16 --reads sample1_reads.fq.gz --reference transcripts.fa --index-out transcripts.mmi --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
+$ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa --index-out transcripts.mmi --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
 ```
 
 Then, in subsequent runs (say when quantifying `sample2_reads.fq.gz`), you can directly provide the `minimap2` index in place of the reference to
 speed up quantification.  That command would look like the following:
 
 ```{bash}
-$ oarfish -j 16 --reads sample2_reads.fq.gz --reference transcripts.mmi --seq-tech ont-cdna -o sample2 --filter-group no-filters --model-coverage
+$ oarfish -j 16 --reads sample2_reads.fq.gz --index transcripts.mmi --seq-tech ont-cdna -o sample2 --filter-group no-filters --model-coverage
 ```
 
 As with alignment-based mode, these commands will produce several output files, as described [below](index.md#output).
@@ -163,8 +181,11 @@ based on the preference of the user.
 
 ### Read-based input
 
-The read-based input mode takes as input a reference (specified with the `--reference` argument), which can be either a `FASTA` file containing a transcriptome reference
-or an pre-build `minimap2` index, as well as a set of reads (specified with the `--reads` argument), and a `--seq-tech` argument specifying the sequencing technology 
+The read-based input mode takes as input reference transcript sequences (specified with the `--annotated` and `--novel` arguments) which are `FASTA` files containing transcriptome sequence.  The `--annotated` and `--novel` flags take care of the source of the underlying transcripts, as their provenance is tracked separately. It is recommended that you provide transcripts from known reference annotations (e.g. gencode) using the `--annotated` option, while you provide novel transcripts that may have beeen assembled from your samples using the `--novel` option. **Importantly**, how the transcripts are split between `--annotated` and `--novel` will have no effect on how the final quantification is performed, as the transcripts from both sources are joined and indexed together.  However, a separate sequence signature is kept and propagated to the output for each source, and mixing novel transcripts into the `--annotated` source may complicate attempts to automatically detect the reference annotation used in downstream tools.
+
+Alternatively, you can provide `oarfish` with an index (built from a previous run of `oarfish`) to avoid re-indexing the same reference. You can also provide a pre-built `minimap2` index, though such an index will not be able to separately track `--annotated` and `--novel` transcripts.
+
+Finally, you provide `orafish` with a set of reads (specified with the `--reads` argument) which should be a `FASTQ` file (possibly gzipped) or a `uBAM` file, and a `--seq-tech` argument specifying the sequencing technology 
 type of the reads to be mapped.
 
 The mapping between the potential values that can be passed to `oarfish`'s `--seq-tech` argument and the `minimap2` presets is as follows:
