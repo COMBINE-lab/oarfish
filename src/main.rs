@@ -1,7 +1,7 @@
 use clap::Parser;
 use noodles_sam::Header;
 use std::num::NonZeroUsize;
-use util::oarfish_types::NamedDigestVec;
+use util::oarfish_types::{FragmentEndFalloffDist, NamedDigestVec};
 
 // Or now
 // use minimap2::ffi as mm_ffi;
@@ -96,6 +96,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
                 .logistic_growth_rate(args.growth_rate)
+                .falloff_dist(Some(FragmentEndFalloffDist::new(0., 100.)))
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .build())
@@ -131,6 +132,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .which_strand(bio_types::strand::Strand::Forward)
                 .model_coverage(args.model_coverage)
                 .logistic_growth_rate(args.growth_rate)
+                .falloff_dist(Some(FragmentEndFalloffDist::new(0., 100.)))
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .build())
@@ -146,6 +148,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
                 .logistic_growth_rate(args.growth_rate)
+                .falloff_dist(Some(FragmentEndFalloffDist::new(0., 100.)))
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .build())

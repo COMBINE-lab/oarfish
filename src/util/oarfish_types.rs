@@ -2,6 +2,9 @@ use serde::Deserialize;
 use std::fmt;
 use std::num::NonZeroUsize;
 
+use statrs::distribution::{Continuous, Normal};
+use statrs::statistics::Distribution;
+
 use kders::kde::KDEModel;
 use std::iter::FromIterator;
 use tabled::builder::Builder;
@@ -10,6 +13,7 @@ use tabled::settings::Style;
 use seqcol_rs::DigestResult;
 use serde::Serialize;
 use serde_json::json;
+use serde_with::serde_as;
 use typed_builder::TypedBuilder;
 
 use bio_types::strand::Strand;
@@ -462,9 +466,9 @@ impl ShortReadRecord {
 pub struct EMInfo<'eqm, 'tinfo, 'h> {
     // the read alignment infomation we'll need to
     // perform the EM
-    pub eq_map: &'eqm InMemoryAlignmentStore<'h>,
+    pub eq_map: &'eqm mut InMemoryAlignmentStore<'h>,
     // relevant information about each target transcript
-    pub txp_info: &'tinfo [TranscriptInfo],
+    pub txp_info: &'tinfo mut [TranscriptInfo],
     // maximum number of iterations the EM will run
     // before returning an estimate.
     pub max_iter: u32,
@@ -522,7 +526,7 @@ impl TranscriptInfo {
     }
 
     #[inline(always)]
-    pub fn get_normalized_counts_and_lengths(&self) -> (Vec<f32>, Vec<f32>) {
+    pub fn get_normalized_counts_and_lengths(&self, verbose: bool) -> (Vec<f32>, Vec<f32>) {
         let num_intervals = self.coverage_bins.len();
         let num_intervals_f = num_intervals as f64;
         let tlen_f = self.lenf;
@@ -542,6 +546,12 @@ impl TranscriptInfo {
                 warn!("bidxf: {:?}", bidxf);
             }
             assert!(bin_end > bin_start);
+        }
+        if verbose {
+            eprintln!(
+                "num_intervals: {}, bin_width: {}, cov: {:#?}",
+                num_intervals_f, bin_width, cov_f32
+            );
         }
         (cov_f32, widths_f32)
     }
@@ -576,7 +586,7 @@ impl TranscriptInfo {
 
             let olap = get_overlap(start, stop, curr_bin_start, curr_bin_end);
             let olfrac = (olap as f64) / ((curr_bin_end - curr_bin_start) as f64);
-            *bin += olfrac;
+            *bin += weight * olfrac;
             if olfrac > ONE_PLUS_EPSILON {
                 error!("first_bin = {start_bin}, last_bin = {end_bin}");
                 error!(
@@ -743,13 +753,15 @@ impl<'h> InMemoryAlignmentStore<'h> {
         &mut self,
         alns: &[AlnInfo],
         as_probs: &[f32],
-        txps: &mut [TranscriptInfo],
+        _txps: &mut [TranscriptInfo],
     ) -> bool {
         if !alns.is_empty() {
+            /*
             for a in alns.iter() {
                 let tid = a.ref_id as usize;
                 txps[tid].add_interval(a.start, a.end, 1.0_f64);
             }
+            */
             self.alignments.extend_from_slice(alns);
             self.as_probabilities.extend_from_slice(as_probs);
             self.coverage_probabilities
@@ -780,6 +792,64 @@ impl<'h> InMemoryAlignmentStore<'h> {
     pub fn unique_alignments(&self) -> usize {
         self.num_unique_alignments
     }
+}
+
+serde_with::serde_conv!(
+    DistrAsPair,
+    statrs::distribution::Normal,
+    |dist: &statrs::distribution::Normal| (
+        dist.mean().expect("valid mean"),
+        dist.std_dev().expect("valid std_dev")
+    ),
+    |value: (f64, f64)| -> Result<_, std::convert::Infallible> {
+        Ok(statrs::distribution::Normal::new(value.0, value.1).expect("can construct"))
+    }
+);
+
+/// The model that will be applied to reads starting far from the sequenced end of the
+/// underlying transcript
+#[serde_as]
+#[derive(Clone, Debug, Serialize)]
+pub struct FragmentEndFalloffDist {
+    #[serde_as(as = "DistrAsPair")]
+    pub dist: statrs::distribution::Normal,
+}
+
+impl FragmentEndFalloffDist {
+    pub fn new(mu: f64, std_dev: f64) -> Self {
+        FragmentEndFalloffDist {
+            dist: Normal::new(mu, std_dev)
+                .expect("should be able to construct a normal distribution"),
+        }
+    }
+
+    pub fn eval_alignment<T: AlnRecordLike>(&self, a: &T, tlenf: f64) -> f64 {
+        let thresh = self
+            .dist
+            .std_dev()
+            .expect("distribution has valid standard deviation");
+        let extra_dist = if !a.is_reverse_complemented() {
+            //           end      clip   txp_end
+            // ========== * ====== ( =======]
+            //               dist
+            ((tlenf - thresh) - (a.aln_end() as f64)).max(0.)
+        } else {
+            (a.aln_start() as f64 - thresh).max(0.)
+        };
+        self.dist.pdf(extra_dist) / self.dist.pdf(0.)
+    }
+
+    /*
+    pub fn eval_norm(&self, distance: i64) -> f64 {
+        let cdist: f64 = distance.max(0) as f64;
+        self.dist.pdf(cdist) / self.dist.pdf(0.)
+    }
+
+    pub fn eval_norm_thresh(&self, distance: i64, thresh: i64) -> f64 {
+        let cdist: f64 = (distance - thresh).max(0) as f64;
+        self.dist.pdf(cdist) / self.dist.pdf(0.)
+    }
+    */
 }
 
 /// The parameters controling the filters that will
@@ -817,6 +887,9 @@ pub struct AlignmentFilters {
     // The growth rate (or `k`) parameter of the logistic
     // function. This only matters if `model_coverage` is true.
     pub logistic_growth_rate: f64,
+    // To evaluate soft probabilities for fragments starting far
+    // from the end.
+    pub falloff_dist: Option<FragmentEndFalloffDist>,
     // True if we are enabling to output the alignment probability and
     // false otherwise.
     pub write_assignment_probs: bool,
@@ -1027,15 +1100,16 @@ impl AlignmentFilters {
                 }
 
                 // not too far from the 3' end
-                let filt_3p =
-                    (x.aln_end() as i64) <= (txps[tid].len.get() as i64 - self.three_prime_clip);
+                let filt_3p = (!is_rc)
+                    && ((x.aln_end() as i64)
+                        <= (txps[tid].len.get() as i64 - self.three_prime_clip));
                 if filt_3p {
                     discard_table.discard_3p += 1;
                     return false;
                 }
 
                 // not too far from the 5' end
-                let filt_5p = x.aln_start() >= self.five_prime_clip;
+                let filt_5p = (is_rc) && (x.aln_start() >= self.five_prime_clip);
                 if filt_5p {
                     discard_table.discard_5p += 1;
                     return false;
@@ -1078,31 +1152,44 @@ impl AlignmentFilters {
         let mut probabilities = Vec::<f32>::with_capacity(ag.len());
         let mscore = best_retained_score as f32;
         let inv_max_score = 1.0 / mscore;
+        let mut m_dist_score = f64::EPSILON;
 
         // get a vector of all of the scores
-        let mut scores: Vec<i32> = ag
+        let mut scores: Vec<(i32, f64)> = ag
             .iter_mut()
-            .map(|a| a.aln_score().unwrap_or(0) as i32)
+            .map(|a| {
+                // the alignment is to the - strand
+                let p = if let Some(falloff_dist) = &self.falloff_dist {
+                    let tid = a.ref_id(aln_header).expect("valid ref id");
+                    let tlenf = txps[tid].lenf;
+                    let p = falloff_dist.eval_alignment::<T>(a, tlenf);
+                    m_dist_score = m_dist_score.max(p);
+                    p
+                } else {
+                    1.
+                };
+                (a.aln_score().unwrap_or(0) as i32, p)
+            })
             .collect();
 
         let _min_allowed_score = self.score_threshold * mscore;
 
         for score in scores.iter_mut() {
             const SCORE_PROB_DENOM: f32 = 5.0;
-            let fscore = *score as f32;
+            let fscore = score.0 as f32;
             let score_ok = (fscore * inv_max_score) >= self.score_threshold; //>= thresh_score;
             if score_ok {
                 //let f = ((fscore - mscore) / (mscore - min_allowed_score)) * SCORE_PROB_DENOM;
                 let f = (fscore - mscore) / SCORE_PROB_DENOM;
-                probabilities.push(f.exp());
+                probabilities.push(f.exp() * score.1 as f32);
             } else {
-                *score = i32::MIN;
+                score.0 = i32::MIN;
                 discard_table.discard_score += 1;
             }
         }
 
         let mut score_it = scores.iter();
-        ag.retain(|_| *score_it.next().unwrap() > i32::MIN);
+        ag.retain(|_| score_it.next().unwrap().0 > i32::MIN);
         assert_eq!(ag.len(), probabilities.len());
 
         (

@@ -139,8 +139,8 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                         // wrap up all of the relevant information we need for estimation
                         // in an EMInfo struct and then call the EM algorithm.
                         let emi = EMInfo {
-                            eq_map: &store,
-                            txp_info: &txps,
+                            eq_map: &mut store,
+                            txp_info: &mut txps,
                             max_iter: args.max_em_iter,
                             convergence_thresh: args.convergence_thresh,
                             init_abundances: None,

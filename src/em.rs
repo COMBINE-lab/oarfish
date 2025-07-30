@@ -146,7 +146,7 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
     make_iter: F,
     do_log: bool,
 ) -> Vec<f64> {
-    let eq_map = em_info.eq_map;
+    let eq_map = &em_info.eq_map;
     let fops = &eq_map.filter_opts;
     let tinfo: &[TranscriptInfo] = em_info.txp_info;
     let max_iter = em_info.max_iter;
@@ -326,7 +326,7 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
         .build()
         .unwrap();
 
-    let eq_map = em_info.eq_map;
+    let eq_map = &em_info.eq_map;
     let fops = &eq_map.filter_opts;
     let tinfo: &[TranscriptInfo] = em_info.txp_info;
     let max_iter = em_info.max_iter;

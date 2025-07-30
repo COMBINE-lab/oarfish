@@ -34,7 +34,7 @@ pub fn normalize_read_probs(
                 let w = (end_aln - start_aln) / bin_length;
                 (w, w * coverage_probability[start_bin])
             } else {
-                (start_bin..end_bin).fold((0f64, 0f64), |acc, i| {
+                (start_bin..=end_bin).fold((0f64, 0f64), |acc, i| {
                     let w = if i == start_bin {
                         (bin_end(start_bin) - start_aln) / bin_length
                     } else if i == end_bin {

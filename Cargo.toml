@@ -74,6 +74,8 @@ rustc-hash = "2.1.1"
 parse-size = "1.1.0"
 niffler = "3.0.0"
 humantime = "2.2.0"
+rand_distr = "0.5.1"
+serde_with = "3.14.0"
 
 [[bin]]
 name = "oarfish"
