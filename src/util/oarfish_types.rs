@@ -813,21 +813,20 @@ serde_with::serde_conv!(
 pub struct FragmentEndFalloffDist {
     #[serde_as(as = "DistrAsPair")]
     pub dist: statrs::distribution::Normal,
+    pub thresh: f64,
 }
 
 impl FragmentEndFalloffDist {
-    pub fn new(mu: f64, std_dev: f64) -> Self {
+    pub fn new(mu: f64, std_dev: f64, thresh: f64) -> Self {
         FragmentEndFalloffDist {
             dist: Normal::new(mu, std_dev)
                 .expect("should be able to construct a normal distribution"),
+            thresh,
         }
     }
 
     pub fn eval_alignment<T: AlnRecordLike>(&self, a: &T, tlenf: f64) -> f64 {
-        let thresh = self
-            .dist
-            .std_dev()
-            .expect("distribution has valid standard deviation");
+        let thresh = self.thresh;
         let extra_dist = if !a.is_reverse_complemented() {
             //           end      clip   txp_end
             // ========== * ====== ( =======]

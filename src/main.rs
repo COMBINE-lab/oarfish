@@ -63,6 +63,16 @@ fn get_txp_info_from_header(
 }
 
 fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
+    let frag_dist = if args.disable_end_dist {
+        None
+    } else {
+        Some(FragmentEndFalloffDist::new(
+            0.,
+            args.end_dist_std_dev,
+            args.end_dist_thresh,
+        ))
+    };
+
     // set all of the filter options that the user
     // wants to apply.
     match args.filter_group {
@@ -96,7 +106,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
                 .logistic_growth_rate(args.growth_rate)
-                .falloff_dist(Some(FragmentEndFalloffDist::new(0., 100.)))
+                .falloff_dist(frag_dist)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .build())
@@ -132,7 +142,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .which_strand(bio_types::strand::Strand::Forward)
                 .model_coverage(args.model_coverage)
                 .logistic_growth_rate(args.growth_rate)
-                .falloff_dist(Some(FragmentEndFalloffDist::new(0., 100.)))
+                .falloff_dist(frag_dist)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .build())
@@ -148,7 +158,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
                 .logistic_growth_rate(args.growth_rate)
-                .falloff_dist(Some(FragmentEndFalloffDist::new(0., 100.)))
+                .falloff_dist(frag_dist)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .build())

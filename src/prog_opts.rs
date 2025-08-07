@@ -359,6 +359,33 @@ pub struct Args {
     #[arg(long, help_heading = "coverage model", value_parser)]
     pub model_coverage: bool,
 
+    /// standard deviation of the truncated normal used to down-weight fragments
+    /// starting too far from the sequenced end of the transcript.
+    #[arg(
+        long,
+        help_heading = "coverage model",
+        conflicts_with = "disable_end_dist",
+        value_parser,
+        default_value_t = 100.
+    )]
+    pub end_dist_std_dev: f64,
+
+    /// apply no downweighting to any fragment starting less than this distance
+    /// from the sequenced end of the transcript.
+    #[arg(
+        long,
+        help_heading = "coverage model",
+        conflicts_with = "disable_end_dist",
+        value_parser,
+        default_value_t = 100.
+    )]
+    pub end_dist_thresh: f64,
+
+    /// don't apply a model to downweight fragments starting too far from the sequenced
+    /// end of the transcript
+    #[arg(long, help_heading = "coverage model", value_parser)]
+    pub disable_end_dist: bool,
+
     /// if using the coverage model, use this as the value of `k` in the logistic equation
     #[arg(
         short = 'k',
@@ -375,7 +402,7 @@ pub struct Args {
     #[arg(
         long,
         help_heading = "output read-txps probabilities",
-        conflicts_with = "single-cell",
+        conflicts_with = "single_cell",
         default_missing_value = "uncompressed",
         num_args = 0..=1,
         require_equals = true,
