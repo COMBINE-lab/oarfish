@@ -1,5 +1,6 @@
 use clap::Parser;
 use noodles_sam::Header;
+use prog_opts::FragmentEndModel;
 use std::num::NonZeroUsize;
 use util::oarfish_types::{FragmentEndFalloffDist, NamedDigestVec};
 
@@ -25,11 +26,8 @@ mod util;
 use crate::prog_opts::{Args, FilterGroup};
 use crate::util::aligner::{get_aligner_from_args, get_aligner_from_fastas};
 use crate::util::digest_utils;
-use crate::util::normalize_probability::normalize_read_probs;
+use crate::util::kde_utils;
 use crate::util::oarfish_types::{AlignmentFilters, TranscriptInfo};
-use crate::util::{
-    binomial_probability::binomial_continuous_prob, kde_utils, logistic_probability::logistic_prob,
-};
 
 fn get_txp_info_from_header(
     header: &Header,
@@ -63,14 +61,35 @@ fn get_txp_info_from_header(
 }
 
 fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
-    let frag_dist = if args.disable_end_dist {
-        None
-    } else {
-        Some(FragmentEndFalloffDist::new(
-            0.,
-            args.end_dist_std_dev,
-            args.end_dist_thresh,
-        ))
+    // if the user disabled the fragment end distance modeling, then
+    // we will pass None to the filter group for this parameter, otherwise
+    // we will fill it out with the provided standard deviation and threshold.
+    let frag_dist = match &args.fragment_end_model {
+        FragmentEndModel::None => {
+            info!("disabled fragment end-distance modeling.");
+            None
+        }
+        x => {
+            let mname = match x {
+                FragmentEndModel::FivePrimeStart => "5' end start",
+                FragmentEndModel::ThreePrimeStart => "3' end start",
+                FragmentEndModel::EitherStart => "either end start",
+                FragmentEndModel::None => {
+                    anyhow::bail!("Must have a fragment end model at this point")
+                }
+            };
+            info!(
+                "applying {} fragment end-distance modeling with standard deviation = {} and threshold = {}.",
+                mname, args.end_dist_std_dev, args.end_dist_thresh
+            );
+
+            Some(FragmentEndFalloffDist::new(
+                0.,
+                args.end_dist_std_dev,
+                args.end_dist_thresh,
+                args.fragment_end_model,
+            ))
+        }
     };
 
     // set all of the filter options that the user

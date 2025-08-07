@@ -98,7 +98,6 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
             let done_parsing = done_parsing.clone();
             let num_txps = txps.len();
             let bc_out = bc_writer.clone();
-            let bin_width = args.bin_width;
             let filter_opts = filter_opts.clone();
 
             let handle = s.spawn(move || {
@@ -129,25 +128,51 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                             &mut records_for_read,
                         )?;
 
-                        if store.filter_opts.model_coverage {
-                            //obtaining the Cumulative Distribution Function (CDF) for each transcript
-                            crate::binomial_continuous_prob(&mut txps, &bin_width, 1);
-                            //Normalize the probabilities for the records of each read
-                            crate::normalize_read_probs(&mut store, &txps, &bin_width);
-                        }
+                        // if we are modeling the coverage, we'll run the EM for a bit
+                        // to get initial abundance estimates to inform the coverage
+                        // model. Otherwise, we'll just run the EM as normal.
+                        let model_coverage = store.filter_opts.model_coverage;
+                        store.filter_opts.model_coverage = false;
+
+                        // if we are just estimating rough coverage to initialize
+                        // the coverage model, then only run for a few (100) iterations.
+                        let max_iter = if model_coverage {
+                            25.min(args.max_em_iter)
+                        } else {
+                            args.max_em_iter
+                        };
 
                         // wrap up all of the relevant information we need for estimation
                         // in an EMInfo struct and then call the EM algorithm.
-                        let emi = EMInfo {
+                        let mut emi = EMInfo {
                             eq_map: &mut store,
                             txp_info: &mut txps,
-                            max_iter: args.max_em_iter,
+                            max_iter,
                             convergence_thresh: args.convergence_thresh,
                             init_abundances: None,
                             kde_model: None,
                         };
+
                         // run the EM for this cell
-                        let counts = em::em(&emi, 1);
+                        let mut counts = em::em(&emi, 1);
+
+                        if model_coverage {
+                            crate::util::coverage::update_coverage(
+                                &mut emi,
+                                &counts,
+                                header,
+                                args.growth_rate,
+                                args.bin_width,
+                                1,
+                            )?;
+
+                            emi.max_iter = args.max_em_iter;
+                            emi.eq_map.filter_opts.model_coverage = true;
+
+                            // now run EM to convergence
+                            counts = em::em(&emi, 1);
+                        }
+
                         // clear out the vectors where we will store
                         // the count information for this cell
                         col_ids.clear();

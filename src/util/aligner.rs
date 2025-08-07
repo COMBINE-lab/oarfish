@@ -98,7 +98,9 @@ pub(crate) fn get_aligner_from_fastas(
 
     // create the aligner
     let mut aligner = make_aligner(
-        &args.seq_tech,
+        args.seq_tech
+            .as_ref()
+            .expect("must pass a seq_tech parameter"),
         *idx_threads,
         input_source.file_path(),
         idx_output,
@@ -169,7 +171,14 @@ fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAligner
     let idx_output = args.index_out.as_ref().map(|_| idx_out_as_str.as_str());
 
     // create the aligner
-    let mut aligner = make_aligner(&args.seq_tech, *idx_threads, &idx_file, idx_output)?;
+    let mut aligner = make_aligner(
+        args.seq_tech
+            .as_ref()
+            .expect("must pass a seq_tech parameter"),
+        *idx_threads,
+        &idx_file,
+        idx_output,
+    )?;
 
     info!("created aligner index opts : {:?}", aligner.idxopt);
     // get up to the best_n hits for each read
@@ -216,23 +225,21 @@ fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAligner
 /// Build the actual aligner based on the sequencing technology, number
 /// of threads, and the provided input (and optional output) file.
 fn make_aligner(
-    seq_tech: &Option<SequencingTech>,
+    seq_tech: &SequencingTech,
     idx_threads: usize,
     input: &std::path::Path,
     idx_output: Option<&str>,
 ) -> anyhow::Result<Aligner<minimap2::Built>> {
     // create the aligner
     match seq_tech {
-        Some(SequencingTech::OntCDNA) | Some(SequencingTech::OntDRNA) => {
-            minimap2::Aligner::builder()
-                .map_ont()
-                .with_index_threads(idx_threads)
-                .with_cigar()
-                .with_cigar_clipping()
-                .with_index(input.to_path_buf().clone(), idx_output)
-                .map_err(anyhow::Error::msg)
-        }
-        Some(SequencingTech::PacBio) => minimap2::Aligner::builder()
+        SequencingTech::OntCDNA | SequencingTech::OntDRNA => minimap2::Aligner::builder()
+            .map_ont()
+            .with_index_threads(idx_threads)
+            .with_cigar()
+            .with_cigar_clipping()
+            .with_index(input.to_path_buf().clone(), idx_output)
+            .map_err(anyhow::Error::msg),
+        SequencingTech::PacBio => minimap2::Aligner::builder()
             .map_pb()
             .with_index_threads(idx_threads)
             .with_cigar()
@@ -240,16 +247,18 @@ fn make_aligner(
             .with_index(input.to_path_buf().clone(), idx_output)
             .map_err(anyhow::Error::msg),
 
-        Some(SequencingTech::PacBioHifi) => minimap2::Aligner::builder()
+        SequencingTech::PacBioHifi => minimap2::Aligner::builder()
             .map_hifi()
             .with_index_threads(idx_threads)
             .with_cigar()
             .with_cigar_clipping()
             .with_index(input.to_path_buf().clone(), idx_output)
             .map_err(anyhow::Error::msg),
+        /*
         None => {
             anyhow::bail!("sequencing tech must be provided in read mode, but it was not!");
         }
+        */
     }
 }
 

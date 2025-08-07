@@ -26,7 +26,7 @@ use sam::{Header, alignment::record::data::field::tag::Tag as AlnTag};
 #[allow(unused_imports)]
 use tracing::{error, info, warn};
 
-use crate::prog_opts::ReadAssignmentProbOut;
+use crate::prog_opts::{FragmentEndModel, ReadAssignmentProbOut};
 use crate::util::constants::EMPTY_READ_NAME;
 
 pub(crate) struct NamedDigestVec(Vec<(String, DigestResult)>);
@@ -814,26 +814,48 @@ pub struct FragmentEndFalloffDist {
     #[serde_as(as = "DistrAsPair")]
     pub dist: statrs::distribution::Normal,
     pub thresh: f64,
+    pub model: FragmentEndModel,
 }
 
 impl FragmentEndFalloffDist {
-    pub fn new(mu: f64, std_dev: f64, thresh: f64) -> Self {
+    pub fn new(mu: f64, std_dev: f64, thresh: f64, model: FragmentEndModel) -> Self {
         FragmentEndFalloffDist {
             dist: Normal::new(mu, std_dev)
                 .expect("should be able to construct a normal distribution"),
             thresh,
+            model,
         }
     }
 
     pub fn eval_alignment<T: AlnRecordLike>(&self, a: &T, tlenf: f64) -> f64 {
         let thresh = self.thresh;
-        let extra_dist = if !a.is_reverse_complemented() {
-            //           end      clip   txp_end
-            // ========== * ====== ( =======]
-            //               dist
-            ((tlenf - thresh) - (a.aln_end() as f64)).max(0.)
-        } else {
-            (a.aln_start() as f64 - thresh).max(0.)
+        let extra_dist = match self.model {
+            FragmentEndModel::ThreePrimeStart => {
+                //           end      clip   txp_end
+                // ========== * ====== ( =======]
+                //               dist
+                if !a.is_reverse_complemented() {
+                    ((tlenf - thresh) - (a.aln_end() as f64)).max(0.)
+                } else {
+                    5000.
+                }
+            }
+            FragmentEndModel::FivePrimeStart => {
+                if a.is_reverse_complemented() {
+                    (a.aln_start() as f64 - thresh).max(0.)
+                } else {
+                    5000.
+                }
+            }
+            FragmentEndModel::EitherStart => {
+                // TODO: It would be nice if we can make an informed choice
+                // here based on alignment orientation, but right now we
+                // will just chose the alignment part closer to the end
+                let three_prime_dist = ((tlenf - thresh) - (a.aln_end() as f64)).max(0.);
+                let five_prime_dist = (a.aln_start() as f64 - thresh).max(0.);
+                three_prime_dist.min(five_prime_dist)
+            }
+            FragmentEndModel::None => 0.,
         };
         self.dist.pdf(extra_dist) / self.dist.pdf(0.)
     }

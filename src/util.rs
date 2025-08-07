@@ -1,8 +1,8 @@
 pub mod aligner;
 pub mod aux_counts;
-pub mod binomial_probability;
 pub mod constants;
 pub mod count_function;
+pub mod coverage;
 pub mod digest_utils;
 pub mod file_utils;
 pub mod kde_utils;

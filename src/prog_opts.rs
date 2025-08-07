@@ -1,9 +1,10 @@
+use clap::builder::PossibleValue;
+use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Parser, builder::ArgPredicate};
 use parse_size::parse_size;
 use serde::Serialize;
 use std::fmt;
 use std::path::PathBuf;
-use std::str::FromStr;
 use tracing::info;
 
 /// These represent different "meta-options", specific settings
@@ -51,6 +52,65 @@ pub enum SequencingTech {
     PacBioHifi,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+pub enum FragmentEndModel {
+    ThreePrimeStart,
+    FivePrimeStart,
+    EitherStart,
+    None,
+}
+
+#[derive(Clone)]
+pub struct FragmentEndModelParser;
+
+impl clap::builder::TypedValueParser for FragmentEndModelParser {
+    type Value = FragmentEndModel;
+
+    fn parse_ref(
+        &self,
+        cmd: &clap::Command,
+        _arg: Option<&clap::Arg>,
+        value: &std::ffi::OsStr,
+    ) -> Result<Self::Value, clap::Error> {
+        match value.to_str() {
+            Some("3p-start") => Ok(FragmentEndModel::ThreePrimeStart),
+            Some("5p-start") => Ok(FragmentEndModel::FivePrimeStart),
+            Some("either-start") => Ok(FragmentEndModel::EitherStart),
+            Some("none") => Ok(FragmentEndModel::None),
+            Some(x) => {
+                let mut err = clap::Error::new(ErrorKind::ValueValidation).with_cmd(cmd);
+                err.insert(
+                    ContextKind::InvalidValue,
+                    ContextValue::String(x.to_string()),
+                );
+                Err(err)
+            }
+            None => {
+                let mut err = clap::Error::new(ErrorKind::ValueValidation).with_cmd(cmd);
+                err.insert(
+                    ContextKind::InvalidValue,
+                    ContextValue::String("could not parse OsStr to str".to_string()),
+                );
+                Err(err)
+            }
+        }
+    }
+
+    fn possible_values(&self) -> Option<Box<dyn Iterator<Item = PossibleValue> + '_>> {
+        let vals = Box::new(
+            vec![
+                PossibleValue::new("3p-start"),
+                PossibleValue::new("5p-start"),
+                PossibleValue::new("either-start"),
+                PossibleValue::new("none"),
+            ]
+            .into_iter(),
+        );
+        Some(vals)
+    }
+}
+
+/*
 impl FromStr for SequencingTech {
     type Err = String;
 
@@ -67,6 +127,7 @@ impl FromStr for SequencingTech {
         }
     }
 }
+*/
 
 /// This tells us the value of the filter argument and
 /// the type remembers if it was the default or if the
@@ -358,6 +419,10 @@ pub struct Args {
     /// apply the coverage model
     #[arg(long, help_heading = "coverage model", value_parser)]
     pub model_coverage: bool,
+
+    /// the type of fragment end model to apply
+    #[arg(long, help_heading = "coverage model", value_parser = FragmentEndModelParser)]
+    pub fragment_end_model: FragmentEndModel,
 
     /// standard deviation of the truncated normal used to down-weight fragments
     /// starting too far from the sequenced end of the transcript.

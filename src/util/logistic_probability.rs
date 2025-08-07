@@ -54,9 +54,9 @@ pub fn logstic_function(
     logistic_prob
 }
 
-#[instrument(skip(txps, header))]
+#[instrument(skip(txps, _header))]
 pub fn logistic_prob(
-    header: &noodles_sam::header::Header,
+    _header: &noodles_sam::header::Header,
     txps: &mut [TranscriptInfo],
     growth_rate: f64,
     bin_width: &u32,
@@ -64,9 +64,11 @@ pub fn logistic_prob(
 ) {
     info!("computing coverage probabilities");
     let compute_txp_coverage_probs = |_i: usize, t: &mut TranscriptInfo| {
-        let verbose = header.reference_sequences().get_index(_i).expect("foo").0
+        let verbose = false;
+        /*header.reference_sequences().get_index(_i).expect("foo").0
             == bstr::B(b"SIRV303")
             || header.reference_sequences().get_index(_i).expect("foo").0 == bstr::B(b"SIRV301");
+        */
 
         let temp_prob: Vec<f64> = if *bin_width != 0 {
             assert!(!t.coverage_bins.is_empty());

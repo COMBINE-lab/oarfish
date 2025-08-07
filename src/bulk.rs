@@ -12,7 +12,6 @@ use crate::util::oarfish_types::{
 };
 use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::{write_infrep_file, write_out_prob, write_output};
-use crate::{logistic_prob, normalize_read_probs};
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use crossbeam::channel::Receiver;
 use crossbeam::channel::Sender;
@@ -22,7 +21,6 @@ use minimap2_sys as mm_ffi;
 //use minimap2_temp as minimap2;
 
 use core::f64;
-use itertools::izip;
 use needletail::parse_fastx_file;
 use noodles_bam as bam;
 use num_format::{Locale, ToFormattedString};
@@ -123,7 +121,7 @@ fn perform_inference_and_write_output(
     store.filter_opts.model_coverage = false;
 
     // if we are just estimating rough coverage to initialize
-    // the coverage model, then only run for a few (100) iterations.
+    // the coverage model, then only run for a few (50) iterations.
     let max_iter = if model_coverage {
         50.min(args.max_em_iter)
     } else {
@@ -163,78 +161,18 @@ fn perform_inference_and_write_output(
     };
 
     if model_coverage {
-        // set coverage based on current abundance estimates
-        let mut txps = Vec::<usize>::new();
-        let mut txp_probs = Vec::<f64>::new();
-        for (alns, probs, _coverage_probs) in emi.eq_map.iter() {
-            let mut denom = 0.0_f64;
-
-            for (a, p) in izip!(alns, probs) {
-                let target_id = a.ref_id as usize;
-                let prob = *p as f64;
-                let cov_prob = 1.0;
-                denom += counts[target_id] * prob * cov_prob;
-            }
-
-            txps.clear();
-            txp_probs.clear();
-
-            const DISPLAY_THRESH: f64 = 0.001;
-            let mut denom2 = 0.0_f64;
-
-            for (a, p) in izip!(alns, probs) {
-                let target_id = a.ref_id as usize;
-                let prob = *p as f64;
-                let cov_prob = 1.0;
-                let nprob = ((counts[target_id] * prob * cov_prob) / denom).clamp(0.0, 1.0);
-                txps.push(target_id);
-                txp_probs.push(nprob);
-                denom2 += nprob;
-            }
-
-            for p in txp_probs.iter_mut() {
-                *p /= denom2;
-            }
-
-            /*
-            let found = alns.iter().find(|a| {
-                txps_name[a.ref_id as usize] == "SIRV301"
-                    || txps_name[a.ref_id as usize] == "SIRV303"
-            });
-            if found.is_some() {
-                for (a, p) in izip!(alns, txp_probs.iter()) {
-                    let tid = a.ref_id as usize;
-                    let prob = *p;
-                    print!("{}: p = {prob},", txps_name[tid]);
-                }
-                println!();
-            }
-            */
-
-            for (a, p) in izip!(alns, txp_probs.iter()) {
-                let tid = a.ref_id as usize;
-                if *p >= DISPLAY_THRESH {
-                    let prob = *p; //die.sample(&mut rng);
-                    emi.txp_info[tid].add_interval(a.start, a.end, prob);
-                }
-            }
-        }
-
-        //obtaining the Cumulative Distribution Function (CDF) for each transcript
-        logistic_prob(
+        crate::util::coverage::update_coverage(
+            &mut emi,
+            &counts,
             header,
-            emi.txp_info,
             args.growth_rate,
-            &args.bin_width,
+            args.bin_width,
             args.threads,
-        );
-        //Normalize the probabilities for the records of each read
-        normalize_read_probs(emi.eq_map, emi.txp_info, &args.bin_width);
+        )?;
 
         emi.max_iter = args.max_em_iter;
         emi.eq_map.filter_opts.model_coverage = true;
 
-        info!("NOW WE ARE HERE");
         // now run EM to convergence
         counts = if args.threads > 4 {
             em::em_par(&emi, args.threads)
