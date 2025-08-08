@@ -407,8 +407,16 @@ pub struct Args {
     #[arg(short, long, required_unless_present = "only_index")]
     pub output: Option<PathBuf>,
 
+    /// shortcut for the group of filters the user wishes to apply
     #[arg(long, help_heading = "filters", value_enum)]
     pub filter_group: Option<FilterGroup>,
+
+    /// the denominator of the exponential used to downweight the probability of
+    /// an alignment by its score; this is T in the equation exp^((A - Amax)/T)
+    /// where A is the alignment score of the current alignment and Amax is the
+    /// best scoring alignment for this read.
+    #[arg(long, help_heading = "filters", default_value_t = 5.0_f32)]
+    pub alignment_score_denom: f32,
 
     /// maximum allowable distance of the right-most end of an alignment from the 3' transcript end
     #[arg(short, long, help_heading="filters", default_value_t = FilterArg::DefaultI64(u32::MAX as i64), value_parser = parse_filter_i64)]

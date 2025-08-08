@@ -923,6 +923,10 @@ pub struct AlignmentFilters {
     // The growth rate (or `k`) parameter of the logistic
     // function. This only matters if `model_coverage` is true.
     pub logistic_growth_rate: f64,
+    // the denominator in the heat kernel function used to downweight
+    // suboptimal alignments (i.e. the `t` in the equation
+    // exp^((A - Amax)/t)
+    pub alignment_score_denom: f32,
     // To evaluate soft probabilities for fragments starting far
     // from the end.
     pub falloff_dist: Option<FragmentEndFalloffDist>,
@@ -1211,12 +1215,12 @@ impl AlignmentFilters {
         let _min_allowed_score = self.score_threshold * mscore;
 
         for score in scores.iter_mut() {
-            const SCORE_PROB_DENOM: f32 = 5.0;
+            let score_prob_denom = self.alignment_score_denom;
             let fscore = score.0 as f32;
             let score_ok = (fscore * inv_max_score) >= self.score_threshold; //>= thresh_score;
             if score_ok {
                 //let f = ((fscore - mscore) / (mscore - min_allowed_score)) * SCORE_PROB_DENOM;
-                let f = (fscore - mscore) / SCORE_PROB_DENOM;
+                let f = (fscore - mscore) / score_prob_denom;
                 probabilities.push(f.exp() * score.1 as f32);
             } else {
                 score.0 = i32::MIN;
