@@ -71,9 +71,9 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
         }
         x => {
             let mname = match x {
-                FragmentEndModel::FivePrimeStart => "5' end start",
-                FragmentEndModel::ThreePrimeStart => "3' end start",
-                FragmentEndModel::EitherStart => "either end start",
+                FragmentEndModel::FivePrimeStart(d) => format!("5' end start {}", d),
+                FragmentEndModel::ThreePrimeStart(d) => format!("3' end start {}", d),
+                FragmentEndModel::EitherStart(d) => format!("either end start {}", d),
                 FragmentEndModel::None => {
                     anyhow::bail!("Must have a fragment end model at this point")
                 }

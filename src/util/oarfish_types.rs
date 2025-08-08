@@ -817,6 +817,17 @@ pub struct FragmentEndFalloffDist {
     pub model: FragmentEndModel,
 }
 
+// inspired by https://docs.rs/bio-types/latest/src/bio_types/strand.rs.html#81
+fn compatible_ori<T: AlnRecordLike>(a: &T, s: &bio_types::strand::Strand) -> bool {
+    match (a.is_reverse_complemented(), *s) {
+        (true, Strand::Forward) => false,
+        (false, Strand::Forward) => true,
+        (true, Strand::Reverse) => true,
+        (false, Strand::Reverse) => false,
+        (_, Strand::Unknown) => true,
+    }
+}
+
 impl FragmentEndFalloffDist {
     pub fn new(mu: f64, std_dev: f64, thresh: f64, model: FragmentEndModel) -> Self {
         FragmentEndFalloffDist {
@@ -830,30 +841,34 @@ impl FragmentEndFalloffDist {
     pub fn eval_alignment<T: AlnRecordLike>(&self, a: &T, tlenf: f64) -> f64 {
         let thresh = self.thresh;
         let extra_dist = match self.model {
-            FragmentEndModel::ThreePrimeStart => {
+            FragmentEndModel::ThreePrimeStart(ori) => {
                 //           end      clip   txp_end
                 // ========== * ====== ( =======]
                 //               dist
-                if !a.is_reverse_complemented() {
+                if compatible_ori::<T>(a, &ori) {
                     ((tlenf - thresh) - (a.aln_end() as f64)).max(0.)
                 } else {
-                    5000.
+                    tlenf
                 }
             }
-            FragmentEndModel::FivePrimeStart => {
-                if a.is_reverse_complemented() {
+            FragmentEndModel::FivePrimeStart(ori) => {
+                if compatible_ori::<T>(a, &ori) {
                     (a.aln_start() as f64 - thresh).max(0.)
                 } else {
-                    5000.
+                    tlenf
                 }
             }
-            FragmentEndModel::EitherStart => {
+            FragmentEndModel::EitherStart(ori) => {
                 // TODO: It would be nice if we can make an informed choice
                 // here based on alignment orientation, but right now we
                 // will just chose the alignment part closer to the end
-                let three_prime_dist = ((tlenf - thresh) - (a.aln_end() as f64)).max(0.);
-                let five_prime_dist = (a.aln_start() as f64 - thresh).max(0.);
-                three_prime_dist.min(five_prime_dist)
+                if compatible_ori::<T>(a, &ori) {
+                    let three_prime_dist = ((tlenf - thresh) - (a.aln_end() as f64)).max(0.);
+                    let five_prime_dist = (a.aln_start() as f64 - thresh).max(0.);
+                    three_prime_dist.min(five_prime_dist)
+                } else {
+                    tlenf
+                }
             }
             FragmentEndModel::None => 0.,
         };

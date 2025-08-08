@@ -54,9 +54,9 @@ pub enum SequencingTech {
 
 #[derive(Debug, Clone, Copy, Serialize)]
 pub enum FragmentEndModel {
-    ThreePrimeStart,
-    FivePrimeStart,
-    EitherStart,
+    ThreePrimeStart(bio_types::strand::Strand),
+    FivePrimeStart(bio_types::strand::Strand),
+    EitherStart(bio_types::strand::Strand),
     None,
 }
 
@@ -73,9 +73,33 @@ impl clap::builder::TypedValueParser for FragmentEndModelParser {
         value: &std::ffi::OsStr,
     ) -> Result<Self::Value, clap::Error> {
         match value.to_str() {
-            Some("3p-start") => Ok(FragmentEndModel::ThreePrimeStart),
-            Some("5p-start") => Ok(FragmentEndModel::FivePrimeStart),
-            Some("either-start") => Ok(FragmentEndModel::EitherStart),
+            Some("3p-fw") => Ok(FragmentEndModel::ThreePrimeStart(
+                bio_types::strand::Strand::Forward,
+            )),
+            Some("3p-rc") => Ok(FragmentEndModel::ThreePrimeStart(
+                bio_types::strand::Strand::Reverse,
+            )),
+            Some("3p-both") => Ok(FragmentEndModel::ThreePrimeStart(
+                bio_types::strand::Strand::Unknown,
+            )),
+            Some("5p-fw") => Ok(FragmentEndModel::FivePrimeStart(
+                bio_types::strand::Strand::Forward,
+            )),
+            Some("5p-rc") => Ok(FragmentEndModel::FivePrimeStart(
+                bio_types::strand::Strand::Reverse,
+            )),
+            Some("5p-both") => Ok(FragmentEndModel::FivePrimeStart(
+                bio_types::strand::Strand::Unknown,
+            )),
+            Some("either-fw") => Ok(FragmentEndModel::EitherStart(
+                bio_types::strand::Strand::Forward,
+            )),
+            Some("either-rc") => Ok(FragmentEndModel::EitherStart(
+                bio_types::strand::Strand::Reverse,
+            )),
+            Some("either-both") => Ok(FragmentEndModel::EitherStart(
+                bio_types::strand::Strand::Unknown,
+            )),
             Some("none") => Ok(FragmentEndModel::None),
             Some(x) => {
                 let mut err = clap::Error::new(ErrorKind::ValueValidation).with_cmd(cmd);
@@ -99,9 +123,15 @@ impl clap::builder::TypedValueParser for FragmentEndModelParser {
     fn possible_values(&self) -> Option<Box<dyn Iterator<Item = PossibleValue> + '_>> {
         let vals = Box::new(
             vec![
-                PossibleValue::new("3p-start"),
-                PossibleValue::new("5p-start"),
-                PossibleValue::new("either-start"),
+                PossibleValue::new("3p-fw"),
+                PossibleValue::new("3p-rc"),
+                PossibleValue::new("3p-both"),
+                PossibleValue::new("5p-fw"),
+                PossibleValue::new("5p-rc"),
+                PossibleValue::new("5p-both"),
+                PossibleValue::new("either-fw"),
+                PossibleValue::new("either-rc"),
+                PossibleValue::new("either-both"),
                 PossibleValue::new("none"),
             ]
             .into_iter(),
