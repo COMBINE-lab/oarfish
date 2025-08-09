@@ -46,9 +46,13 @@ fn parse_assign_prob_out_value(s: &str) -> anyhow::Result<ReadAssignmentProbOut>
 
 #[derive(Debug, Clone, clap::ValueEnum, Serialize)]
 pub enum SequencingTech {
+    /// Oxford Nanopore cDNA reads
     OntCDNA,
+    /// Oxford Nanopore direct RNA reads
     OntDRNA,
+    /// PacBio CLR reads
     PacBio,
+    /// PacBio HiFi/CCS reads
     PacBioHifi,
 }
 
@@ -379,7 +383,7 @@ pub struct Args {
         long,
         help_heading = "raw read mode",
         required_unless_present = "alignments",
-        value_parser = clap::value_parser!(SequencingTech)
+        value_enum
     )]
     pub seq_tech: Option<SequencingTech>,
 
