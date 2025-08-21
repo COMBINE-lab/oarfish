@@ -11,5 +11,6 @@ pub mod mm_utils;
 pub mod normalize_probability;
 pub mod oarfish_types;
 pub mod parquet_utils;
+pub mod probs;
 pub mod read_function;
 pub mod write_function;

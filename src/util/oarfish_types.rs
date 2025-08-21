@@ -29,6 +29,8 @@ use tracing::{error, info, warn};
 use crate::prog_opts::{FragmentEndModel, ReadAssignmentProbOut};
 use crate::util::constants::EMPTY_READ_NAME;
 
+use crate::util::probs::LogSpace;
+
 pub(crate) struct NamedDigestVec(Vec<(String, DigestResult)>);
 
 impl From<Vec<(String, DigestResult)>> for NamedDigestVec {
@@ -838,7 +840,7 @@ impl FragmentEndFalloffDist {
         }
     }
 
-    pub fn eval_alignment<T: AlnRecordLike>(&self, a: &T, tlenf: f64) -> f64 {
+    pub fn eval_alignment_ln<T: AlnRecordLike>(&self, a: &T, tlenf: f64) -> LogSpace {
         let thresh = self.thresh;
         let extra_dist = match self.model {
             FragmentEndModel::ThreePrimeStart(ori) => {
@@ -872,7 +874,7 @@ impl FragmentEndFalloffDist {
             }
             FragmentEndModel::None => 0.,
         };
-        self.dist.pdf(extra_dist) / self.dist.pdf(0.)
+        LogSpace::new_from_ln(self.dist.ln_pdf(extra_dist) - self.dist.ln_pdf(0.))
     }
 
     /*
@@ -1192,25 +1194,29 @@ impl AlignmentFilters {
         let mut probabilities = Vec::<f32>::with_capacity(ag.len());
         let mscore = best_retained_score as f32;
         let inv_max_score = 1.0 / mscore;
-        let mut m_dist_score = f64::EPSILON;
+        let mut m_dist_score = crate::util::probs::MIN_LOG_P;
+        let mut tot_dist_score = crate::util::probs::MIN_LOG_P;
 
         // get a vector of all of the scores
-        let mut scores: Vec<(i32, f64)> = ag
+        let mut scores: Vec<(i32, LogSpace)> = ag
             .iter_mut()
             .map(|a| {
                 // the alignment is to the - strand
                 let p = if let Some(falloff_dist) = &self.falloff_dist {
                     let tid = a.ref_id(aln_header).expect("valid ref id");
                     let tlenf = txps[tid].lenf;
-                    let p = falloff_dist.eval_alignment::<T>(a, tlenf);
+                    let p = falloff_dist.eval_alignment_ln::<T>(a, tlenf);
                     m_dist_score = m_dist_score.max(p);
                     p
                 } else {
-                    1.
+                    LogSpace::new_from_linear(1.0_f64)
                 };
+                tot_dist_score += p;
                 (a.aln_score().unwrap_or(0) as i32, p)
             })
             .collect();
+
+        scores.iter_mut().for_each(|x| x.1 /= tot_dist_score);
 
         let _min_allowed_score = self.score_threshold * mscore;
 
@@ -1221,7 +1227,7 @@ impl AlignmentFilters {
             if score_ok {
                 //let f = ((fscore - mscore) / (mscore - min_allowed_score)) * SCORE_PROB_DENOM;
                 let f = (fscore - mscore) / score_prob_denom;
-                probabilities.push(f.exp() * score.1 as f32);
+                probabilities.push(f.exp() * score.1.get_linear() as f32);
             } else {
                 score.0 = i32::MIN;
                 discard_table.discard_score += 1;
