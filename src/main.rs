@@ -9,7 +9,7 @@ use util::oarfish_types::{FragmentEndFalloffDist, NamedDigestVec};
 //use minimap2_temp as minimap2;
 use num_format::{Locale, ToFormattedString};
 use std::{fs::File, io};
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter, fmt, prelude::*};
 
 use noodles_bam as bam;
