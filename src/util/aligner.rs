@@ -16,7 +16,6 @@ use num_format::{Locale, ToFormattedString};
 use std::ffi::CStr;
 use std::fs::File;
 use std::num::NonZeroUsize;
-use std::ops::Deref;
 use std::sync::Arc;
 
 use tracing::{info, warn};
