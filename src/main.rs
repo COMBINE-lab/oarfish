@@ -9,7 +9,7 @@ use util::oarfish_types::{FragmentEndFalloffDist, NamedDigestVec};
 //use minimap2_temp as minimap2;
 use num_format::{Locale, ToFormattedString};
 use std::{fs::File, io};
-use tracing::{info, warn};
+use tracing::info;
 use tracing_subscriber::{EnvFilter, filter::LevelFilter, fmt, prelude::*};
 
 use noodles_bam as bam;
@@ -83,11 +83,14 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 mname, args.end_dist_std_dev, args.end_dist_thresh
             );
 
+            let frag_min_prob = args.frag_min_prob.ln();
+
             Some(FragmentEndFalloffDist::new(
                 0.,
                 args.end_dist_std_dev,
                 args.end_dist_thresh,
                 args.fragment_end_model,
+                frag_min_prob,
             ))
         }
     };

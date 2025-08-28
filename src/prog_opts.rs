@@ -1,11 +1,12 @@
 use clap::builder::PossibleValue;
 use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Parser, builder::ArgPredicate};
+use core::f64;
 use parse_size::parse_size;
 use serde::Serialize;
 use std::fmt;
 use std::path::PathBuf;
-use tracing::info;
+use tracing::{info, warn};
 
 /// These represent different "meta-options", specific settings
 /// for all of the different filters that should be applied in
@@ -14,6 +15,24 @@ use tracing::info;
 pub enum FilterGroup {
     NoFilters,
     NanocountFilters,
+}
+
+fn valid_prob(p: &str) -> Result<f64, String> {
+    let p = p
+        .parse::<f64>()
+        .map_err(|_| "Invalid floating point number")?;
+    if p < f64::EPSILON {
+        warn!(
+            "probability < epsilon not allowed, using {} instead of {p}",
+            f64::EPSILON
+        );
+        Ok(f64::EPSILON)
+    } else if p > 1.0f64 {
+        warn!("probability > 1 not allowed; using 1");
+        Ok(1.0f64)
+    } else {
+        Ok(p)
+    }
 }
 
 fn parse_strand(arg: &str) -> anyhow::Result<bio_types::strand::Strand> {
@@ -465,6 +484,11 @@ pub struct Args {
     /// the type of fragment end model to apply
     #[arg(long, help_heading = "coverage model", value_parser = FragmentEndModelParser)]
     pub fragment_end_model: FragmentEndModel,
+
+    /// the smallest probability that will be given under the fragment end model; probabilities
+    /// smaller than this value will be replaced by this value.
+    #[arg(long, help_heading = "coverage model", default_value_t = f64::EPSILON, value_parser = valid_prob)]
+    pub frag_min_prob: f64,
 
     /// standard deviation of the truncated normal used to down-weight fragments
     /// starting too far from the sequenced end of the transcript.

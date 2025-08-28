@@ -51,27 +51,34 @@ impl ops::AddAssign<LogSpace> for LogSpace {
 impl ops::Mul<LogSpace> for LogSpace {
     type Output = LogSpace;
 
+    // because we are in log space / is -
+    #[allow(clippy::suspicious_arithmetic_impl)]
     fn mul(self, rhs: LogSpace) -> Self::Output {
         LogSpace { v: self.v + rhs.v }
     }
 }
 
 impl ops::MulAssign<LogSpace> for LogSpace {
+    // because we are in log space / is -
+    #[allow(clippy::suspicious_op_assign_impl)]
     fn mul_assign(&mut self, rhs: Self) {
-        self.v = self.v + rhs.v;
+        self.v += rhs.v;
     }
 }
 
 impl ops::Div<LogSpace> for LogSpace {
     type Output = LogSpace;
-
+    // because we are in log space / is -
+    #[allow(clippy::suspicious_arithmetic_impl)]
     fn div(self, rhs: LogSpace) -> Self::Output {
         LogSpace { v: self.v - rhs.v }
     }
 }
 
 impl ops::DivAssign<LogSpace> for LogSpace {
+    // because we are in log space / is -
+    #[allow(clippy::suspicious_op_assign_impl)]
     fn div_assign(&mut self, rhs: Self) {
-        self.v = self.v - rhs.v;
+        self.v -= rhs.v;
     }
 }

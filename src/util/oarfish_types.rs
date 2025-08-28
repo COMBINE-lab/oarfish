@@ -817,6 +817,7 @@ pub struct FragmentEndFalloffDist {
     pub dist: statrs::distribution::Normal,
     pub thresh: f64,
     pub model: FragmentEndModel,
+    pub log_min_prob: f64,
 }
 
 // inspired by https://docs.rs/bio-types/latest/src/bio_types/strand.rs.html#81
@@ -831,12 +832,19 @@ fn compatible_ori<T: AlnRecordLike>(a: &T, s: &bio_types::strand::Strand) -> boo
 }
 
 impl FragmentEndFalloffDist {
-    pub fn new(mu: f64, std_dev: f64, thresh: f64, model: FragmentEndModel) -> Self {
+    pub fn new(
+        mu: f64,
+        std_dev: f64,
+        thresh: f64,
+        model: FragmentEndModel,
+        log_min_prob: f64,
+    ) -> Self {
         FragmentEndFalloffDist {
             dist: Normal::new(mu, std_dev)
                 .expect("should be able to construct a normal distribution"),
             thresh,
             model,
+            log_min_prob,
         }
     }
 
@@ -874,7 +882,9 @@ impl FragmentEndFalloffDist {
             }
             FragmentEndModel::None => 0.,
         };
-        LogSpace::new_from_ln(self.dist.ln_pdf(extra_dist) - self.dist.ln_pdf(0.))
+        let p = self.dist.ln_pdf(extra_dist) - self.dist.ln_pdf(0.);
+        let minp = self.log_min_prob;
+        LogSpace::new_from_ln(p.max(minp))
     }
 
     /*
