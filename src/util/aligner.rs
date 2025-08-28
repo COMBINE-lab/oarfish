@@ -13,7 +13,7 @@ use noodles_sam::header::record::value::Map as HeaderMap;
 
 use num_format::{Locale, ToFormattedString};
 
-use std::ffi;
+use std::ffi::CStr;
 use std::fs::File;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -89,12 +89,12 @@ pub(crate) fn get_aligner_from_fastas(
     let input_source = get_ref_source(args.annotated.clone(), args.novel.clone())?;
 
     // if the user requested to write the output index to disk, prepare for that
-    let idx_out_as_str = args.index_out.clone().map_or(String::new(), |x| {
+    let idx_out_as_str = args.index_out.clone().map(|x| {
         x.to_str()
             .expect("could not convert PathBuf to &str")
             .to_owned()
     });
-    let idx_output = args.index_out.as_ref().map(|_| idx_out_as_str.as_str());
+    let idx_output: Option<&str> = idx_out_as_str.as_deref();
 
     // create the aligner
     let mut aligner = make_aligner(
@@ -270,7 +270,7 @@ fn make_header(
                     i, n_seq
                 )
             });
-            let c_str = unsafe { ffi::CStr::from_ptr(seq.name) };
+            let c_str = unsafe { CStr::from_ptr(seq.name) };
             let rust_str = c_str.to_str().unwrap().to_string();
             header = header.add_reference_sequence(
                 rust_str,

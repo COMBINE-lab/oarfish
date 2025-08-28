@@ -66,10 +66,10 @@ sprs = "0.11.3"
 
 # alternative sources for dev
 minimap2-sys = { version = "0.1.23" } #, git = "https://github.com/rob-p/minimap2-rs.git", branch = "main" }
-minimap2 = { version = "0.1.27" }     # git = "https://github.com/rob-p/minimap2-rs.git", branch = "main" }
+minimap2 = { version = "0.1.28" }     # git = "https://github.com/rob-p/minimap2-rs.git", branch = "main" }
 
 needletail = "0.6.3"
-indicatif = "0.17.11"
+indicatif = "0.18.0"
 rustc-hash = "2.1.1"
 parse-size = "1.1.0"
 niffler = "3.0.0"
