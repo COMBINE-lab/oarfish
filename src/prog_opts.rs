@@ -495,7 +495,6 @@ pub struct Args {
     #[arg(
         long,
         help_heading = "coverage model",
-        conflicts_with = "disable_end_dist",
         value_parser,
         default_value_t = 100.
     )]
@@ -506,16 +505,10 @@ pub struct Args {
     #[arg(
         long,
         help_heading = "coverage model",
-        conflicts_with = "disable_end_dist",
         value_parser,
         default_value_t = 100.
     )]
     pub end_dist_thresh: f64,
-
-    /// don't apply a model to downweight fragments starting too far from the sequenced
-    /// end of the transcript
-    #[arg(long, help_heading = "coverage model", value_parser)]
-    pub disable_end_dist: bool,
 
     /// if using the coverage model, use this as the value of `k` in the logistic equation
     #[arg(
