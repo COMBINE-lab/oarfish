@@ -19,6 +19,7 @@ mod alignment_parser;
 mod bootstrap;
 mod bulk;
 mod em;
+mod gibbs_sampler;
 mod prog_opts;
 mod single_cell;
 mod util;
