@@ -77,6 +77,7 @@ humantime = "2.2.0"
 rand_distr = "0.5.1"
 serde_with = "3.14.0"
 logsumexp = "0.1.0"
+rv = "0.18.1"
 
 [[bin]]
 name = "oarfish"

@@ -487,6 +487,12 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     pub kde_model: Option<KDEModel>,
 }
 
+impl<'eqm, 'tinfo, 'h> EMInfo<'eqm, 'tinfo, 'h> {
+    pub fn num_txps(&self) -> usize {
+        self.txp_info.len()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TranscriptInfo {
     pub len: NonZeroUsize,
