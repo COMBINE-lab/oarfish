@@ -4,12 +4,27 @@ use crate::util::constants;
 use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
 use crate::util::probs::LogSpace;
 use itertools::*;
-use rand::Rng;
-use rand::distr::{Distribution, Uniform};
+use rand::distr::Distribution;
 use rand_distr::weighted::WeightedIndex;
-use rv::prelude::*;
+use tracing::info;
 
-pub fn update_chain<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a>(
+pub(crate) struct SamplerParams {
+    pub a_dir: f64,
+    pub a_act: f64,
+    pub b_act: f64,
+    pub niter: u64,
+}
+
+/// make a pass over all of the alignments and, given the current state of the chain, sample
+/// a new assignment for each read based on the complete conditional of the rest of the
+/// assignments.
+///
+/// This implements the collapsed Gibbs sampler from BitSeq (though currently without a noise
+/// transcript term).
+///
+/// The return value is the log-likelihood of the newly-sampled chain.
+fn update_chain<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a>(
+    sampler_params: &SamplerParams,
     eq_map_iter: I,
     tinfo: &[TranscriptInfo],
     model_coverage: bool,
@@ -18,13 +33,14 @@ pub fn update_chain<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [
 ) where
     DFn: Fn(usize, usize) -> f64,
 {
-    let a_dir = 1f64;
-    let a_act = 2f64;
-    let _b_act = 1f64;
+    let a_dir = sampler_params.a_dir;
+    let a_act = sampler_params.a_act;
+    let _b_act = sampler_params.b_act;
 
     let mut rng = rand::rng();
     let mut txp_ids = Vec::new();
     let mut txp_probs = Vec::new();
+    let mut txp_cond_probs = Vec::new();
 
     let tot_reads = (chain_state.assigned_ids.len() - 1) as f64;
     let num_txps = chain_state.counts.len() as f64;
@@ -32,6 +48,7 @@ pub fn update_chain<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [
     for (read_id, (alns, probs, coverage_probs)) in eq_map_iter.enumerate() {
         txp_ids.clear();
         txp_probs.clear();
+        txp_cond_probs.clear();
 
         let assigned_tid = chain_state.assigned_ids[read_id];
         // remove this read from this transcript
@@ -49,11 +66,13 @@ pub fn update_chain<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [
             let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
             let dens_prob = density_fn(txp_len, aln_len);
-
-            let sprob = (prob * cov_prob * dens_prob)
+            let cond_prob = prob * cov_prob * dens_prob;
+            let sprob = cond_prob
                 * (a_act + tot_reads)
                 * ((a_dir + chain_state.counts[a.ref_id as usize] as f64)
                     / (num_txps * a_dir + tot_reads));
+
+            txp_cond_probs.push(LogSpace::new_from_linear(cond_prob));
             txp_ids.push(a.ref_id);
             txp_probs.push(sprob);
             denom += sprob;
@@ -68,17 +87,26 @@ pub fn update_chain<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [
             chain_state.assigned_ids[read_id] = new_assigned_tid;
             // update the count accordingly
             chain_state.counts[new_assigned_tid as usize] += 1;
+            // update the conditional probability
+            chain_state.cond_probs[read_id] = txp_cond_probs[s];
         } else {
             chain_state.counts[assigned_tid as usize] += 1;
+            // conditional probability remains the same
         }
     }
 }
 
-fn run_sampler<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a, F: Fn() -> I>(
+/// run the sampler and return the highest log likelihood assignments
+pub fn run_sampler<
+    'a,
+    I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
+    F: Fn() -> I,
+>(
+    sampler_params: SamplerParams,
     em_info: &'a EMInfo,
     ml_abundances: &[f64], // abundances obtained from the EM algorithm
     make_iter: F,
-) {
+) -> Vec<u32> {
     let mut cs = init_counts_and_assignments(em_info, ml_abundances, make_iter);
     let make_iter = || em_info.eq_map.iter();
     let tinfo = &em_info.txp_info;
@@ -91,36 +119,43 @@ fn run_sampler<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + '
         }
     };
 
-    let mut best_log_assignments: Vec<u32>;
-    let mut best_log_likelihood = crate::util::probs::MIN_LOG_P.get_linear();
-    for _ in 0..100 {
-        update_chain(make_iter(), tinfo, model_coverage, density_fn, &mut cs);
+    let mut best_log_assignments: Vec<u32> = Vec::new();
+    let mut best_log_likelihood = f64::NEG_INFINITY;
+    for i in 0..sampler_params.niter {
+        info!("posterior Gibbs sampler iteration {i}");
+        update_chain(
+            &sampler_params,
+            make_iter(),
+            tinfo,
+            model_coverage,
+            density_fn,
+            &mut cs,
+        );
         let ll = cs.log_likelihood();
         if ll > best_log_likelihood {
             best_log_likelihood = ll;
             best_log_assignments = cs.assigned_ids.clone();
         }
     }
+
+    best_log_assignments
 }
 
 struct ChainState {
     pub counts: Vec<u64>, // the current (integer) assignment of counts to each transcript
     pub assigned_ids: Vec<u32>, // the current assignment of each read to a transcript of origin
+    pub cond_probs: Vec<LogSpace>, // conditional assignment probabilites for each currently assigned read (in log space)
+    pub tot_counts: u64,
 }
 
 impl ChainState {
-    pub fn log_likelihood(&self) -> f64 {
-        let mut ll = crate::util::probs::MIN_LOG_P;
-        let tot: u64 = self.counts.iter().sum();
-        let norm = LogSpace::new_from_linear(1f64 / (tot as f64));
-        for c in &self.counts {
-            let log_c = LogSpace::new_from_linear(*c as f64);
-            // get the actual f64 out so we can apply the identity that
-            // log_b(x^p) = p * log_b(x)
-            let ll_contrib = log_c.get_ln() * (log_c * norm).get_ln();
-            ll += LogSpace::new_from_ln(ll_contrib);
+    fn log_likelihood(&self) -> f64 {
+        let mut ll = LogSpace::new_from_linear(1f64);
+        let norm = 1f64 / (self.tot_counts as f64);
+        for (t_assign, c_prob) in self.assigned_ids.iter().zip(self.cond_probs.iter()) {
+            ll *= LogSpace::new_from_linear(self.counts[*t_assign as usize] as f64 * norm)
+                * (*c_prob);
         }
-
         ll.get_ln()
     }
 }
@@ -136,6 +171,7 @@ fn init_counts_and_assignments<
 ) -> ChainState {
     let mut counts = vec![0; em_info.num_txps()];
     let mut assigned_ids: Vec<u32> = Vec::new();
+    let mut cond_probs: Vec<LogSpace> = Vec::new();
     let tinfo = &em_info.txp_info;
     let fops = &em_info.eq_map.filter_opts;
     let model_coverage = fops.model_coverage;
@@ -149,9 +185,15 @@ fn init_counts_and_assignments<
     let mut rng = rand::rng();
     let mut txp_ids = Vec::new();
     let mut txp_probs = Vec::new();
+    let mut txp_cond_probs = Vec::new();
+
+    let mut tot_counts = 0;
+
     for (alns, probs, coverage_probs) in make_iter() {
         txp_ids.clear();
         txp_probs.clear();
+        txp_cond_probs.clear();
+
         let mut denom = 0.0_f64;
         for (a, p, cp) in izip!(alns, probs, coverage_probs) {
             // Compute the probability of assignment of the
@@ -165,9 +207,11 @@ fn init_counts_and_assignments<
             let cov_prob = if model_coverage { *cp } else { 1.0 };
             let dens_prob = density_fn(txp_len, aln_len);
 
-            let sprob = ml_abundances[target_id] * prob * cov_prob * dens_prob;
+            let cond_prob = prob * cov_prob * dens_prob;
+            let sprob = ml_abundances[target_id];
             txp_ids.push(a.ref_id);
             txp_probs.push(sprob);
+            txp_cond_probs.push(cond_prob);
             denom += sprob;
         }
 
@@ -176,11 +220,16 @@ fn init_counts_and_assignments<
             let cat = WeightedIndex::new(&txp_probs).unwrap();
             let s = cat.sample(&mut rng);
             assigned_ids.push(txp_ids[s]);
+            counts[txp_ids[s] as usize] += 1;
+            cond_probs.push(LogSpace::new_from_linear(txp_cond_probs[s]));
+            tot_counts += 1;
         }
     }
 
     ChainState {
         counts,
         assigned_ids,
+        cond_probs,
+        tot_counts,
     }
 }

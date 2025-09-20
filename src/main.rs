@@ -133,6 +133,8 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .alignment_score_denom(args.alignment_score_denom)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
+                .write_assignments(args.write_assignments.is_some())
+                .write_assignments_type(args.write_assignments.clone())
                 .build())
         }
         Some(FilterGroup::NanocountFilters) => {
@@ -170,6 +172,8 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .alignment_score_denom(args.alignment_score_denom)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
+                .write_assignments(args.write_assignments.is_some())
+                .write_assignments_type(args.write_assignments.clone())
                 .build())
         }
         None => {
@@ -187,6 +191,8 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .alignment_score_denom(args.alignment_score_denom)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
+                .write_assignments(args.write_assignments.is_some())
+                .write_assignments_type(args.write_assignments.clone())
                 .build())
         }
     }

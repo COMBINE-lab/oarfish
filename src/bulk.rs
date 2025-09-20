@@ -216,7 +216,26 @@ fn perform_inference_and_write_output(
         write_infrep_file(args.output.as_ref().expect("present"), bs_fields, chunk)?;
     }
 
-    if args.write_assignment_probs.is_some() {
+    // if we are writing out posterior probabilities or actual assignments
+    if args.write_assignment_probs.is_some() || args.write_assignments.is_some() {
+        // if we are writing out actual assignments, do the sampling now
+        let assignments = if args.write_assignments.is_some() {
+            let make_iter = || emi.eq_map.iter();
+            let sampler_params = crate::gibbs_sampler::SamplerParams {
+                a_dir: 2f64,
+                a_act: 1f64,
+                b_act: 1f64,
+                niter: 100,
+            };
+            Some(crate::gibbs_sampler::run_sampler(
+                sampler_params,
+                &emi,
+                &counts,
+                make_iter,
+            ))
+        } else {
+            None
+        };
         let name_vec = name_vec
             .expect("cannot write assignment probabilities without valid vector of read names");
         write_out_prob(
@@ -224,6 +243,7 @@ fn perform_inference_and_write_output(
             &emi,
             &counts,
             name_vec,
+            assignments,
             txps_name,
         )?;
     }
@@ -240,7 +260,7 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
     args: &Args,
     seqcol_digest: NamedDigestVec,
 ) -> anyhow::Result<()> {
-    let mut name_vec = if filter_opts.write_assignment_probs {
+    let mut name_vec = if filter_opts.write_assignment_probs || filter_opts.write_assignments {
         Some(SwapVec::<String>::with_config(SwapVecConfig {
             swap_after: Default::default(),
             batch_size: Default::default(),
@@ -433,7 +453,8 @@ pub fn quantify_bulk_alignments_raw_reads(
             ) = bounded(args.threads * 100);
 
             // Consumer threads: receive sequences and perform alignment
-            let write_assignment_probs: bool = args.write_assignment_probs.is_some();
+            let write_assignment_probs: bool =
+                args.write_assignment_probs.is_some() || args.write_assignments.is_some();
             let consumers: Vec<_> = (0..map_threads)
                 .map(|_| {
                     let receiver = read_receiver.clone();
@@ -523,7 +544,9 @@ pub fn quantify_bulk_alignments_raw_reads(
             let txps_mut = txps.as_mut();
             let filter_opts_store = filter_opts.clone();
             let aln_group_consumer = s.spawn(move || {
-                let mut name_vec = if filter_opts_store.write_assignment_probs {
+                let mut name_vec = if filter_opts_store.write_assignment_probs
+                    || filter_opts_store.write_assignments
+                {
                     Some(SwapVec::<String>::with_config(SwapVecConfig {
                         swap_after: Default::default(),
                         batch_size: Default::default(),

@@ -26,7 +26,7 @@ use sam::{Header, alignment::record::data::field::tag::Tag as AlnTag};
 #[allow(unused_imports)]
 use tracing::{error, info, warn};
 
-use crate::prog_opts::{FragmentEndModel, ReadAssignmentProbOut};
+use crate::prog_opts::{FragmentEndModel, ReadAssignmentOut, ReadAssignmentProbOut};
 use crate::util::constants::EMPTY_READ_NAME;
 
 use crate::util::probs::LogSpace;
@@ -952,6 +952,10 @@ pub struct AlignmentFilters {
     // false otherwise.
     pub write_assignment_probs: bool,
     pub write_assignment_probs_type: Option<ReadAssignmentProbOut>,
+    // True if we are enabling to output the alignment assignments
+    // false otherwise.
+    pub write_assignments: bool,
+    pub write_assignments_type: Option<ReadAssignmentOut>,
 }
 
 /// This structure records information about

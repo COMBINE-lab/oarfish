@@ -64,6 +64,25 @@ fn parse_assign_prob_out_value(s: &str) -> anyhow::Result<ReadAssignmentProbOut>
 }
 
 #[derive(Debug, Clone, clap::ValueEnum, Serialize)]
+pub enum ReadAssignmentOut {
+    Uncompressed,
+    Compressed,
+}
+
+fn parse_assign_out_value(s: &str) -> anyhow::Result<ReadAssignmentOut> {
+    match s.to_lowercase().as_str() {
+        "raw" => Ok(ReadAssignmentOut::Uncompressed),
+        "uncompressed" => Ok(ReadAssignmentOut::Uncompressed),
+        "compressed" => Ok(ReadAssignmentOut::Compressed),
+        "lz4" => Ok(ReadAssignmentOut::Compressed),
+        x => anyhow::bail!(
+            "Cannot parse {} as a valid option for read assignment probability output",
+            x
+        ),
+    }
+}
+
+#[derive(Debug, Clone, clap::ValueEnum, Serialize)]
 pub enum SequencingTech {
     /// Oxford Nanopore cDNA reads
     OntCDNA,
@@ -533,6 +552,21 @@ pub struct Args {
         value_parser = parse_assign_prob_out_value
     )]
     pub write_assignment_probs: Option<ReadAssignmentProbOut>,
+
+    /// write output alignment assignments (optionally compressed) for each mapped read.
+    /// If <WRITE_ASSIGNMENT_PROBS> is present, it must be one of `uncompressed` (default) or
+    /// `compressed`, which will cause the output file to be lz4 compressed. Note this is
+    /// not the posterior probabilites as above, but hard assignments for each read.
+    #[arg(
+        long,
+        help_heading = "output read-txps assignments",
+        conflicts_with = "single_cell",
+        default_missing_value = "uncompressed",
+        num_args = 0..=1,
+        require_equals = true,
+        value_parser = parse_assign_out_value
+    )]
+    pub write_assignments: Option<ReadAssignmentOut>,
 
     /// maximum number of iterations for which to run the EM algorithm
     #[arg(long, help_heading = "EM", default_value_t = 1000)]
