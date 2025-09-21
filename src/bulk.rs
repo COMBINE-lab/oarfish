@@ -225,7 +225,7 @@ fn perform_inference_and_write_output(
                 a_dir: 2f64,
                 a_act: 1f64,
                 b_act: 1f64,
-                niter: 100,
+                niter: args.num_gibbs_samples,
             };
             Some(crate::gibbs_sampler::run_sampler(
                 sampler_params,

@@ -6,13 +6,41 @@ use crate::util::probs::LogSpace;
 use itertools::*;
 use rand::distr::Distribution;
 use rand_distr::weighted::WeightedIndex;
+use std::default::Default;
 use tracing::info;
 
+/// The parameters to be used for the Gibbs sampler. The
+/// default values are taken from the BitSeq[1] paper, though
+/// currently the "noise" transcript estimation is not performed.
+/// reference:
+/// 1) Glaus, P., Honkela, A., & Rattray, M. (2012).
+///    Identifying differentially expressed transcripts from RNA-seq data with biological variation.
+///    Bioinformatics, 28(13), 1721-1728.
 pub(crate) struct SamplerParams {
     pub a_dir: f64,
     pub a_act: f64,
     pub b_act: f64,
     pub niter: u64,
+}
+
+impl Default for SamplerParams {
+    fn default() -> Self {
+        Self {
+            a_dir: 1f64,
+            a_act: 2f64,
+            b_act: 2f64,
+            niter: 100u64,
+        }
+    }
+}
+
+impl SamplerParams {
+    fn new_bitseq_with_iter(niter: u64) -> Self {
+        Self {
+            niter,
+            ..Default::default()
+        }
+    }
 }
 
 /// make a pass over all of the alignments and, given the current state of the chain, sample
@@ -42,17 +70,28 @@ fn update_chain<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64]
     let mut txp_probs = Vec::new();
     let mut txp_cond_probs = Vec::new();
 
+    // -1 because we will use this to normalize each step in the chain
+    // where we have removed 1 read
     let tot_reads = (chain_state.assigned_ids.len() - 1) as f64;
+    // total number of transcripts in the transcriptome (not just expressed)
     let num_txps = chain_state.counts.len() as f64;
 
     for (read_id, (alns, probs, coverage_probs)) in eq_map_iter.enumerate() {
+        // if this is a uniquely-aligned read, don't bother with
+        // all of this
+        if alns.len() == 1 {
+            continue;
+        }
+        // clear out our temporary storage vectors
         txp_ids.clear();
         txp_probs.clear();
         txp_cond_probs.clear();
 
-        let assigned_tid = chain_state.assigned_ids[read_id];
-        // remove this read from this transcript
-        chain_state.counts[assigned_tid as usize] -= 1;
+        // the ID assigned to this transcript before the reassignment
+        let assigned_tid: usize = chain_state.assigned_ids[read_id] as usize;
+        // remove this read from this transcript's counts
+        chain_state.counts[assigned_tid] -= 1;
+        // the normalizing constant
         let mut denom = 0.0_f64;
 
         for (a, p, cp) in izip!(alns, probs, coverage_probs) {
@@ -82,21 +121,22 @@ fn update_chain<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64]
         if denom > constants::EM_DENOM_THRESH {
             let cat = WeightedIndex::new(&txp_probs).unwrap();
             let s = cat.sample(&mut rng);
-            let new_assigned_tid = txp_ids[s];
+            let new_assigned_tid = txp_ids[s] as usize;
             // set the assignment for this read
-            chain_state.assigned_ids[read_id] = new_assigned_tid;
+            chain_state.assigned_ids[read_id] = new_assigned_tid as u32;
             // update the count accordingly
-            chain_state.counts[new_assigned_tid as usize] += 1;
+            chain_state.counts[new_assigned_tid] += 1;
             // update the conditional probability
             chain_state.cond_probs[read_id] = txp_cond_probs[s];
         } else {
-            chain_state.counts[assigned_tid as usize] += 1;
+            // the read doesn't move
+            chain_state.counts[assigned_tid] += 1;
             // conditional probability remains the same
         }
     }
 }
 
-/// run the sampler and return the highest log likelihood assignments
+/// run the sampler and return the highest log-likelihood assignments
 pub fn run_sampler<
     'a,
     I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
@@ -107,10 +147,12 @@ pub fn run_sampler<
     ml_abundances: &[f64], // abundances obtained from the EM algorithm
     make_iter: F,
 ) -> Vec<u32> {
+    // use the EM abundance estimates to initialize discrete assignments
     let mut cs = init_counts_and_assignments(em_info, ml_abundances, make_iter);
     let make_iter = || em_info.eq_map.iter();
     let tinfo = &em_info.txp_info;
     let fops = &em_info.eq_map.filter_opts;
+
     let model_coverage = fops.model_coverage;
     let density_fn = |x, y| -> f64 {
         match em_info.kde_model {
@@ -119,6 +161,8 @@ pub fn run_sampler<
         }
     };
 
+    // we'll keep track of the best log-likelihood we've seen so far as
+    // well as the assignments that gave rise to it.
     let mut best_log_assignments: Vec<u32> = Vec::new();
     let mut best_log_likelihood = f64::NEG_INFINITY;
     for i in 0..sampler_params.niter {
@@ -135,6 +179,7 @@ pub fn run_sampler<
         if ll > best_log_likelihood {
             best_log_likelihood = ll;
             best_log_assignments = cs.assigned_ids.clone();
+            info!("new best log-likelihood = {}", best_log_likelihood);
         }
     }
 

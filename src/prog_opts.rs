@@ -568,6 +568,17 @@ pub struct Args {
     )]
     pub write_assignments: Option<ReadAssignmentOut>,
 
+    /// The number of iterations to run the Gibbs chain if (and only if) assignments are being
+    /// requested
+    #[arg(
+        long,
+        help_heading = "output read-txps assignments",
+        conflicts_with = "single_cell",
+        requires = "write_assignments",
+        default_value_t = 100u64
+    )]
+    pub num_gibbs_samples: u64,
+
     /// maximum number of iterations for which to run the EM algorithm
     #[arg(long, help_heading = "EM", default_value_t = 1000)]
     pub max_em_iter: u32,
