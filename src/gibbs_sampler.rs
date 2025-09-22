@@ -165,8 +165,19 @@ pub fn run_sampler<
     // well as the assignments that gave rise to it.
     let mut best_log_assignments: Vec<u32> = Vec::new();
     let mut best_log_likelihood = f64::NEG_INFINITY;
-    for i in 0..sampler_params.niter {
-        info!("posterior Gibbs sampler iteration {i}");
+    let bar = indicatif::ProgressBar::new(sampler_params.niter);
+    bar.set_style(
+        indicatif::ProgressStyle::with_template(
+            "[{elapsed_precise}] {bar:20.green/blue} {msg} {human_pos:>12}",
+        )
+        .unwrap()
+        .tick_chars("⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈⠈"),
+    );
+    bar.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
+
+    for _ in 0..sampler_params.niter {
+        //info!("posterior Gibbs sampler iteration {i}");
+        bar.inc(1);
         update_chain(
             &sampler_params,
             make_iter(),
@@ -179,9 +190,14 @@ pub fn run_sampler<
         if ll > best_log_likelihood {
             best_log_likelihood = ll;
             best_log_assignments = cs.assigned_ids.clone();
-            info!("new best log-likelihood = {}", best_log_likelihood);
+            //info!("new best log-likelihood = {}", best_log_likelihood);
+            bar.set_message(format!(
+                "best log-likelihood so far {}",
+                best_log_likelihood
+            ));
         }
     }
+    bar.finish();
 
     best_log_assignments
 }
