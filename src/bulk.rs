@@ -1,3 +1,4 @@
+use crate::util::collapsed_gibbs_sampler;
 use crate::NamedDigestVec;
 use crate::alignment_parser;
 use crate::em;
@@ -11,7 +12,7 @@ use crate::util::oarfish_types::{
     ReadSource, TranscriptInfo,
 };
 use crate::util::read_function::read_short_quant_vec;
-use crate::util::write_function::{write_infrep_file, write_out_prob, write_output};
+use crate::util::write_function::{write_infrep_file, write_output, write_out_prob_assignment};
 use crate::{logistic_prob, normalize_read_probs};
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use crossbeam::channel::Receiver;
@@ -71,6 +72,7 @@ fn get_json_info(
         "threads": &args.threads,
         "filter_group": &args.filter_group,
         "write_assignment_probs": &emi.eq_map.filter_opts.write_assignment_probs_type,
+        "collapsed_gibbs_sampler": &emi.eq_map.filter_opts.collapsed_gibbs_sampler_type,
         "short_quant": &args.short_quant,
         "num_bootstraps": &args.num_bootstraps,
         "digest": seqcol_digest.to_json()
@@ -156,6 +158,8 @@ fn perform_inference_and_write_output(
         em::em(&emi, args.threads)
     };
 
+    let (hard_assign, read_candidate) = collapsed_gibbs_sampler::collapsed_sequential(&emi);
+
     let aux_txp_counts = crate::util::aux_counts::get_aux_counts(store, txps)?;
 
     // prepare the JSON object we'll write
@@ -191,15 +195,22 @@ fn perform_inference_and_write_output(
         write_infrep_file(args.output.as_ref().expect("present"), bs_fields, chunk)?;
     }
 
-    if args.write_assignment_probs.is_some() {
+
+    if args.collapsed_gibbs_sampler.is_some() || args.write_assignment_probs.is_some() {
+
         let name_vec = name_vec
-            .expect("cannot write assignment probabilities without valid vector of read names");
-        write_out_prob(
+                .expect("cannot write assignment probabilities without valid vector of read names");
+
+        write_out_prob_assignment(
             args.output.as_ref().expect("present"),
             &emi,
             &counts,
+            &hard_assign,
+            &read_candidate,
             name_vec,
             txps_name,
+            args.write_assignment_probs.is_some(),
+            args.collapsed_gibbs_sampler.is_some(),
         )?;
     }
 
@@ -215,7 +226,8 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
     args: &Args,
     seqcol_digest: NamedDigestVec,
 ) -> anyhow::Result<()> {
-    let mut name_vec = if filter_opts.write_assignment_probs {
+
+    let mut name_vec = if filter_opts.write_assignment_probs || filter_opts.collapsed_gibbs_sampler {
         Some(SwapVec::<String>::with_config(SwapVecConfig {
             swap_after: Default::default(),
             batch_size: Default::default(),

@@ -98,6 +98,8 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .logistic_growth_rate(args.growth_rate)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
+                .collapsed_gibbs_sampler(args.collapsed_gibbs_sampler.is_some())
+                .collapsed_gibbs_sampler_type(args.collapsed_gibbs_sampler.clone())
                 .build())
         }
         Some(FilterGroup::NanocountFilters) => {
@@ -133,6 +135,8 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .logistic_growth_rate(args.growth_rate)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
+                .collapsed_gibbs_sampler(args.collapsed_gibbs_sampler.is_some())
+                .collapsed_gibbs_sampler_type(args.collapsed_gibbs_sampler.clone())
                 .build())
         }
         None => {
@@ -148,6 +152,8 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .logistic_growth_rate(args.growth_rate)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
+                .collapsed_gibbs_sampler(args.collapsed_gibbs_sampler.is_some())
+                .collapsed_gibbs_sampler_type(args.collapsed_gibbs_sampler.clone())
                 .build())
         }
     }

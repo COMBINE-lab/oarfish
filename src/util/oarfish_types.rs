@@ -821,6 +821,11 @@ pub struct AlignmentFilters {
     // false otherwise.
     pub write_assignment_probs: bool,
     pub write_assignment_probs_type: Option<ReadAssignmentProbOut>,
+
+    // True if we are enabling to output the hard assignment and
+    // false otherwise.
+    pub collapsed_gibbs_sampler: bool,
+    pub collapsed_gibbs_sampler_type: Option<ReadAssignmentProbOut>,
 }
 
 /// This structure records information about

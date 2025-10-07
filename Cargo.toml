@@ -50,6 +50,7 @@ path-tools = "0.1.0"
 atomic_float = "1.1.0"
 sendable-swapvec = "0.4.3"
 rand = "0.9.1" #0.8.5"
+rand_distr = "0.5.1"
 arrow2 = { version = "0.18.0", features = [
   "io_parquet",
   "io_parquet_gzip",

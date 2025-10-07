@@ -369,6 +369,20 @@ pub struct Args {
     )]
     pub growth_rate: f64,
 
+    /// write output alignment gibbs sampler hard assignment (optionally compressed) for each mapped read.
+    /// If <collapsed_gibbs_sampler> is present, it must be one of `uncompressed` (default) or
+    /// `compressed`, which will cause the output file to be lz4 compressed.
+    #[arg(
+        long,
+        help_heading = "output read-txps hard assignment",
+        conflicts_with = "single-cell",
+        default_missing_value = "uncompressed",
+        num_args = 0..=1,
+        require_equals = true,
+        value_parser = parse_assign_prob_out_value
+    )]
+    pub collapsed_gibbs_sampler: Option<ReadAssignmentProbOut>,
+
     /// write output alignment probabilites (optionally compressed) for each mapped read.
     /// If <WRITE_ASSIGNMENT_PROBS> is present, it must be one of `uncompressed` (default) or
     /// `compressed`, which will cause the output file to be lz4 compressed.
