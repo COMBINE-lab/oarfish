@@ -33,7 +33,7 @@ fn normalize_probability(prob: &[f64]) -> Vec<f64> {
 }
 
 
-pub fn collapsed_sequential(
+pub fn collapsed_sequential_prior_prob(
     em_info: &EMInfo
 ) -> (Vec<usize>, Vec<Vec<usize>>) {
 
@@ -62,6 +62,131 @@ pub fn collapsed_sequential(
                  .collect()
         };
         let probs_vec = normalize_probability(&result);
+        let idx = categorical_selection(&probs_vec);
+        let tid = alns[idx].ref_id as usize;
+        assignments.push(tid);
+        counts[tid] += 1;
+    }
+
+    read_candidate.push(assignments.clone());
+
+    for _iteration in 1..maximum_gibbs_iteration{
+        
+        eprintln!("the gibbs itration: {_iteration}");
+        let mut initial_counts = counts.clone();
+        let mut initial_assignments = assignments.clone();
+
+        for (i, (alns, probs, coverage_probs)) in eq_map.iter().enumerate(){
+            // Leave-one-out: remove current assignment for this read
+            let cur_tid = initial_assignments[i];
+            initial_counts[cur_tid] = initial_counts[cur_tid]
+                .checked_sub(1)
+                .expect("counts underflow");
+
+            // Collapsed weights for this read: w_m ∝ P(r_n|m) * (alpha_dir + C_m^{(-n)})
+            let mut weights = Vec::with_capacity(alns.len());
+            for (a, p, cp) in izip!(alns, probs, coverage_probs) {
+                let target_id = a.ref_id as usize;
+                let prob = *p as f64;
+                let cov_prob = if fops.model_coverage { *cp } else { 1.0 };
+        
+                let cm = initial_counts[target_id] as f64; // C_m^{(-n)}
+                weights.push(prob * cov_prob * (alpha_dir + cm));
+            }
+
+            // Normalize then draw a categorical sample
+            let probs = normalize_probability(&weights);
+            let idx = categorical_selection(&probs);
+            let new_tid = alns[idx].ref_id as usize;
+
+            // Update assignment and counts immediately (exact Gibbs)
+            initial_assignments[i] = new_tid;
+            initial_counts[new_tid] += 1;
+        }
+
+        read_candidate.push(initial_assignments);
+
+    }
+
+    //eprintln!("read_candidate0: {:?}", read_candidate[0]);
+    //eprintln!("read_candidate49: {:?}", read_candidate[49]);
+
+    //hard assignment such that choosing the transcript with highest frequesncy for each read
+    let m = tinfo.len();
+    let n = read_candidate[0].len();
+    let hard_assignment = (0..n)
+        .into_par_iter()
+        .map(|read_idx| {
+            let mut counts_assign = vec![0usize; m];
+            for it in read_candidate.iter() {
+                counts_assign[it[read_idx]] += 1;
+            }
+            // Argmax
+            let (mut best_tid, mut best_cnt) = (0, 0);
+            for (tid, &c) in counts_assign.iter().enumerate() {
+                if c > best_cnt {
+                    best_tid = tid;
+                    best_cnt = c;
+                }
+            }
+            best_tid
+        }).collect();
+
+    (hard_assignment, read_candidate)
+
+}
+
+
+
+
+
+pub fn collapsed_sequential_posterior_prob(
+    em_info: &EMInfo,
+    em_counts: &[f64],
+) -> (Vec<usize>, Vec<Vec<usize>>) {
+
+    eprintln!("running the posterior probability for initial counts");
+
+    let eq_map = &em_info.eq_map;
+    let fops = &eq_map.filter_opts;
+    let tinfo: &[TranscriptInfo] = &em_info.txp_info;
+    //let max_iter = em_info.max_iter;
+    //let total_weight: f64 = eq_map.num_aligned_reads() as f64;
+
+    //constant for alpha value in the equation
+    let alpha_dir = 1.0;
+    let maximum_gibbs_iteration = 50;
+
+    let mut read_candidate: Vec<Vec<usize>> = Vec::new();
+
+    let mut counts = vec![0usize; tinfo.len()];
+
+    let mut assignments: Vec<usize> = Vec::new();
+
+    let mut txp_probs = Vec::<f64>::new();
+
+    for (alns, probs, coverage_probs) in eq_map.iter() {
+
+        let mut denom = 0.0_f64;
+
+        for (a, p, cp) in izip!(alns, probs, coverage_probs) {
+            let target_id = a.ref_id as usize;
+            let prob = *p as f64;
+            let cov_prob = if fops.model_coverage { *cp } else { 1.0 };
+            denom += em_counts[target_id] * prob * cov_prob;
+        }
+
+        txp_probs.clear();
+
+        for (a, p, cp) in izip!(alns, probs, coverage_probs) {
+            let target_id = a.ref_id as usize;
+            let prob = *p as f64;
+            let cov_prob = if fops.model_coverage { *cp } else { 1.0 };
+            let nprob = ((em_counts[target_id] * prob * cov_prob) / denom).clamp(0.0, 1.0);
+            txp_probs.push(nprob);
+        }
+
+        let probs_vec = normalize_probability(&txp_probs);
         let idx = categorical_selection(&probs_vec);
         let tid = alns[idx].ref_id as usize;
         assignments.push(tid);
