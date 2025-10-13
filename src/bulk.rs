@@ -158,7 +158,8 @@ fn perform_inference_and_write_output(
         em::em(&emi, args.threads)
     };
 
-    let (hard_assign, read_candidate) = collapsed_gibbs_sampler::collapsed_sequential_posterior_prob(&emi, &counts);
+    //let (hard_assign, read_candidate) = collapsed_gibbs_sampler::collapsed_sequential_posterior_prob(&emi, &counts);
+    let (hard_assign, read_candidate) = collapsed_gibbs_sampler::optimized_max_likelihood_posterior_prob(&emi, &counts);
 
     let aux_txp_counts = crate::util::aux_counts::get_aux_counts(store, txps)?;
 
