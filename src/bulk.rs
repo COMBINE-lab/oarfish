@@ -12,7 +12,7 @@ use crate::util::oarfish_types::{
     ReadSource, TranscriptInfo,
 };
 use crate::util::read_function::read_short_quant_vec;
-use crate::util::write_function::{write_infrep_file, write_output, write_out_prob_assignment};
+use crate::util::write_function::{write_infrep_file, write_output, write_out_prob_assignment, write_out_prob_assignment_greedy};
 use crate::{logistic_prob, normalize_read_probs};
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use crossbeam::channel::Receiver;
@@ -159,7 +159,8 @@ fn perform_inference_and_write_output(
     };
 
     //let (hard_assign, read_candidate) = collapsed_gibbs_sampler::collapsed_sequential_posterior_prob(&emi, &counts);
-    let (hard_assign, read_candidate) = collapsed_gibbs_sampler::optimized_max_likelihood_posterior_prob(&emi, &counts);
+    //let (hard_assign, read_candidate) = collapsed_gibbs_sampler::optimized_max_likelihood_posterior_prob(&emi, &counts);
+    let hard_assign = collapsed_gibbs_sampler::greedy_likelihood_assignment(&emi, &counts);
 
     let aux_txp_counts = crate::util::aux_counts::get_aux_counts(store, txps)?;
 
@@ -202,17 +203,27 @@ fn perform_inference_and_write_output(
         let name_vec = name_vec
                 .expect("cannot write assignment probabilities without valid vector of read names");
 
-        write_out_prob_assignment(
+        write_out_prob_assignment_greedy(
             args.output.as_ref().expect("present"),
             &emi,
             &counts,
             &hard_assign,
-            &read_candidate,
             name_vec,
             txps_name,
             args.write_assignment_probs.is_some(),
             args.collapsed_gibbs_sampler.is_some(),
         )?;
+        //write_out_prob_assignment(
+        //    args.output.as_ref().expect("present"),
+        //    &emi,
+        //    &counts,
+        //    &hard_assign,
+        //    &read_candidate,
+        //    name_vec,
+        //    txps_name,
+        //    args.write_assignment_probs.is_some(),
+        //    args.collapsed_gibbs_sampler.is_some(),
+        //)?;
     }
 
     Ok(())
