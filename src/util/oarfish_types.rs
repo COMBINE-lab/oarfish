@@ -640,6 +640,29 @@ impl InMemoryAlignmentStore<'_> {
     }
 }
 
+impl InMemoryAlignmentStore<'_> {
+    #[inline]
+    pub fn get_alignments_for_read<'a>(
+        &'a self,
+        read_rank: usize,
+    ) -> anyhow::Result<(&'a [AlnInfo], &'a [f32], &'a [f64])> {
+        if read_rank >= 0 && read_rank + 1 < self.boundaries.len() {
+            let start = self.boundaries[read_rank];
+            let end = self.boundaries[read_rank + 1];
+            Ok((
+                &self.alignments[start..end],
+                &self.as_probabilities[start..end],
+                &self.coverage_probabilities[start..end],
+            ))
+        } else {
+            anyhow::bail!(
+                "asked for read of rank {read_rank}, but there is only information for {} reads.",
+                self.boundaries.len()
+            )
+        }
+    }
+}
+
 pub struct InMemoryAlignmentStoreSamplingWithReplacementIter<'a, 'h, 'b> {
     pub store: &'a InMemoryAlignmentStore<'h>,
     pub rand_inds: std::slice::Iter<'b, usize>,

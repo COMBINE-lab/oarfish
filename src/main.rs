@@ -16,6 +16,7 @@ use noodles_bam as bam;
 use noodles_bgzf as bgzf;
 
 mod alignment_parser;
+mod assignment;
 mod bootstrap;
 mod bulk;
 mod em;

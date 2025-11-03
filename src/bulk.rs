@@ -1,5 +1,6 @@
 use crate::NamedDigestVec;
 use crate::alignment_parser;
+use crate::assignment;
 use crate::em;
 use crate::kde_utils;
 use crate::prog_opts::Args;
@@ -221,18 +222,46 @@ fn perform_inference_and_write_output(
         // if we are writing out actual assignments, do the sampling now
         let assignments = if args.write_assignments.is_some() {
             let make_iter = || emi.eq_map.iter();
-            let sampler_params = crate::gibbs_sampler::SamplerParams {
-                a_dir: 2f64,
-                a_act: 1f64,
-                b_act: 1f64,
-                niter: args.num_gibbs_samples,
+
+            info!("extracting connected components.");
+            let mut txp_labeling =
+                assignment::connected_components::get_connected_components(&emi, make_iter);
+            info!(
+                "done; found {} connected_components.",
+                txp_labeling.cc_sizes.len()
+            );
+            //Some(crate::assignment::greedy::solve(&emi, &counts, make_iter))
+            /*
+            let asched = crate::assignment::annealing_em::AnnealingConfig {
+                n_iterations: emi.max_iter as usize,
+                schedule_type: crate::assignment::annealing_em::ScheduleType::Exponential {
+                    t_start: 1.0,
+                    t_end: 0.01,
+                },
             };
-            Some(crate::gibbs_sampler::run_sampler(
+            Some(crate::assignment::annealing_em::solve_par(
+                &emi,
+                asched,
+                &counts,
+                args.threads,
+            ))
+            */
+            Some(crate::assignment::min_cost_flow::solve(
+                &mut txp_labeling,
+                &emi,
+                &counts,
+                make_iter,
+            )?)
+            /*
+            let sampler_params =
+                crate::gibbs_sampler::SamplerParams::new_bitseq_with_iter(args.num_gibbs_samples);
+            Some(crate::gibbs_sampler::run_collapsed_sampler(
                 sampler_params,
                 &emi,
                 &counts,
                 make_iter,
             ))
+            */
         } else {
             None
         };

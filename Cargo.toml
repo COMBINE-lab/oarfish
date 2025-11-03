@@ -78,6 +78,9 @@ rand_distr = "0.5.1"
 serde_with = "3.14.0"
 logsumexp = "0.1.0"
 rv = "0.18.1"
+aph_disjoint_set = "0.1.1"
+mcmf = "2.0.0"
+ordered-float = "5.1.0"
 
 [[bin]]
 name = "oarfish"
