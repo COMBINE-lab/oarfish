@@ -1,13 +1,12 @@
 //use mcmf::{Capacity, Cost, GraphBuilder, Vertex};
 use crate::assignment::connected_components::ClusterSize;
 //use ordered_float::OrderedFloat;
-use std::collections::{HashMap, HashSet, VecDeque, hash_map::OccupiedEntry};
-use tracing::{info, warn};
-use std::io::Write;
-use network_simplex::ns::network_simplex::solve_min_cost_flow;
 use network_simplex::graph::*;
+use network_simplex::ns::network_simplex::solve_min_cost_flow;
+use std::collections::{HashMap, HashSet, VecDeque, hash_map::OccupiedEntry};
+use std::io::Write;
+use tracing::{info, warn};
 //use mcmf::*;
-
 
 #[derive(Debug, Clone)]
 pub struct Edge {
@@ -34,15 +33,21 @@ impl MinCostMaxFlow {
         }
     }
 
-    pub fn add_edge(&mut self, from: usize, to: usize, capacity: i64, cost: f64) -> anyhow::Result<()> {
-        if from >= self.n  {
+    pub fn add_edge(
+        &mut self,
+        from: usize,
+        to: usize,
+        capacity: i64,
+        cost: f64,
+    ) -> anyhow::Result<()> {
+        if from >= self.n {
             anyhow::bail!("from index {from} greater than num nodes = {}", self.n);
         }
         if to >= self.n {
             anyhow::bail!("to index {to} greater than num nodes = {}", self.n);
         }
         let edge_idx = self.edges.len();
-        
+
         // Forward edge
         self.edges.push(Edge {
             from,
@@ -52,7 +57,7 @@ impl MinCostMaxFlow {
             flow: 0,
         });
         self.graph[from].push(edge_idx);
-        
+
         // Backward edge (reverse)
         self.edges.push(Edge {
             from: to,
@@ -65,7 +70,7 @@ impl MinCostMaxFlow {
         Ok(())
     }
 
-        /// Find minimum cost maximum flow from source to sink
+    /// Find minimum cost maximum flow from source to sink
     pub fn min_cost_max_flow(&mut self, source: usize, sink: usize) -> (i64, f64) {
         let mut total_flow = 0i64;
         let mut total_cost = 0f64;
@@ -75,12 +80,22 @@ impl MinCostMaxFlow {
             iteration += 1;
             // Use SPFA (Shortest Path Faster Algorithm) to find shortest path
             let (dist, parent) = self.spfa(source, sink);
-            
+
             if dist[sink] == f64::INFINITY {
-                if self.edges.len() == 0 { eprintln!("Iteration {}: No path found (dist[sink] = infinity)", iteration); }
+                if self.edges.len() == 0 {
+                    eprintln!(
+                        "Iteration {}: No path found (dist[sink] = infinity)",
+                        iteration
+                    );
+                }
                 break; // No more augmenting paths
             }
-            if self.edges.len() == 0 { eprintln!("Iteration {}: Found path with cost {}", iteration, dist[sink]); }
+            if self.edges.len() == 0 {
+                eprintln!(
+                    "Iteration {}: Found path with cost {}",
+                    iteration, dist[sink]
+                );
+            }
 
             // Find minimum residual capacity along the path
             // Also check for cycles to prevent infinite loops
@@ -89,16 +104,18 @@ impl MinCostMaxFlow {
             let mut visited = vec![false; self.n];
             let mut valid_path = true;
             let mut path_edges = Vec::new();
-            
+
             while node != source {
                 if visited[node] {
                     // Cycle detected - invalid path
                     valid_path = false;
-                    if self.edges.len() == 0 { eprintln!("  Cycle detected at node {}", node); }
+                    if self.edges.len() == 0 {
+                        eprintln!("  Cycle detected at node {}", node);
+                    }
                     break;
                 }
                 visited[node] = true;
-                
+
                 if let Some(edge_idx) = parent[node] {
                     let edge = &self.edges[edge_idx];
                     let residual = edge.capacity - edge.flow;
@@ -108,42 +125,64 @@ impl MinCostMaxFlow {
                 } else {
                     // No parent - path doesn't reach source
                     valid_path = false;
-                    if self.edges.len() == 0 { eprintln!("  No parent for node {}", node); }
+                    if self.edges.len() == 0 {
+                        eprintln!("  No parent for node {}", node);
+                    }
                     break;
                 }
             }
-            
+
             if !valid_path || path_flow == 0 {
                 if path_flow == 0 {
-                    if self.edges.len() == 0 { eprintln!("  Path found but bottleneck capacity is 0"); }
+                    if self.edges.len() == 0 {
+                        eprintln!("  Path found but bottleneck capacity is 0");
+                    }
                     for (from, to, residual, idx) in path_edges.iter().rev() {
-                        if self.edges.len() == 0 { eprintln!("    {} -> {} (edge {}, residual: {})", from, to, idx, residual); }
+                        if self.edges.len() == 0 {
+                            eprintln!(
+                                "    {} -> {} (edge {}, residual: {})",
+                                from, to, idx, residual
+                            );
+                        }
                     }
                 }
                 if !valid_path {
-                    if self.edges.len() == 0 { eprintln!("  Attempting to trace parent path from sink {}:", sink); }
+                    if self.edges.len() == 0 {
+                        eprintln!("  Attempting to trace parent path from sink {}:", sink);
+                    }
                     let mut trace_node = sink;
                     let mut trace_count = 0;
                     while trace_count < self.n * 2 {
                         if let Some(edge_idx) = parent[trace_node] {
                             let edge = &self.edges[edge_idx];
-                            if self.edges.len() == 0 { eprintln!("    {} <- {} (edge {})", trace_node, edge.from, edge_idx); }
+                            if self.edges.len() == 0 {
+                                eprintln!(
+                                    "    {} <- {} (edge {})",
+                                    trace_node, edge.from, edge_idx
+                                );
+                            }
                             trace_node = edge.from;
                             trace_count += 1;
                             if trace_node == source {
-                                if self.edges.len() == 0 { eprintln!("    Reached source!"); }
+                                if self.edges.len() == 0 {
+                                    eprintln!("    Reached source!");
+                                }
                                 break;
                             }
                         } else {
-                            if self.edges.len() == 0 { eprintln!("    {} has no parent", trace_node); }
+                            if self.edges.len() == 0 {
+                                eprintln!("    {} has no parent", trace_node);
+                            }
                             break;
                         }
                     }
                 }
                 break; // No valid augmenting path
             }
-            
-            if self.edges.len() == 0 { eprintln!("  Sending {} units of flow", path_flow); }
+
+            if self.edges.len() == 0 {
+                eprintln!("  Sending {} units of flow", path_flow);
+            }
 
             // Update flow along the path
             node = sink;
@@ -162,8 +201,7 @@ impl MinCostMaxFlow {
         (total_flow, total_cost)
     }
 
-
-        /// SPFA algorithm for finding shortest path with negative edge costs
+    /// SPFA algorithm for finding shortest path with negative edge costs
     /// Includes cycle detection to avoid infinite loops
     fn spfa(&self, source: usize, sink: usize) -> (Vec<f64>, Vec<Option<usize>>) {
         let mut dist = vec![f64::INFINITY; self.n];
@@ -182,16 +220,16 @@ impl MinCostMaxFlow {
 
             for &edge_idx in &self.graph[u] {
                 let edge = &self.edges[edge_idx];
-                
+
                 // Check if edge has residual capacity
                 if edge.flow < edge.capacity {
                     let v = edge.to;
                     let new_dist = dist[u] + edge.cost;
-                    
+
                     // Use a small epsilon for floating point comparison
                     if new_dist < dist[v] {
                         dist[v] = new_dist;
-                        
+
                         // Check if setting parent[v] = u would create a cycle
                         // by checking if u is reachable from v through current parents
                         let mut creates_cycle = false;
@@ -203,26 +241,26 @@ impl MinCostMaxFlow {
                                 break;
                             }
                             visited_check[check_node] = true;
-                            
+
                             if let Some(p_edge_idx) = parent[check_node] {
                                 check_node = self.edges[p_edge_idx as usize].from;
                             } else {
                                 break;
                             }
                         }
-                        
+
                         if creates_cycle {
                             // Skip this edge as it would create a cycle in the parent tree
                             continue;
                         }
-                        
+
                         parent[v] = Some(edge_idx);
-                        
+
                         if !in_queue[v] {
                             queue.push_back(v);
                             in_queue[v] = true;
                             cnt[v] += 1;
-                            
+
                             // If a node is added to queue more than n times, there's a negative cycle
                             if cnt[v] > self.n {
                                 return (vec![f64::INFINITY; self.n], vec![None; self.n]);
@@ -238,7 +276,8 @@ impl MinCostMaxFlow {
 
     /// Get all edges with non-zero flow
     pub fn get_flow_edges(&self) -> Vec<Edge> {
-        self.edges.iter()
+        self.edges
+            .iter()
             .step_by(2) // Only forward edges (skip reverse edges)
             .filter(|e| e.flow > 0)
             .cloned()
@@ -247,7 +286,8 @@ impl MinCostMaxFlow {
 
     /// Get all edges (including those with zero flow)
     pub fn get_all_edges(&self) -> Vec<Edge> {
-        self.edges.iter()
+        self.edges
+            .iter()
             .step_by(2) // Only forward edges
             .cloned()
             .collect()
@@ -257,7 +297,7 @@ impl MinCostMaxFlow {
     pub fn get_flow_paths(&self, source: usize, sink: usize) -> Vec<Vec<(usize, usize, i64, f64)>> {
         let mut paths = Vec::new();
         let mut remaining_flow: HashMap<(usize, usize), i64> = HashMap::new();
-        
+
         // Build a map of remaining flows
         for edge in self.edges.iter().step_by(2) {
             if edge.flow > 0 {
@@ -279,16 +319,19 @@ impl MinCostMaxFlow {
                 }
                 visited[current] = true;
 
-                if let Some(((from, to), flow)) = remaining_flow.iter()
+                if let Some(((from, to), flow)) = remaining_flow
+                    .iter()
                     .find(|((f, _), _)| *f == current)
-                    .map(|(k, v)| (*k, *v)) 
+                    .map(|(k, v)| (*k, *v))
                 {
                     // Find the edge to get its cost
-                    let edge = self.edges.iter()
+                    let edge = self
+                        .edges
+                        .iter()
                         .step_by(2)
                         .find(|e| e.from == from && e.to == to)
                         .unwrap();
-                    
+
                     path.push((from, to, flow, edge.cost));
                     min_flow = min_flow.min(flow);
                     current = to;
@@ -306,9 +349,10 @@ impl MinCostMaxFlow {
                         remaining_flow.remove(&(from, to));
                     }
                 }
-                
+
                 // Store the path with the actual flow value
-                let path_with_flow: Vec<_> = path.iter()
+                let path_with_flow: Vec<_> = path
+                    .iter()
                     .map(|&(from, to, _, cost)| (from, to, min_flow, cost))
                     .collect();
                 paths.push(path_with_flow);
@@ -748,16 +792,14 @@ use crate::{
 use anyhow::Context;
 use itertools::*;
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum FlowVertex {
     Source,
     Sink,
     Read(usize),
     Transcript(usize),
-    Penalty(usize)
+    Penalty(usize),
 }
-
 
 pub fn solve<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a, F: Fn() -> I>(
     labels: &mut TranscriptConnectedComponentLabeling,
@@ -766,18 +808,20 @@ pub fn solve<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
     make_iter: F,
 ) -> anyhow::Result<Vec<u32>> {
     let make_iter = || em_info.eq_map.iter();
-    let tinfo = &em_info.txp_info;
     let fops = &em_info.eq_map.filter_opts;
 
     let model_coverage = fops.model_coverage;
-    let density_fn = |x, y| -> f64 {
+    let _density_fn = |x, y| -> f64 {
         match em_info.kde_model {
             Some(ref kde_model) => kde_model[(x, y)],
             _ => 1.,
         }
     };
 
-    let total_reads = labels.cc_sizes.iter().fold(0_usize, |acc, c| acc + c.1.nread as usize);
+    let total_reads = labels
+        .cc_sizes
+        .iter()
+        .fold(0_usize, |acc, c| acc + c.1.nread as usize);
 
     const READ_NOT_MAPPED: u32 = u32::MAX;
     // will hold final read assignments
@@ -805,14 +849,34 @@ pub fn solve<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
     // first, relabel the clusters so that we always see things in a consistent order
     // map from the component label (arbitrary transcript ID chosen by union find) to the
     // component's iteration order (rank).
-    let nonempty_component_ranks = labels.cc_sizes.iter().filter(|(k, v)| v.nread > 0).enumerate().map( |(i, (k,v))| (*k, i as u32) ).collect::<std::collections::HashMap::<u32, u32>>();
+    let nonempty_component_ranks = labels
+        .cc_sizes
+        .iter()
+        .filter(|(_k, v)| v.nread > 0)
+        .enumerate()
+        .map(|(i, (k, _v))| (*k, i as u32))
+        .collect::<std::collections::HashMap<u32, u32>>();
     // change the labels to match, giving an INVALID label id to empty components
-    labels.labels.iter_mut().for_each(|x| *x = *nonempty_component_ranks.get(x).unwrap_or(&u32::MAX));
-    let mut cc_sizes = labels.cc_sizes.iter().filter(|(k, v)| v.nread > 0).map(|(k, v)| v.clone()).collect::<Vec<ClusterSize>>();
+    labels
+        .labels
+        .iter_mut()
+        .for_each(|x| *x = *nonempty_component_ranks.get(x).unwrap_or(&u32::MAX));
+    let cc_sizes = labels
+        .cc_sizes
+        .iter()
+        .filter(|(_k, v)| v.nread > 0)
+        .map(|(_k, v)| v.clone())
+        .collect::<Vec<ClusterSize>>();
 
     // iterating the components in the prescribed order, how many total reads have we
     // seen at each component boundary
-    let mut component_prefix_sums = cc_sizes.iter().scan(0, |sum, i| {*sum += i.nread as usize; Some(*sum)}).collect::<Vec<_>>();
+    let mut component_prefix_sums = cc_sizes
+        .iter()
+        .scan(0, |sum, i| {
+            *sum += i.nread as usize;
+            Some(*sum)
+        })
+        .collect::<Vec<_>>();
 
     // explicitly keep track of the total prefix sum, as we'll need it later once
     // we've filled in the read lists for each component
@@ -856,8 +920,7 @@ pub fn solve<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
     );
     bar.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
 
-    // NOTE: must ensure that the total score or flow doesn't exceed 2^31-1.
-    const COST_SCALE: f64 = 1000f64;
+    const COST_SCALE: f64 = 100f64;
     let mut component_txps = HashSet::<u32>::with_capacity(100);
 
     // now we have the component_read_lists vector that gives us a list of the specific reads that
@@ -880,7 +943,7 @@ pub fn solve<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
         let mut mcf_builder = network_simplex::graph::GraphBuilder::<FlowVertex>::new();
         mcf_builder.add_node(FlowVertex::Source, nread as f64);
         mcf_builder.add_node(FlowVertex::Sink, -(nread as f64));
-    
+
         // build the flow graph -- iterate over the reads for this component
         // let label_rank = component_ranks[component_root] as usize;
         let start = component_prefix_sums[component_root];
@@ -926,7 +989,12 @@ pub fn solve<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
             }
             // edge from source to read node
             // network simplex
-            mcf_builder.add_edge(FlowVertex::Source, FlowVertex::Read(global_read_id), 1f64, 0f64);
+            mcf_builder.add_edge(
+                FlowVertex::Source,
+                FlowVertex::Read(global_read_id),
+                1f64,
+                0f64,
+            );
 
             for (a, _p, _cp) in izip!(alns, probs, coverage_probs) {
                 let target_id = a.ref_id as usize;
@@ -937,20 +1005,25 @@ pub fn solve<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
                 //let post_prob = (counts[target_id] * prob * cov_prob) / denom;
 
                 if let std::collections::hash_map::Entry::Occupied(mut o) =
-                distinct_edges.entry(target_id as u32)
+                    distinct_edges.entry(target_id as u32)
                 {
                     let ent = o.get_mut();
                     if !ent.1 {
                         let post_prob = ent.0 / denom;
-                        let cost = -((post_prob * COST_SCALE).round() as i32);
-                        mcf_builder.add_edge(FlowVertex::Read(global_read_id), FlowVertex::Transcript(target_id), 1.0f64, 10f64 - (10f64 * post_prob));
+                        let cost = COST_SCALE - (COST_SCALE * post_prob);
+                        mcf_builder.add_edge(
+                            FlowVertex::Read(global_read_id),
+                            FlowVertex::Transcript(target_id),
+                            1.0f64,
+                            cost,
+                        );
                         ent.1 = true;
                         component_txps.insert(target_id as u32);
                     }
                 }
             }
         }
-        
+
         // set transcript capacities
         for t in component_txps.iter() {
             // get the count; take the ceiling to ensure that we can assign all
@@ -959,7 +1032,12 @@ pub fn solve<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
             let max_cap = 1isize.max((remaining_counts[*t as usize] * 1.5).ceil() as isize);
 
             if preferred_cap > 0 {
-                mcf_builder.add_edge(FlowVertex::Transcript(*t as usize), FlowVertex::Sink, preferred_cap as f64, 0f64);
+                mcf_builder.add_edge(
+                    FlowVertex::Transcript(*t as usize),
+                    FlowVertex::Sink,
+                    preferred_cap as f64,
+                    0f64,
+                );
             }
 
             // Second edge: overflow capacity with penalty
@@ -968,20 +1046,38 @@ pub fn solve<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
                 // Penalty for using overflow capacity
                 // Higher penalty = less likely to use
                 let penalty_cost = 1000.0f64; // Tune this
-                mcf_builder.add_edge(FlowVertex::Transcript(*t as usize), FlowVertex::Penalty(*t as usize), overflow_cap as f64, 0.0f64);
-                mcf_builder.add_edge(FlowVertex::Penalty(*t as usize), FlowVertex::Sink, overflow_cap as f64, penalty_cost);
-            } 
+                mcf_builder.add_edge(
+                    FlowVertex::Transcript(*t as usize),
+                    FlowVertex::Penalty(*t as usize),
+                    overflow_cap as f64,
+                    0.0f64,
+                );
+                mcf_builder.add_edge(
+                    FlowVertex::Penalty(*t as usize),
+                    FlowVertex::Sink,
+                    overflow_cap as f64,
+                    penalty_cost,
+                );
+            }
         }
         bar.set_message(format!(
-            "running min cost flow for component {component_root} of size ({}, {})", size.ntxp, size.nread
+            "running min cost flow for component {component_root} of size ({}, {})",
+            size.ntxp, size.nread
         ));
         //network simplex version
         let mut total_cost = 0.0f64;
-        let index_to_label = mcf_builder.node_label_to_index.iter().map(|(k, v)| (*v, k.clone())).collect::<std::collections::HashMap<usize, FlowVertex>>();
+        let index_to_label = mcf_builder
+            .node_label_to_index
+            .iter()
+            .map(|(k, v)| (*v, k.clone()))
+            .collect::<std::collections::HashMap<usize, FlowVertex>>();
         let graph = mcf_builder.build();
-        let flow_values = solve_min_cost_flow(&graph, 10e-9);//mcf_builder.get_flow_edges();
+        let flow_values = solve_min_cost_flow(&graph, 10e-9); //mcf_builder.get_flow_edges();
         for (e, f) in graph.edges.iter().zip(flow_values) {
-            if let (&FlowVertex::Read(global_read_id), &FlowVertex::Transcript(global_txp_id)) = (index_to_label.get(&e.start).expect("valid start"), index_to_label.get(&e.end).expect("valid end")) {
+            if let (&FlowVertex::Read(global_read_id), &FlowVertex::Transcript(global_txp_id)) = (
+                index_to_label.get(&e.start).expect("valid start"),
+                index_to_label.get(&e.end).expect("valid end"),
+            ) {
                 if f >= 0.999f64 {
                     total_cost += e.cost;
                     read_assignments[global_read_id] = global_txp_id as u32;
@@ -997,7 +1093,9 @@ pub fn solve<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
         // ensure that we assigned all of the reads in this component!
         for (local_rank, global_read_id) in reads_for_component.iter().enumerate() {
             if read_assignments[*global_read_id as usize] == u32::MAX {
-                warn!("Read {global_read_id} was part of this component {component_root} with size {size:#?}, but had no assignment!");
+                warn!(
+                    "Read {global_read_id} was part of this component {component_root} with size {size:#?}, but had no assignment!"
+                );
             }
         }
         bar.inc(1);
