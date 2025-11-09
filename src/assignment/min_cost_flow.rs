@@ -920,7 +920,7 @@ pub fn solve<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
     );
     bar.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
 
-    const COST_SCALE: f64 = 100f64;
+    const COST_SCALE: f64 = 5f64;
     let mut component_txps = HashSet::<u32>::with_capacity(100);
 
     // now we have the component_read_lists vector that gives us a list of the specific reads that
@@ -1045,7 +1045,7 @@ pub fn solve<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
             if overflow_cap > 0 {
                 // Penalty for using overflow capacity
                 // Higher penalty = less likely to use
-                let penalty_cost = 1000.0f64; // Tune this
+                let penalty_cost = 10.0f64; // Tune this
                 mcf_builder.add_edge(
                     FlowVertex::Transcript(*t as usize),
                     FlowVertex::Penalty(*t as usize),
