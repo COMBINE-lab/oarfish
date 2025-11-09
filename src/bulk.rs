@@ -230,7 +230,6 @@ fn perform_inference_and_write_output(
                 "done; found {} connected_components.",
                 txp_labeling.cc_sizes.len()
             );
-            //Some(crate::assignment::greedy::solve(&emi, &counts, make_iter))
             /*
             let asched = crate::assignment::annealing_em::AnnealingConfig {
                 n_iterations: emi.max_iter as usize,
@@ -245,6 +244,7 @@ fn perform_inference_and_write_output(
                 &counts,
                 args.threads,
             ))
+            Some(crate::assignment::greedy::solve(&emi, &counts, make_iter))
             */
             Some(crate::assignment::min_cost_flow::solve(
                 &mut txp_labeling,
@@ -252,7 +252,7 @@ fn perform_inference_and_write_output(
                 &counts,
                 make_iter,
             )?)
-            /*
+                /*
             let sampler_params =
                 crate::gibbs_sampler::SamplerParams::new_bitseq_with_iter(args.num_gibbs_samples);
             Some(crate::gibbs_sampler::run_collapsed_sampler(

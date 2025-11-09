@@ -26,6 +26,8 @@ categories = ["command-line-utilities", "science"]
 # See more keys and their definitions 
 # at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
+mcmf = { git = "https://github.com/RagnarGrootKoerkamp/mcmf" }
+network-simplex = { git = "https://github.com/andryr/network-simplex-rust.git" }
 seqcol_rs = { git = "https://github.com/COMBINE-lab/seqcol_rs", branch = "dev", version = "0.4.1" }
 anyhow = "1.0.98"
 bstr = "1.12.0"
@@ -79,8 +81,9 @@ serde_with = "3.14.0"
 logsumexp = "0.1.0"
 rv = "0.18.1"
 aph_disjoint_set = "0.1.1"
-mcmf = "2.0.0"
+# mcmf = "2.0.0"
 ordered-float = "5.1.0"
+rs-graph = "0.21.0"
 
 [[bin]]
 name = "oarfish"
