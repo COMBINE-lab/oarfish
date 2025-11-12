@@ -5,15 +5,12 @@ use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
 use atomic_float::AtomicF64;
 use itertools::izip;
 use num_format::{Locale, ToFormattedString};
-use rand::rng as trng;
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use tracing::{info, span, trace};
-
-use crate::bootstrap;
-use crate::gibbs_sampler;
 
 type EqIterateT<'a> = (&'a [AlnInfo], &'a [f32], &'a [f64]);
 
+#[allow(dead_code)]
 /// Configuration for temperature schedule
 #[derive(Debug, Clone)]
 pub struct AnnealingConfig {
@@ -21,6 +18,7 @@ pub struct AnnealingConfig {
     pub schedule_type: ScheduleType,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum ScheduleType {
     /// Two-phase: constant T=1.0, then exponential decay
@@ -34,6 +32,7 @@ pub enum ScheduleType {
     Linear { t_start: f64, t_end: f64 },
 }
 
+#[allow(dead_code)]
 impl AnnealingConfig {
     pub fn two_phase(n_iterations: usize, warm_up_frac: f64) -> Self {
         Self {
@@ -55,7 +54,7 @@ impl AnnealingConfig {
                 let hardening_iters = self.n_iterations - warm_up_iters;
 
                 let mut schedule = Vec::with_capacity(self.n_iterations);
-                schedule.extend(std::iter::repeat(1.0).take(warm_up_iters));
+                schedule.extend(std::iter::repeat_n(1.0, warm_up_iters));
 
                 if hardening_iters > 0 {
                     for i in 0..hardening_iters {
@@ -91,9 +90,10 @@ impl AnnealingConfig {
 /// // First 70 iterations: T = 1.0 (standard EM)
 /// // Last 30 iterations: T decays exponentially toward 0
 /// ```
+#[allow(dead_code)]
 pub fn temperature_schedule_two_phase(n_iterations: usize, warm_up_frac: f64) -> Vec<f64> {
     assert!(
-        warm_up_frac >= 0.0 && warm_up_frac <= 1.0,
+        (0.0..=1.0).contains(&warm_up_frac),
         "warm_up_frac must be between 0 and 1"
     );
     assert!(n_iterations > 0, "n_iterations must be positive");
@@ -104,7 +104,7 @@ pub fn temperature_schedule_two_phase(n_iterations: usize, warm_up_frac: f64) ->
     let mut schedule = Vec::with_capacity(n_iterations);
 
     // Phase 1: Standard EM with T = 1.0
-    schedule.extend(std::iter::repeat(1.0).take(warm_up_iters));
+    schedule.extend(std::iter::repeat_n(1.0, warm_up_iters));
 
     // Phase 2: Exponential decay
     // T = exp(-4 * t) where t goes from 0 to 1
@@ -272,6 +272,7 @@ fn m_step<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])>>(
     }
 }
 
+#[allow(dead_code)]
 /// Perform the EM algorithm to estimate the abundances of the
 /// target sequences.  The return value is a `Vec` of f64 values,
 /// each of which is the estimated number of fragments arising from
@@ -531,7 +532,7 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
     let mut assignments = Vec::<u32>::with_capacity(nreads);
     let inv_temp = 1.0 / (0.001f64.max(schedule_iterates[niter as usize]));
     // go through one more time and do the hard assignments
-    for (read_idx, (alns, probs, coverage_probs)) in make_iter().enumerate() {
+    for (alns, probs, coverage_probs) in make_iter() {
         let mut highest_prob = 0.0_f64;
         let mut best_txp = 0;
         for (a, p, cp) in izip!(alns, probs, coverage_probs) {
@@ -585,8 +586,8 @@ mod tests {
         assert_eq!(schedule.len(), 100);
 
         // First 70 iterations should be 1.0
-        for i in 0..70 {
-            assert_eq!(schedule[i], 1.0);
+        for v in schedule.iter().take(70) {
+            assert_eq!(*v, 1.0);
         }
 
         // Last 30 should decay

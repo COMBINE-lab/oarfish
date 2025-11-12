@@ -10,7 +10,6 @@ use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterato
 use tracing::{info, span, trace};
 
 use crate::bootstrap;
-use crate::gibbs_sampler;
 
 type EqIterateT<'a> = (&'a [AlnInfo], &'a [f32], &'a [f64]);
 

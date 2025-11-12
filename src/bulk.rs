@@ -26,6 +26,7 @@ use needletail::parse_fastx_file;
 use noodles_bam as bam;
 use num_format::{Locale, ToFormattedString};
 use serde_json::json;
+use std::collections::HashMap;
 use std::io::BufRead;
 use swapvec::{SwapVec, SwapVecConfig};
 use tracing::{info, warn};
@@ -244,15 +245,46 @@ fn perform_inference_and_write_output(
                 &counts,
                 args.threads,
             ))
-            Some(crate::assignment::greedy::solve(&emi, &counts, make_iter))
             */
+            let name_map = txps_name
+                .iter()
+                .enumerate()
+                .map(|(i, ti)| {
+                    if let Some((pn, _sn)) = ti.split_once(".") {
+                        (pn, i)
+                    } else {
+                        (ti.as_str(), i)
+                    }
+                })
+                .collect::<HashMap<&str, usize>>();
+
+            let mut true_counts = vec![0.0f64; txps_name.len()];
+            let mut rdr = csv::ReaderBuilder::new()
+                .delimiter(b'\t')
+                .from_path("HEK293T_1DcDNA.NanoSim_1M.true_counts.tsv")?;
+            while let Some(result) = rdr.records().next() {
+                let record = result?;
+                if let Some(ind) = name_map.get(&record[0]) {
+                    let count: i32 = record[1].parse().unwrap();
+                    true_counts[*ind] = count as f64;
+                }
+            }
+            /*
+            Some(crate::assignment::greedy::solve(
+                &emi,
+                &true_counts,
+                make_iter,
+            ))
+            */
+
             Some(crate::assignment::min_cost_flow::solve(
                 &mut txp_labeling,
                 &emi,
-                &counts,
+                &true_counts,
                 make_iter,
             )?)
-                /*
+
+            /*
             let sampler_params =
                 crate::gibbs_sampler::SamplerParams::new_bitseq_with_iter(args.num_gibbs_samples);
             Some(crate::gibbs_sampler::run_collapsed_sampler(

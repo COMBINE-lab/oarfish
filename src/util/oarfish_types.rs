@@ -642,11 +642,11 @@ impl InMemoryAlignmentStore<'_> {
 
 impl InMemoryAlignmentStore<'_> {
     #[inline]
-    pub fn get_alignments_for_read<'a>(
-        &'a self,
+    pub fn get_alignments_for_read(
+        &self,
         read_rank: usize,
-    ) -> anyhow::Result<(&'a [AlnInfo], &'a [f32], &'a [f64])> {
-        if read_rank >= 0 && read_rank + 1 < self.boundaries.len() {
+    ) -> anyhow::Result<(&'_ [AlnInfo], &'_ [f32], &'_ [f64])> {
+        if read_rank + 1 < self.boundaries.len() {
             let start = self.boundaries[read_rank];
             let end = self.boundaries[read_rank + 1];
             Ok((

@@ -4,11 +4,12 @@ use crate::util::constants;
 use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
 use crate::util::probs::LogSpace;
 use itertools::*;
+#[allow(unused_imports)]
 use rand::Rng;
 use rand::distr::Distribution;
 use rand_distr::weighted::WeightedIndex;
 use std::default::Default;
-use tracing::{info, warn};
+use tracing::warn;
 
 /// The parameters to be used for the Gibbs sampler. The
 /// default values are taken from the BitSeq[1] paper, though
@@ -36,6 +37,7 @@ impl Default for SamplerParams {
 }
 
 impl SamplerParams {
+    #[allow(dead_code)]
     pub fn new_bitseq_with_iter(niter: u64) -> Self {
         Self {
             niter,
@@ -144,6 +146,7 @@ fn update_chain<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64]
     }
 }
 
+#[allow(dead_code)]
 fn greedy_pass<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a>(
     sampler_params: &SamplerParams,
     eq_map_iter: I,
@@ -155,19 +158,18 @@ fn greedy_pass<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])
 where
     DFn: Fn(usize, usize) -> f64,
 {
-    let a_dir = sampler_params.a_dir;
-    let a_act = sampler_params.a_act;
+    let _a_dir = sampler_params.a_dir;
+    let _a_act = sampler_params.a_act;
     let _b_act = sampler_params.b_act;
 
-    let mut rng = rand::rng();
+    let _rng = rand::rng();
 
     let tot_reads = (chain_state.assigned_ids.len()) as f64;
     let log_tot_reads = tot_reads.ln();
     // total number of transcripts in the transcriptome (not just expressed)
-    let num_txps = chain_state.counts.len() as f64;
+    let _num_txps = chain_state.counts.len() as f64;
 
     let mut total_delta = 0.;
-    let mut aln_idx = 0usize;
     for (read_id, (alns, probs, coverage_probs)) in eq_map_iter.enumerate() {
         // if this is a uniquely-aligned read, don't bother with
         // all of this
@@ -184,8 +186,6 @@ where
         let mut best_log_cond_prob = assigned_log_cond_prob;
         let mut best_tid = assigned_tid;
 
-        let mut denom = 0.0_f64;
-        let mut idx = 0;
         for (a, p, cp) in izip!(alns, probs, coverage_probs) {
             // Compute the probability of assignment of the
             // current read based on this alignment and the
@@ -242,6 +242,7 @@ where
     total_delta
 }
 
+#[allow(dead_code)]
 /// run the sampler and return the highest log-likelihood assignments
 pub fn run_collapsed_sampler<
     'a,
@@ -270,8 +271,8 @@ pub fn run_collapsed_sampler<
 
     // we'll keep track of the best log-likelihood we've seen so far as
     // well as the assignments that gave rise to it.
-    let mut best_log_assignments: Vec<u32> = Vec::new();
-    let mut best_log_likelihood = f64::NEG_INFINITY;
+    //let mut best_log_assignments: Vec<u32> = Vec::new();
+    let mut _best_log_likelihood = f64::NEG_INFINITY;
     let bar = indicatif::ProgressBar::new(sampler_params.niter);
     bar.set_style(
         indicatif::ProgressStyle::with_template(
@@ -282,14 +283,7 @@ pub fn run_collapsed_sampler<
     );
     bar.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
 
-    let mut best_iter = 0;
     let mut prev_ll = cs.log_likelihood();
-
-    let mut best_ll = prev_ll;
-
-    let mut cs_backup = cs.clone();
-    let mut best_assign = cs.assigned_ids.clone();
-    let mut resample_prob = 0.5_f64;
 
     for iter in 0..sampler_params.niter {
         bar.inc(1);
@@ -363,19 +357,18 @@ pub fn run_collapsed_sampler<
     }
     bar.finish();
 
-    best_log_assignments = cs
-        .extract_most_frequent_assignments(make_iter())
-        .expect("should be a valid chain state");
-
-    best_log_assignments
+    cs.extract_most_frequent_assignments(make_iter())
+        .expect("should be a valid chain state")
 }
 
 #[derive(Clone)]
 struct ChainState {
+    #[allow(unused)]
     pub counts: Vec<u64>, // the current (integer) assignment of counts to each transcript
     pub assigned_ids: Vec<u32>, // the current assignment of each read to a transcript of origin
     pub log_cond_probs: Vec<LogSpace>, // conditional assignment probabilites for each currently assigned read (in log space)
     pub tot_counts: u64,
+    #[allow(unused)]
     pub frequencies: Option<Vec<u16>>,
 }
 
@@ -391,6 +384,7 @@ impl ChainState {
         ll.get_ln()
     }
 
+    #[allow(dead_code)]
     fn log_likelihood(&self) -> f64 {
         let mut ll = LogSpace::new_from_linear(1f64);
         let norm = 1f64 / (self.tot_counts as f64);
@@ -402,12 +396,14 @@ impl ChainState {
         ll.get_ln()
     }
 
+    #[allow(dead_code)]
     fn inc_sample_counts(&mut self, aln_idx: usize) {
         if let Some(freqs) = self.frequencies.as_mut() {
             freqs[aln_idx] += 1;
         }
     }
 
+    #[allow(dead_code)]
     fn extract_most_frequent_assignments<
         'a,
         I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
@@ -451,6 +447,7 @@ impl ChainState {
     }
 }
 
+#[allow(dead_code)]
 /// Obtain an initial set of counts and assignments from the maximum likelihood abundances
 /// and use these to create an initial `ChainState` from which we can run the Gibbs sampler.
 fn init_counts_and_assignments<

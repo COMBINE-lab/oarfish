@@ -1,6 +1,5 @@
 use crate::util::oarfish_types::{AlnInfo, EMInfo};
 use aph_disjoint_set::DisjointSet;
-use itertools::*;
 use std::collections::HashMap;
 
 #[derive(Default, Clone, Debug, PartialEq, PartialOrd)]
@@ -9,6 +8,7 @@ pub struct ClusterSize {
     pub nread: u32,
 }
 
+#[allow(dead_code)]
 impl ClusterSize {
     pub fn new() -> Self {
         ClusterSize { ntxp: 0, nread: 0 }

@@ -1,16 +1,13 @@
-use super::connected_components::TranscriptConnectedComponentLabeling;
-use crate::{
-    assignment,
-    util::oarfish_types::{AlnInfo, EMInfo},
-};
+use crate::util::oarfish_types::{AlnInfo, EMInfo};
 use itertools::*;
 
+#[allow(dead_code)]
 /// solve the assignment using the greedy heuristic. Assign each read to it's highest posterior
 /// probability alignment, unless the corresponding transcript is full
 pub fn solve<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a, F: Fn() -> I>(
     em_info: &EMInfo,
     counts: &[f64],
-    make_iter: F,
+    _make_iter: F,
 ) -> Vec<u32> {
     let fops = &em_info.eq_map.filter_opts;
     let mut assignments = Vec::<u32>::new();
@@ -18,7 +15,7 @@ pub fn solve<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
     let model_coverage = fops.model_coverage;
 
     for (alns, probs, coverage_probs) in em_info.eq_map.iter() {
-        let mut max_idx = alns[0].ref_id as usize;
+        let mut max_idx = 0; //alns[0].ref_id as usize;
         let mut max_prob = 0f64;
         for (idx, (a, p, cp)) in izip!(alns, probs, coverage_probs).enumerate() {
             // Compute the probability of assignment of the
