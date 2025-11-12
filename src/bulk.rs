@@ -26,7 +26,6 @@ use needletail::parse_fastx_file;
 use noodles_bam as bam;
 use num_format::{Locale, ToFormattedString};
 use serde_json::json;
-use std::collections::HashMap;
 use std::io::BufRead;
 use swapvec::{SwapVec, SwapVecConfig};
 use tracing::{info, warn};
@@ -246,6 +245,7 @@ fn perform_inference_and_write_output(
                 args.threads,
             ))
             */
+            /*
             let name_map = txps_name
                 .iter()
                 .enumerate()
@@ -269,6 +269,7 @@ fn perform_inference_and_write_output(
                     true_counts[*ind] = count as f64;
                 }
             }
+            */
             /*
             Some(crate::assignment::greedy::solve(
                 &emi,
@@ -280,7 +281,7 @@ fn perform_inference_and_write_output(
             Some(crate::assignment::min_cost_flow::solve(
                 &mut txp_labeling,
                 &emi,
-                &true_counts,
+                &counts,
                 make_iter,
             )?)
 
