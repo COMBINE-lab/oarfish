@@ -31,15 +31,15 @@ anyhow = "1.0.98"
 bstr = "1.12.0"
 bio-types = { version = "1.0.4", features = ["serde"] }
 clap = { version = "4.5.40", features = ["derive"] }
-noodles-bam = "0.81.0"
-noodles-sam = "0.77.0"
+noodles-bam = "0.84.0"
+noodles-sam = "0.80.0"
 num-format = "0.4.4"
 lz4 = "1.28.1"
 either = "1.15.0"
 tabled = "0.20.0"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-typed-builder = "0.21.0"
+typed-builder = "0.23.0"
 rayon = "1.10"
 statrs = "0.18"
 csv = "1.3"
@@ -57,7 +57,7 @@ arrow2 = { version = "0.18.0", features = [
   "io_parquet_snappy",
 ] }
 kders = { git = "https://github.com/COMBINE-lab/kde-rs.git", branch = "dev", version = "0.1.1" }
-noodles-bgzf = { version = "0.41.0" }
+noodles-bgzf = { version = "0.44.0" }
 crossbeam = { version = "0.8.4", features = [
   "crossbeam-queue",
   "crossbeam-channel",
