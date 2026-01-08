@@ -216,8 +216,8 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
         // is a multiple of 10, print out  the maximum relative
         // difference we observed.
         niter += 1;
-        if do_log && (niter % 10 == 0) {
-            if niter % 100 == 0 {
+        if do_log && niter.is_multiple_of(10) {
+            if niter.is_multiple_of(100) {
                 info!(
                     "iteration {}; rel diff {}",
                     niter.to_formatted_string(&Locale::en),
@@ -403,8 +403,8 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
             // is a multiple of 10, print out  the maximum relative
             // difference we observed.
             niter += 1;
-            if niter % 10 == 0 {
-                if niter % 100 == 0 {
+            if niter.is_multiple_of(10) {
+                if niter.is_multiple_of(100) {
                     info!(
                         "iteration {}; rel diff {}",
                         niter.to_formatted_string(&Locale::en),

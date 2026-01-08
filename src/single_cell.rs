@@ -213,7 +213,7 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                 alignment_parser::parse_alignments_for_barcode(&mut peekable_bam_iter, &barcode)?;
 
             num_cells += 1;
-            if num_cells > 1 && num_cells % 100 == 0 {
+            if num_cells > 1 && num_cells.is_multiple_of(100) {
                 info!("Processed {} cells.", num_cells);
             }
 

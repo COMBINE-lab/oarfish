@@ -132,7 +132,7 @@ impl ReadChunkWithNames {
         self.seq_sep.push(0);
     }
 
-    pub fn iter(&self) -> ReadChunkIter {
+    pub fn iter(&self) -> ReadChunkIter<'_> {
         ReadChunkIter {
             chunk: self,
             pos: 0,
@@ -702,7 +702,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
         }
     }
 
-    pub fn iter(&self) -> InMemoryAlignmentStoreIter {
+    pub fn iter(&self) -> InMemoryAlignmentStoreIter<'_, '_> {
         InMemoryAlignmentStoreIter {
             store: self,
             idx: 0,
