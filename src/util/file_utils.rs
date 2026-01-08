@@ -123,8 +123,27 @@ pub(crate) fn get_ref_source(
         concat_handle = Some(std::thread::spawn(move || {
             let fifo_path = std::path::Path::new(fifo_fname_clone.as_str());
             let mut ff = std::fs::File::options().write(true).open(fifo_path)?;
-            let ref_read = std::io::BufReader::new(std::fs::File::open(ref_paths)?);
-            let novel_read = std::io::BufReader::new(std::fs::File::open(novel_paths)?);
+
+            let ref_read = match niffler::from_path(&ref_paths) {
+                Ok((reader, _format)) => std::io::BufReader::new(reader),
+                Err(e) => {
+                    bail!(
+                        "Error opening up the annotated reference file {ref_paths:#?} : {:#?}",
+                        e
+                    );
+                }
+            };
+
+            let novel_read = match niffler::from_path(&novel_paths) {
+                Ok((reader, _format)) => std::io::BufReader::new(reader),
+                Err(e) => {
+                    bail!(
+                        "Error opening up the annotated reference file {novel_paths:#?} : {:#?}",
+                        e
+                    );
+                }
+            };
+
             let mut reader = ref_read.chain(novel_read);
             info!("before copy");
             match std::io::copy(&mut reader, &mut ff) {
