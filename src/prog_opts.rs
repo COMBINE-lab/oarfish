@@ -221,7 +221,7 @@ fn parse_filter_f32(arg: &str) -> anyhow::Result<FilterArg> {
 ))]
 #[command(group(
     clap::ArgGroup::new("raw_ref_type")
-    .args(["raw_input_type", "index"])
+    .args(["annotated", "novel", "index"])
 ))]
 pub struct Args {
     /// be quiet (i.e. don't output log messages that aren't at least warnings)
@@ -375,7 +375,7 @@ pub struct Args {
     #[arg(
         long,
         help_heading = "output read-txps probabilities",
-        conflicts_with = "single-cell",
+        conflicts_with = "single_cell",
         default_missing_value = "uncompressed",
         num_args = 0..=1,
         require_equals = true,
