@@ -69,6 +69,10 @@ sprs = "0.11.4"
 minimap2-sys = { version = "0.1.30" } #, git = "https://github.com/rob-p/minimap2-rs.git", branch = "main" }
 minimap2 = { version = "0.1.30" }     # git = "https://github.com/rob-p/minimap2-rs.git", branch = "main" }
 
+# bramble-rs: project spliced genome alignments into transcriptome space.
+# Local path dependency for co-development; switch to git/version for release.
+bramble-rs = { path = "../bramble/bramble-rs" }
+
 needletail = "0.6.3"
 indicatif = "0.18.3"
 rustc-hash = "2.1.1"

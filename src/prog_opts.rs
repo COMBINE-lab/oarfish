@@ -226,7 +226,7 @@ fn parse_filter_f32(arg: &str) -> anyhow::Result<FilterArg> {
 #[command(group(
     clap::ArgGroup::new("input")
     .required(true)
-    .args(["alignments", "reads", "only_index"])
+    .args(["alignments", "reads", "only_index", "genome_bam"])
 ))]
 #[command(group(
     clap::ArgGroup::new("raw_input_type")
@@ -237,6 +237,14 @@ fn parse_filter_f32(arg: &str) -> anyhow::Result<FilterArg> {
     clap::ArgGroup::new("raw_ref_type")
     .multiple(true)
     .args(["annotated", "novel", "index"])
+))]
+// Any reference that `--reads` can be mapped against. In transcriptome mode
+// this is one of annotated/novel/index; in genome (spliced) mode it is
+// `--genome`. `--reads` requires at least one member of this group.
+#[command(group(
+    clap::ArgGroup::new("read_ref")
+    .multiple(true)
+    .args(["annotated", "novel", "index", "genome"])
 ))]
 pub struct Args {
     /// be quiet (i.e. don't output log messages that aren't at least warnings)
@@ -261,7 +269,7 @@ pub struct Args {
         help_heading = "raw read mode",
         value_delimiter = ',',
         requires_ifs([
-            (ArgPredicate::IsPresent, "raw_ref_type"),
+            (ArgPredicate::IsPresent, "read_ref"),
             (ArgPredicate::IsPresent, "seq_tech"),
         ])
     )]
@@ -287,6 +295,49 @@ pub struct Args {
     )]
     pub index: Option<PathBuf>,
 
+    /// path to a spliced, genome-aligned BAM file. The alignments are projected
+    /// onto the transcripts in `--annotation` (using bramble) and then
+    /// quantified. The BAM must be collated by read name (e.g. `samtools collate`).
+    #[arg(
+        long,
+        help_heading = "genome mode",
+        requires = "annotation",
+        conflicts_with_all = ["alignments", "reads", "only_index", "annotated", "novel", "index", "genome"]
+    )]
+    pub genome_bam: Option<PathBuf>,
+
+    /// path to a genome FASTA or minimap2 index. Used with `--reads` to perform
+    /// spliced alignment of the reads to the genome, followed by projection onto
+    /// the transcripts in `--annotation`.
+    #[arg(
+        long,
+        help_heading = "genome mode",
+        requires = "annotation",
+        conflicts_with_all = ["alignments", "only_index", "raw_ref_type"]
+    )]
+    pub genome: Option<PathBuf>,
+
+    /// path to a transcript annotation (GTF/GFF). Required in genome mode; the
+    /// genomic alignments are projected onto the transcripts it defines.
+    #[arg(long, help_heading = "genome mode")]
+    pub annotation: Option<PathBuf>,
+
+    /// optional genome FASTA enabling bramble's soft-clip rescue during
+    /// projection (both genome modes). Provides the reference sequence used to
+    /// re-align soft-clipped read ends.
+    #[arg(long, help_heading = "genome mode")]
+    pub genome_fasta: Option<PathBuf>,
+
+    /// optional BED file of known splice junctions used to hint the spliced
+    /// genome alignment (genome read mode only).
+    #[arg(long, help_heading = "genome mode", requires = "genome")]
+    pub junctions: Option<PathBuf>,
+
+    /// spread (`beta`) used to convert bramble similarity scores into alignment
+    /// probabilities in genome mode: `prob = exp((sim - best_sim) * beta)`.
+    #[arg(long, hide = true, default_value_t = 10.0)]
+    pub projected_prob_beta: f32,
+
     /// If this flag is passed, oarfish only performs indexing and not quantification.
     /// Designed primarily for workflow management systems.
     /// Note: A prebuilt index is not needed to quantify with oarfish; an index can be
@@ -302,7 +353,7 @@ pub struct Args {
     #[arg(
         long,
         help_heading = "raw read mode",
-        required_unless_present = "alignments",
+        required_unless_present_any = ["alignments", "genome_bam"],
         value_parser = clap::value_parser!(SequencingTech)
     )]
     pub seq_tech: Option<SequencingTech>,
@@ -497,5 +548,76 @@ mod tests {
         ]);
 
         assert!(parsed.is_err(), "expected parse failure");
+    }
+
+    #[test]
+    fn genome_bam_requires_annotation() {
+        // genome-BAM mode without --annotation must fail
+        let missing = Args::try_parse_from([
+            "oarfish",
+            "--genome-bam",
+            "aln.genome.bam",
+            "-o",
+            "out",
+        ]);
+        assert!(missing.is_err(), "expected failure without --annotation");
+
+        // with --annotation it should parse (and not require --seq-tech)
+        let ok = Args::try_parse_from([
+            "oarfish",
+            "--genome-bam",
+            "aln.genome.bam",
+            "--annotation",
+            "anno.gtf",
+            "-o",
+            "out",
+        ]);
+        assert!(ok.is_ok(), "expected parse success, got {ok:?}");
+        let ok = ok.expect("valid arguments");
+        assert_eq!(
+            ok.genome_bam.as_deref(),
+            Some(std::path::Path::new("aln.genome.bam"))
+        );
+        assert_eq!(
+            ok.annotation.as_deref(),
+            Some(std::path::Path::new("anno.gtf"))
+        );
+    }
+
+    #[test]
+    fn genome_reads_mode_parses_and_conflicts() {
+        // --reads + --genome + --annotation + --seq-tech is the genome-read mode
+        let ok = Args::try_parse_from([
+            "oarfish",
+            "--reads",
+            "reads.fq.gz",
+            "--genome",
+            "genome.fa",
+            "--annotation",
+            "anno.gtf",
+            "--seq-tech",
+            "ont-cdna",
+            "-o",
+            "out",
+        ]);
+        assert!(ok.is_ok(), "expected parse success, got {ok:?}");
+
+        // --genome conflicts with a transcriptome --index
+        let conflict = Args::try_parse_from([
+            "oarfish",
+            "--reads",
+            "reads.fq.gz",
+            "--genome",
+            "genome.fa",
+            "--index",
+            "txps.mmi",
+            "--annotation",
+            "anno.gtf",
+            "--seq-tech",
+            "ont-cdna",
+            "-o",
+            "out",
+        ]);
+        assert!(conflict.is_err(), "expected --genome/--index conflict");
     }
 }

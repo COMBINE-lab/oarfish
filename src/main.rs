@@ -27,6 +27,7 @@ use crate::util::aligner::{get_aligner_from_args, get_aligner_from_fastas};
 use crate::util::digest_utils;
 use crate::util::normalize_probability::normalize_read_probs;
 use crate::util::oarfish_types::{AlignmentFilters, TranscriptInfo};
+use crate::util::projection;
 use crate::util::{
     binomial_probability::binomial_continuous_prob, kde_utils, logistic_probability::logistic_prob,
 };
@@ -153,6 +154,63 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
     }
 }
 
+/// Genome-BAM mode: project a spliced, genome-aligned (name-collated) BAM onto
+/// the transcripts in `--annotation` and quantify.
+fn run_genome_bam(args: &Args, filter_opts: AlignmentFilters) -> anyhow::Result<()> {
+    let bam_path = args.genome_bam.clone().expect("genome_bam present");
+    let annotation = args
+        .annotation
+        .clone()
+        .expect("--annotation is required with --genome-bam");
+
+    info!("oarfish is operating in genome-BAM (projection) mode");
+
+    // open the genome BAM with a multithreaded bgzf decoder
+    let afile = File::open(&bam_path)?;
+    let decomp_threads = 1.max(args.threads.saturating_sub(1));
+    let worker_count = NonZeroUsize::new(decomp_threads).expect("decompression threads >= 1");
+    let decoder = bgzf::io::MultithreadedReader::with_worker_count(worker_count, afile);
+    let mut reader = bam::io::Reader::from(decoder);
+
+    // the genome header gives us the chromosome -> RefId mapping; also enforce
+    // that the BAM is name-collated (required for per-read-name projection).
+    let genome_header = alignment_parser::read_and_verify_genome_header(&mut reader, &bam_path)?;
+    let refnames: Vec<String> = genome_header
+        .reference_sequences()
+        .iter()
+        .map(|(rseq, _)| rseq.to_string())
+        .collect();
+
+    // build the genome->transcriptome index and the transcriptome header/info.
+    let g2t = projection::load_g2t(&annotation, &refnames, args.genome_fasta.as_deref())?;
+    let (txp_header, mut txps, txps_name) =
+        projection::build_transcriptome_header_and_info(&g2t, args)?;
+    let proj_config = projection::projection_config(args);
+
+    let seqcol_digest = digest_utils::digest_from_header(&txp_header)?;
+    let digest: NamedDigestVec = vec![("transcriptome_digest".to_string(), seqcol_digest)].into();
+
+    bulk::quantify_genome_alignments_from_bam(
+        &genome_header,
+        &txp_header,
+        &g2t,
+        &proj_config,
+        filter_opts,
+        &mut reader,
+        &mut txps,
+        &txps_name,
+        args,
+        digest,
+    )
+}
+
+/// Genome-read mode: spliced-align raw reads to the genome with minimap2, then
+/// project onto the transcripts in `--annotation` and quantify.
+fn run_genome_reads(args: &mut Args, filter_opts: AlignmentFilters) -> anyhow::Result<()> {
+    let _ = filter_opts;
+    bulk::quantify_genome_raw_reads(args)
+}
+
 fn main() -> anyhow::Result<()> {
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
@@ -196,6 +254,21 @@ fn main() -> anyhow::Result<()> {
 
     // if we are quantifying, handle this below
     let filter_opts = get_filter_opts(&args)?;
+
+    // Genome-space modes: rather than quantifying against the input BAM/aligner
+    // references directly, we project genomic alignments onto the transcripts in
+    // `--annotation` (via bramble) and quantify those. These paths build the
+    // transcriptome header / `TranscriptInfo` from the annotation, not from the
+    // input header, so they are handled separately and return early.
+    if args.genome_bam.is_some() {
+        run_genome_bam(&args, filter_opts)?;
+        info!("oarfish completed successfully.");
+        return Ok(());
+    } else if args.genome.is_some() {
+        run_genome_reads(&mut args, filter_opts)?;
+        info!("oarfish completed successfully.");
+        return Ok(());
+    }
 
     let (header, reader, aligner, digest) = if args.alignments.is_none() {
         get_aligner_from_args(&mut args)?

@@ -12,6 +12,8 @@ use crate::util::oarfish_types::{
 };
 use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::{write_infrep_file, write_out_prob, write_output};
+use bramble_rs::ProjectionConfig;
+use bramble_rs::g2t::G2TTree;
 use crate::{logistic_prob, normalize_read_probs};
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use crossbeam::channel::Receiver;
@@ -253,6 +255,78 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
         seqcol_digest,
         read_aln_time,
         args,
+    )
+}
+
+/// Genome-BAM mode: parse a name-collated, spliced genome BAM, project each
+/// read's alignments onto the transcriptome with bramble, and quantify.
+///
+/// `txp_header` / `txps` / `txps_name` describe the *transcriptome* (built from
+/// the annotation via the projection bridge); `genome_header` is the input BAM's
+/// (chromosome) header used to read records and resolve reference ids.
+#[allow(clippy::too_many_arguments)]
+pub fn quantify_genome_alignments_from_bam<R: BufRead>(
+    genome_header: &noodles_sam::Header,
+    txp_header: &noodles_sam::Header,
+    g2t: &G2TTree,
+    proj_config: &ProjectionConfig,
+    filter_opts: AlignmentFilters,
+    reader: &mut bam::io::Reader<R>,
+    txps: &mut [TranscriptInfo],
+    txps_name: &[String],
+    args: &Args,
+    seqcol_digest: NamedDigestVec,
+) -> anyhow::Result<()> {
+    let mut name_vec = if filter_opts.write_assignment_probs {
+        Some(SwapVec::<String>::with_config(SwapVecConfig {
+            swap_after: Default::default(),
+            batch_size: Default::default(),
+            compression: Some(swapvec::Compression::Lz4),
+        }))
+    } else {
+        None
+    };
+
+    // the store keys alignments by transcript, so it lives over the
+    // transcriptome header.
+    let mut store = InMemoryAlignmentStore::new(filter_opts, txp_header);
+    let read_aln_start = std::time::SystemTime::now();
+    alignment_parser::parse_genome_alignments(
+        &mut store,
+        &mut name_vec,
+        genome_header,
+        g2t,
+        proj_config,
+        args.projected_prob_beta,
+        reader,
+        txps,
+        args.sort_check_num,
+        args.quiet,
+    )?;
+    let read_aln_time = read_aln_start.elapsed()?;
+    info!(
+        "Parsing and projection of genome alignments took: {}",
+        humantime::format_duration(read_aln_time).to_string()
+    );
+
+    perform_inference_and_write_output(
+        txp_header,
+        &mut store,
+        name_vec,
+        txps,
+        txps_name,
+        seqcol_digest,
+        read_aln_time,
+        args,
+    )
+}
+
+/// Genome-read mode (not yet implemented): spliced-align raw reads to the genome
+/// with minimap2, project onto the transcriptome, and quantify.
+pub fn quantify_genome_raw_reads(_args: &mut Args) -> anyhow::Result<()> {
+    anyhow::bail!(
+        "genome read mode (--reads with --genome) is not yet implemented; \
+         use --genome-bam with a pre-aligned spliced genome BAM for now."
     )
 }
 

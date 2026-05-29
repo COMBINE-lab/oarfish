@@ -738,6 +738,30 @@ impl<'h> InMemoryAlignmentStore<'h> {
         }
     }
 
+    /// Filter and add one read's projected (transcriptome-space) alignments.
+    ///
+    /// This is the genome-mode analogue of [`add_group`](Self::add_group): it
+    /// runs [`AlignmentFilters::filter_projected`] (updating the discard table)
+    /// and then [`add_filtered_group`](Self::add_filtered_group). `read_len` is
+    /// the query length (for the aligned-fraction filter) and `beta` the
+    /// similarity→probability spread.
+    #[inline(always)]
+    pub fn add_projected_group(
+        &mut self,
+        txps: &mut [TranscriptInfo],
+        recs: &[ProjectedAlnRecord],
+        read_len: usize,
+        beta: f32,
+    ) -> bool {
+        if recs.is_empty() {
+            return false;
+        }
+        let (alns, as_probs) =
+            self.filter_opts
+                .filter_projected(&mut self.discard_table, txps, recs, read_len, beta);
+        self.add_filtered_group(&alns, &as_probs, txps)
+    }
+
     #[inline(always)]
     pub fn add_filtered_group(
         &mut self,
@@ -1111,6 +1135,143 @@ impl AlignmentFilters {
                 .collect(),
             probabilities,
         )
+    }
+}
+
+/// A single transcriptome-space alignment produced by projecting a genomic
+/// alignment through bramble. This is the neutral hand-off type between the
+/// projection bridge (`util::projection`) and the alignment filters, so that
+/// [`AlignmentFilters`] need not depend on bramble's `ProjectedAlignment`.
+///
+/// Coordinates follow the same convention as the BAM path: `start`/`end` are
+/// 1-based (matching noodles `alignment_start`/`alignment_end`), and
+/// `aligned_len` is the number of transcript bases the alignment spans (the
+/// analogue of `aln_span`).
+#[derive(Clone, Debug)]
+pub struct ProjectedAlnRecord {
+    /// Transcript id == reference index in the (transcriptome) header.
+    pub ref_id: u32,
+    /// 1-based start on the transcript (forward-strand coordinates).
+    pub start: u32,
+    /// 1-based inclusive end on the transcript (forward-strand coordinates).
+    pub end: u32,
+    /// Transcript bases spanned by the alignment (`end - start + 1`).
+    pub aligned_len: u32,
+    /// Query (read) bases in the aligned portion (M/I/=/X), for aligned-fraction.
+    pub query_aligned_len: u32,
+    /// True if the read maps to the reverse strand of the transcript.
+    pub is_reverse: bool,
+    /// bramble similarity score (higher is better; best in a group anchors the
+    /// probability), used in place of the integer alignment score.
+    pub similarity: f64,
+}
+
+impl AlignmentFilters {
+    /// Filter a single read's projected (transcriptome-space) alignments and
+    /// compute per-alignment probabilities.
+    ///
+    /// This mirrors [`AlignmentFilters::filter`] but operates on projected
+    /// alignments (which have no integer alignment score). Probabilities are
+    /// derived from bramble's similarity score relative to the read's best
+    /// projected hit: `prob = exp((similarity - best_similarity) * beta)`, so
+    /// the best hit gets weight 1.0 and weaker hits decay (the analogue of the
+    /// BAM path's `exp((score - max_score) / 5.0)`). `read_len` is the query
+    /// length used for the aligned-fraction filter; `beta` is the spread knob
+    /// (`--projected-prob-beta`). Discard reasons are recorded in
+    /// `discard_table` exactly as the BAM path does.
+    pub fn filter_projected(
+        &self,
+        discard_table: &mut DiscardTable,
+        txps: &[TranscriptInfo],
+        recs: &[ProjectedAlnRecord],
+        read_len: usize,
+        beta: f32,
+    ) -> (Vec<AlnInfo>, Vec<f32>) {
+        let mut best_sim = f64::MIN;
+        let mut aln_frac_at_best = 0_f32;
+        let mut kept: Vec<&ProjectedAlnRecord> = Vec::with_capacity(recs.len());
+
+        for r in recs.iter() {
+            // strand orientation
+            match (r.is_reverse, self.which_strand) {
+                (_, Strand::Unknown) => { /* keep both */ }
+                (true, Strand::Reverse) => { /* keep */ }
+                (false, Strand::Forward) => { /* keep */ }
+                (false, Strand::Reverse) | (true, Strand::Forward) => {
+                    discard_table.discard_ori += 1;
+                    continue;
+                }
+            }
+
+            // enough absolute sequence (# of transcript bases) is aligned
+            if r.aligned_len < self.min_aligned_len {
+                discard_table.discard_aln_len += 1;
+                continue;
+            }
+
+            let tid = r.ref_id as usize;
+
+            // not too far from the 3' end
+            if (r.end as i64) <= (txps[tid].len.get() as i64 - self.three_prime_clip) {
+                discard_table.discard_3p += 1;
+                continue;
+            }
+
+            // not too far from the 5' end
+            if r.start >= self.five_prime_clip {
+                discard_table.discard_5p += 1;
+                continue;
+            }
+
+            // committed to retaining; track the best (highest-similarity) hit
+            if r.similarity > best_sim {
+                best_sim = r.similarity;
+                aln_frac_at_best = if read_len > 0 {
+                    (r.query_aligned_len as f32) / (read_len as f32)
+                } else {
+                    0_f32
+                };
+            }
+            kept.push(r);
+        }
+
+        if kept.is_empty() || best_sim <= 0.0 {
+            return (vec![], vec![]);
+        }
+        if aln_frac_at_best < self.min_aligned_fraction {
+            discard_table.discard_aln_frac += 1;
+            return (vec![], vec![]);
+        }
+
+        discard_table.valid_best_aln += 1;
+
+        let msim = best_sim;
+        let inv_msim = 1.0 / msim;
+        let mut out_alns = Vec::<AlnInfo>::with_capacity(kept.len());
+        let mut probabilities = Vec::<f32>::with_capacity(kept.len());
+
+        for r in kept {
+            let sim_ok = ((r.similarity * inv_msim) as f32) >= self.score_threshold;
+            if !sim_ok {
+                discard_table.discard_score += 1;
+                continue;
+            }
+            let f = ((r.similarity - msim) as f32) * beta;
+            probabilities.push(f.exp());
+            out_alns.push(AlnInfo {
+                ref_id: r.ref_id,
+                start: r.start,
+                end: r.end,
+                prob: 0.0_f64,
+                strand: if r.is_reverse {
+                    Strand::Reverse
+                } else {
+                    Strand::Forward
+                },
+            });
+        }
+
+        (out_alns, probabilities)
     }
 }
 
