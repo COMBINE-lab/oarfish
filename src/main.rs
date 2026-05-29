@@ -207,8 +207,40 @@ fn run_genome_bam(args: &Args, filter_opts: AlignmentFilters) -> anyhow::Result<
 /// Genome-read mode: spliced-align raw reads to the genome with minimap2, then
 /// project onto the transcripts in `--annotation` and quantify.
 fn run_genome_reads(args: &mut Args, filter_opts: AlignmentFilters) -> anyhow::Result<()> {
-    let _ = filter_opts;
-    bulk::quantify_genome_raw_reads(args)
+    let annotation = args
+        .annotation
+        .clone()
+        .expect("--annotation is required with --genome");
+    let read_paths = args
+        .reads
+        .clone()
+        .expect("--reads is required in genome read mode");
+
+    // build the spliced genome aligner and obtain its reference (chromosome)
+    // names in target-id order (== the g2t RefId order).
+    let (aligner, refnames) = crate::util::aligner::get_genome_aligner_from_args(args)?;
+
+    // build the genome->transcriptome index and the transcriptome header/info.
+    let g2t = projection::load_g2t(&annotation, &refnames, args.genome_fasta.as_deref())?;
+    let (txp_header, mut txps, txps_name) =
+        projection::build_transcriptome_header_and_info(&g2t, args)?;
+    let proj_config = projection::projection_config(args);
+
+    let seqcol_digest = digest_utils::digest_from_header(&txp_header)?;
+    let digest: NamedDigestVec = vec![("transcriptome_digest".to_string(), seqcol_digest)].into();
+
+    bulk::quantify_genome_raw_reads(
+        &txp_header,
+        aligner,
+        &g2t,
+        &proj_config,
+        filter_opts,
+        &read_paths,
+        &mut txps,
+        &txps_name,
+        args,
+        digest,
+    )
 }
 
 fn main() -> anyhow::Result<()> {

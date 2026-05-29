@@ -23,6 +23,7 @@ use noodles_sam::header::Header;
 use noodles_sam::header::record::value as header_val;
 use noodles_sam::header::record::value::Map as HeaderMap;
 
+use bramble_rs::GenomicAlignment;
 use bramble_rs::ProjectedAlignment;
 use bramble_rs::ProjectionConfig;
 use bramble_rs::annotation::load_transcripts;
@@ -157,4 +158,47 @@ pub fn projection_config(args: &Args) -> ProjectionConfig {
         long_reads: true,
         use_fasta: args.genome_fasta.is_some(),
     }
+}
+
+/// Convert a minimap2 [`Mapping`](minimap2::Mapping) (spliced genome alignment)
+/// into a bramble [`GenomicAlignment`].
+///
+/// `minimap2`'s `target_id` is the 0-based index into the aligner's reference
+/// list, which is the same order used to build the [`G2TTree`] (see
+/// [`crate::util::aligner::get_genome_aligner_from_args`]), so it is used
+/// directly as the bramble `ref_id`. The query sequence is not attached here
+/// (soft-clip rescue is handled by the caller when `--genome-fasta` is set);
+/// `read_len` carries the query length needed for NH / aligned-fraction.
+///
+/// Returns `None` for mappings lacking a CIGAR (the projection needs one).
+pub fn mapping_to_genomic_alignment(
+    m: &minimap2::Mapping,
+    query_name: &str,
+    read_len: usize,
+) -> Option<GenomicAlignment> {
+    let cigar = m.alignment.as_ref()?.cigar.as_ref()?.clone();
+    if cigar.is_empty() {
+        return None;
+    }
+    let ts_strand = m.trans_strand.map(|s| match s {
+        minimap2::Strand::Forward => '+',
+        minimap2::Strand::Reverse => '-',
+    });
+    Some(GenomicAlignment {
+        query_name: query_name.to_string(),
+        ref_id: m.target_id,
+        ref_start: (m.target_start as i64) + 1, // minimap2 target_start is 0-based; SAM POS is 1-based
+        is_reverse: matches!(m.strand, minimap2::Strand::Reverse),
+        cigar,
+        sequence: None,
+        is_paired: false,
+        is_first_in_pair: false,
+        xs_strand: None,
+        ts_strand,
+        hit_index: 0,
+        mate_ref_id: None,
+        mate_ref_start: None,
+        mate_is_unmapped: false,
+        read_len,
+    })
 }

@@ -288,3 +288,73 @@ fn make_header(
 
     Ok(header.build())
 }
+
+/// Build a *spliced* minimap2 aligner over a genome (FASTA or `.mmi` index) for
+/// genome-read mode, and return the list of reference (chromosome) names in
+/// target-id order. `refnames[i]` is the chromosome whose 0-based `target_id`
+/// (and thus bramble `RefId`) is `i`.
+///
+/// The splice preset is chosen from the sequencing technology (`splice:hq` for
+/// PacBio HiFi, `splice` otherwise). When `--junctions` is provided, the BED of
+/// known junctions is loaded (equivalent to minimap2 `--junc-bed`).
+pub(crate) fn get_genome_aligner_from_args(
+    args: &Args,
+) -> anyhow::Result<(Aligner<minimap2::Built>, Vec<String>)> {
+    let genome = args
+        .genome
+        .clone()
+        .expect("--genome is required in genome read mode");
+    info!(
+        "oarfish is operating in genome read mode; building a spliced minimap2 index over {}",
+        genome.display()
+    );
+
+    let idx_threads = args.threads.max(1);
+    let builder = match args.seq_tech {
+        Some(SequencingTech::PacBioHifi) => Aligner::builder().splice_hq(),
+        Some(_) => Aligner::builder().splice(),
+        None => anyhow::bail!("--seq-tech is required in genome read mode, but it was not provided!"),
+    };
+
+    let mut aligner = builder
+        .with_index_threads(idx_threads)
+        .with_cigar()
+        .with_cigar_clipping()
+        .with_index(genome.clone(), None)
+        .map_err(anyhow::Error::msg)?;
+
+    // up to best_n secondary mappings, and the same seed as command-line minimap2.
+    aligner.mapopt.best_n = args.best_n as i32;
+    aligner.mapopt.seed = 11;
+
+    // optionally load known splice junctions (minimap2 --junc-bed).
+    if let Some(bed) = args.junctions.as_ref() {
+        let bed_str = bed.to_str().expect("could not convert junctions path to &str");
+        aligner
+            .read_junction_lr(bed_str)
+            .map_err(|code| anyhow::anyhow!("failed to load junction BED {} (code {})", bed_str, code))?;
+        info!("loaded known splice junctions from {}", bed_str);
+    }
+
+    let refnames = genome_aligner_ref_names(&aligner);
+    info!(
+        "genome index contains {} reference sequences",
+        refnames.len().to_formatted_string(&Locale::en)
+    );
+    Ok((aligner, refnames))
+}
+
+/// Extract the reference (chromosome) names from a built genome aligner, in
+/// `target_id` order (0..n_seq).
+fn genome_aligner_ref_names(aligner: &Aligner<minimap2::Built>) -> Vec<String> {
+    let n_seq = aligner.n_seq();
+    let mut names = Vec::with_capacity(n_seq as usize);
+    for i in 0..n_seq {
+        let seq = aligner.get_seq(i as usize).unwrap_or_else(|| {
+            panic!("{} was not a valid reference sequence index (n_seq = {})", i, n_seq)
+        });
+        let c_str = unsafe { CStr::from_ptr(seq.name) };
+        names.push(c_str.to_str().unwrap().to_string());
+    }
+    names
+}

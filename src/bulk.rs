@@ -12,8 +12,10 @@ use crate::util::oarfish_types::{
 };
 use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::{write_infrep_file, write_out_prob, write_output};
+use crate::util::projection::{mapping_to_genomic_alignment, projected_to_records};
 use bramble_rs::ProjectionConfig;
 use bramble_rs::g2t::G2TTree;
+use bramble_rs::project_group;
 use crate::{logistic_prob, normalize_read_probs};
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use crossbeam::channel::Receiver;
@@ -321,12 +323,332 @@ pub fn quantify_genome_alignments_from_bam<R: BufRead>(
     )
 }
 
-/// Genome-read mode (not yet implemented): spliced-align raw reads to the genome
-/// with minimap2, project onto the transcriptome, and quantify.
-pub fn quantify_genome_raw_reads(_args: &mut Args) -> anyhow::Result<()> {
-    anyhow::bail!(
-        "genome read mode (--reads with --genome) is not yet implemented; \
-         use --genome-bam with a pre-aligned spliced genome BAM for now."
+/// Genome-read mode: spliced-align raw reads to the genome with minimap2, project
+/// each read's mappings onto the transcriptome with bramble, and quantify.
+///
+/// This mirrors [`quantify_bulk_alignments_raw_reads`] (same producer → mapper →
+/// consumer pipeline), but the mapper projects each read's genomic mappings onto
+/// the transcripts (via bramble) rather than mapping directly to a transcriptome.
+/// `txp_header` / `txps` / `txps_name` describe the transcriptome built from the
+/// annotation; `aligner` is a spliced genome aligner; `g2t` the genome→
+/// transcriptome index over the same reference order as the aligner targets.
+#[allow(clippy::too_many_arguments)]
+pub fn quantify_genome_raw_reads(
+    txp_header: &noodles_sam::Header,
+    mut aligner: minimap2::Aligner<minimap2::Built>,
+    g2t: &G2TTree,
+    proj_config: &ProjectionConfig,
+    filter_opts: AlignmentFilters,
+    read_paths: &[std::path::PathBuf],
+    txps: &mut [TranscriptInfo],
+    txps_name: &[String],
+    args: &Args,
+    seqcol_digest: NamedDigestVec,
+) -> anyhow::Result<()> {
+    // shared, read-only view of the transcript info (for the projected filters).
+    let mut txp_info_view: Vec<TranscriptInfo> = Vec::with_capacity(txps.len());
+    for ti in txps.iter() {
+        txp_info_view.push(ti.clone());
+    }
+
+    let map_threads = args.threads.saturating_sub(2).max(1);
+    let per_thread_cap_kalloc =
+        ((args.thread_buff_size as f64) / (args.threads as f64)).ceil() as i64;
+    aligner.mapopt.cap_kalloc = per_thread_cap_kalloc;
+
+    let beta = args.projected_prob_beta;
+    let use_fasta = proj_config.use_fasta;
+
+    type ReadGroup = ReadChunkWithNames;
+    type AlignmentGroupInfo = (Vec<AlnInfo>, Vec<f32>, Vec<usize>, Option<Vec<String>>);
+
+    let (read_sender, read_receiver): (Sender<ReadGroup>, Receiver<ReadGroup>) =
+        bounded(args.threads * 10);
+
+    const READ_CHUNK_SIZE: usize = 200;
+    let mut rpaths = vec![];
+    read_paths.clone_into(&mut rpaths);
+
+    // Producer thread: read sequences and send them to the channel.
+    let producer = std::thread::spawn(move || {
+        let mut ctr = 0_usize;
+        let mut chunk_size = 0_usize;
+        let mut read_chunk = ReadChunkWithNames::new();
+
+        let mark_chunk = |chunk_size: &mut usize,
+                          ctr: &mut usize,
+                          read_chunk: &mut ReadGroup,
+                          read_sender: &Sender<ReadGroup>| {
+            *chunk_size += 1;
+            *ctr += 1;
+            if *chunk_size >= READ_CHUNK_SIZE {
+                read_sender
+                    .send(read_chunk.clone())
+                    .expect("Error sending sequence");
+                read_chunk.clear();
+                *chunk_size = 0;
+            }
+        };
+
+        for read_path in rpaths {
+            match get_source_type(&read_path) {
+                InputSourceType::Ubam => {
+                    let mut reader = std::fs::File::open(read_path)
+                        .map(bam::io::Reader::new)
+                        .expect("could not create BAM reader");
+                    let header = reader.read_header().expect("could not read BAM header");
+                    for result in reader.record_bufs(&header) {
+                        let record = result.expect("Error reading ubam record");
+                        record.add_to_read_group(&mut read_chunk);
+                        mark_chunk(&mut chunk_size, &mut ctr, &mut read_chunk, &read_sender);
+                    }
+                }
+                s @ (InputSourceType::Fastx | InputSourceType::Unknown) => {
+                    if matches!(s, InputSourceType::Unknown) {
+                        warn!(
+                            "could not determine input file type for {} from suffix; assuming (possibly gzipped) fastx",
+                            read_path.display()
+                        );
+                    }
+                    let mut reader =
+                        parse_fastx_file(read_path).expect("valid path/file to read sequences");
+                    while let Some(result) = reader.next() {
+                        let record = result.expect("Error reading record");
+                        record.add_to_read_group(&mut read_chunk);
+                        mark_chunk(&mut chunk_size, &mut ctr, &mut read_chunk, &read_sender);
+                    }
+                }
+            }
+        }
+        if chunk_size > 0 {
+            read_sender
+                .send(read_chunk)
+                .expect("Error sending sequence");
+        }
+        ctr
+    });
+
+    let (mut store, name_vec, aln_time) = std::thread::scope(
+        |s| -> anyhow::Result<(
+            InMemoryAlignmentStore,
+            Option<SwapVec<String>>,
+            std::time::Duration,
+        )> {
+            const ALN_GROUP_CHUNK_LIMIT: usize = 100;
+
+            let (aln_group_sender, aln_group_receiver): (
+                Sender<AlignmentGroupInfo>,
+                Receiver<AlignmentGroupInfo>,
+            ) = bounded(args.threads * 100);
+
+            let write_assignment_probs: bool = args.write_assignment_probs.is_some();
+            // Mapper threads: align each read to the genome, then project its
+            // mappings onto the transcriptome and filter.
+            let consumers: Vec<_> = (0..map_threads)
+                .map(|_| {
+                    let receiver = read_receiver.clone();
+                    let filter = filter_opts.clone();
+                    let loc_aligner = aligner.clone();
+                    let my_txp_info_view = &txp_info_view;
+                    let aln_group_sender = aln_group_sender.clone();
+
+                    s.spawn(move || {
+                        let mut discard_table = DiscardTable::new();
+
+                        let mut chunk_size = 0_usize;
+                        let mut aln_group_alns: Vec<AlnInfo> = Vec::new();
+                        let mut aln_group_probs: Vec<f32> = Vec::new();
+                        let mut aln_group_boundaries: Vec<usize> = Vec::new();
+                        let mut aln_group_read_names = write_assignment_probs.then(Vec::new);
+                        aln_group_boundaries.push(0);
+
+                        for read_chunk in receiver {
+                            for (name, seq) in read_chunk.iter() {
+                                let map_res_opt =
+                                    loc_aligner.map(seq, true, false, None, None, Some(name));
+                                let Ok(mappings) = map_res_opt else {
+                                    warn!("Error encountered mapping read: {}", map_res_opt.unwrap_err());
+                                    continue;
+                                };
+
+                                let query_name = String::from_utf8_lossy(name).into_owned();
+                                let mut galns: Vec<bramble_rs::GenomicAlignment> = mappings
+                                    .iter()
+                                    .filter_map(|m| {
+                                        mapping_to_genomic_alignment(m, &query_name, seq.len())
+                                    })
+                                    .collect();
+                                if galns.is_empty() {
+                                    continue;
+                                }
+                                // attach the read sequence to the first alignment when
+                                // soft-clip rescue is enabled (bramble shares one seq
+                                // across the read group).
+                                if use_fasta {
+                                    galns[0].sequence = Some(seq.to_vec());
+                                }
+
+                                let projected = project_group(&galns, g2t, proj_config);
+                                if projected.is_empty() {
+                                    continue;
+                                }
+                                let recs = projected_to_records(&projected);
+                                let (ag, aprobs) = filter.filter_projected(
+                                    &mut discard_table,
+                                    my_txp_info_view,
+                                    &recs,
+                                    seq.len(),
+                                    beta,
+                                );
+
+                                if !ag.is_empty() {
+                                    aln_group_alns.extend_from_slice(&ag);
+                                    aln_group_probs.extend_from_slice(&aprobs);
+                                    aln_group_boundaries.push(aln_group_alns.len());
+                                    if let Some(ref mut names_vec) = aln_group_read_names {
+                                        names_vec.push(query_name);
+                                    }
+                                    chunk_size += 1;
+                                }
+
+                                if chunk_size >= ALN_GROUP_CHUNK_LIMIT {
+                                    aln_group_sender
+                                        .send((
+                                            aln_group_alns.clone(),
+                                            aln_group_probs.clone(),
+                                            aln_group_boundaries.clone(),
+                                            aln_group_read_names,
+                                        ))
+                                        .expect("Error sending alignment group");
+                                    aln_group_alns.clear();
+                                    aln_group_probs.clear();
+                                    aln_group_boundaries.clear();
+                                    aln_group_boundaries.push(0);
+                                    aln_group_read_names = write_assignment_probs.then(Vec::new);
+                                    chunk_size = 0;
+                                }
+                            }
+                        }
+                        if chunk_size > 0 {
+                            aln_group_sender
+                                .send((
+                                    aln_group_alns,
+                                    aln_group_probs,
+                                    aln_group_boundaries,
+                                    aln_group_read_names,
+                                ))
+                                .expect("Error sending alignment group");
+                        }
+                        discard_table
+                    })
+                })
+                .collect();
+
+            #[allow(clippy::useless_asref)]
+            let txps_mut = txps.as_mut();
+            let filter_opts_store = filter_opts.clone();
+            let aln_group_consumer = s.spawn(move || {
+                let mut name_vec = if filter_opts_store.write_assignment_probs {
+                    Some(SwapVec::<String>::with_config(SwapVecConfig {
+                        swap_after: Default::default(),
+                        batch_size: Default::default(),
+                        compression: Some(swapvec::Compression::Lz4),
+                    }))
+                } else {
+                    None
+                };
+
+                let mut store = InMemoryAlignmentStore::new(filter_opts_store, txp_header);
+
+                let pb = if args.quiet {
+                    indicatif::ProgressBar::hidden()
+                } else {
+                    indicatif::ProgressBar::new_spinner().with_message("Number of reads mapped")
+                };
+                pb.set_style(
+                    indicatif::ProgressStyle::with_template(
+                        "[{elapsed_precise}] {spinner:4.green/blue} {msg} {human_pos:>12}",
+                    )
+                    .unwrap()
+                    .tick_chars("⠁⠁⠉⠙⠚⠒⠂⠂⠒⠲⠴⠤⠄⠄⠤⠠⠠⠤⠦⠖⠒⠐⠐⠒⠓⠋⠉⠈⠈"),
+                );
+                pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
+
+                for (ags, aprobs, aln_boundaries, read_names) in aln_group_receiver {
+                    let mut reversed_read_names = if let Some(mut names_vec) = read_names {
+                        names_vec.reverse();
+                        Some(names_vec)
+                    } else {
+                        None
+                    };
+
+                    for window in aln_boundaries.windows(2) {
+                        pb.inc(1);
+                        let ag = &ags[window[0]..window[1]];
+                        let as_probs = &aprobs[window[0]..window[1]];
+                        let read_name_opt = if let Some(ref mut names_vec) = reversed_read_names {
+                            names_vec.pop()
+                        } else {
+                            None
+                        };
+
+                        if store.add_filtered_group(ag, as_probs, txps_mut) {
+                            if let Some(ref mut nvec) = name_vec {
+                                let read_name =
+                                    read_name_opt.unwrap_or(EMPTY_READ_NAME.to_string());
+                                nvec.push(read_name)
+                                    .expect("cannot push name to read name vector");
+                            }
+                            if ag.len() == 1 {
+                                store.inc_unique_alignments();
+                            }
+                        }
+                    }
+                }
+                pb.finish_with_message("Finished aligning and projecting reads.");
+                (store, name_vec)
+            });
+
+            let aln_start = std::time::SystemTime::now();
+            let total_reads = producer.join().expect("Producer thread panicked");
+
+            let mut discard_tables: Vec<DiscardTable> = Vec::with_capacity(map_threads);
+            for consumer in consumers {
+                discard_tables.push(consumer.join().expect("Consumer thread panicked"));
+            }
+
+            drop(aln_group_sender);
+
+            let (mut store, name_vec) = aln_group_consumer
+                .join()
+                .expect("Alignment group consumer panicked");
+
+            info!(
+                "Parsed {} total reads",
+                total_reads.to_formatted_string(&Locale::en)
+            );
+            let aln_time = aln_start.elapsed()?;
+            info!(
+                "Spliced genome alignment + projection of raw reads took: {}",
+                humantime::format_duration(aln_time).to_string()
+            );
+
+            for dt in &discard_tables {
+                store.aggregate_discard_table(dt);
+            }
+            Ok((store, name_vec, aln_time))
+        },
+    )?;
+
+    perform_inference_and_write_output(
+        txp_header,
+        &mut store,
+        name_vec,
+        txps,
+        txps_name,
+        seqcol_digest,
+        aln_time,
+        args,
     )
 }
 
