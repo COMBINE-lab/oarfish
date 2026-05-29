@@ -9,6 +9,8 @@ use std::path::Path;
 use swapvec::SwapVec;
 use tracing::{error, info};
 
+const KNOWN_MAPPERS: [&str; 3] = ["minimap2", "pbmm2", "bramble"];
+
 pub fn read_and_verify_header<R: io::BufRead>(
     reader: &mut bam::io::Reader<R>,
     aln_file: &Path,
@@ -52,24 +54,28 @@ pub fn read_and_verify_header<R: io::BufRead>(
         );
     }
 
-    let valid_aligner_names = vec![bstr::BStr::new("minimap2"), bstr::BStr::new("pbmm2")];
-    let mut saw_valid_aligner = false;
+    let mut matched_prog = None;
     let mut progs = vec![];
     // explicitly check that alignment was done with a supported
-    // aligner (right now, just minimap2).
+    // aligner (right now, minimap2, pbmm2, and bramble).
     for (prog, _pmap) in header.programs().roots() {
-        if valid_aligner_names.contains(&prog) {
-            saw_valid_aligner = true;
+        if KNOWN_MAPPERS.iter().any(|known| prog == *known) {
+            matched_prog = Some(prog);
             break;
         } else {
             progs.push(prog);
         }
     }
     assert!(
-        saw_valid_aligner,
-        "Currently, only [{valid_aligner_names:?}] are supported as aligners. The bam file listed {progs:?}."
+        matched_prog.is_some(),
+        "Currently supported aligners are [{}]. The bam file listed {:?}.",
+        KNOWN_MAPPERS.join(", "),
+        progs
     );
-    info!("saw minimap2 as a program in the header; proceeding.");
+    info!(
+        "saw supported mapper {} as a program in the header; proceeding.",
+        matched_prog.unwrap()
+    );
     Ok(header)
 }
 
