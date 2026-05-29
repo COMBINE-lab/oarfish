@@ -52,22 +52,22 @@ pub fn read_and_verify_header<R: io::BufRead>(
         );
     }
 
-    let mut saw_minimap2 = false;
+    let valid_aligner_names = vec![bstr::BStr::new("minimap2"), bstr::BStr::new("pbmm2")];
+    let mut saw_valid_aligner = false;
     let mut progs = vec![];
     // explicitly check that alignment was done with a supported
     // aligner (right now, just minimap2).
     for (prog, _pmap) in header.programs().roots() {
-        if prog == "minimap2" {
-            saw_minimap2 = true;
+        if valid_aligner_names.contains(&prog) {
+            saw_valid_aligner = true;
             break;
         } else {
             progs.push(prog);
         }
     }
     assert!(
-        saw_minimap2,
-        "Currently, only minimap2 is supported as an aligner. The bam file listed {:?}.",
-        progs
+        saw_valid_aligner,
+        "Currently, only [{valid_aligner_names:?}] are supported as aligners. The bam file listed {progs:?}."
     );
     info!("saw minimap2 as a program in the header; proceeding.");
     Ok(header)
