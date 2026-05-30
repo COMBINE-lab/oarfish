@@ -1256,12 +1256,20 @@ impl AlignmentFilters {
                 discard_table.discard_score += 1;
                 continue;
             }
+            // Defensively clamp the projected interval to the transcript bounds.
+            // With a correct projection `1 <= start <= end <= len` always holds;
+            // this guard just prevents a stray out-of-range coordinate from
+            // panicking the coverage binning during a long run.
+            let tlen = txps[r.ref_id as usize].len.get() as u32;
+            let start = r.start.clamp(1, tlen);
+            let end = r.end.clamp(start, tlen);
+
             let f = ((r.similarity - msim) as f32) * beta;
             probabilities.push(f.exp());
             out_alns.push(AlnInfo {
                 ref_id: r.ref_id,
-                start: r.start,
-                end: r.end,
+                start,
+                end,
                 prob: 0.0_f64,
                 strand: if r.is_reverse {
                     Strand::Reverse
