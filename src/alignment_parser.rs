@@ -3,7 +3,7 @@ use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
 use crate::prog_opts::ProjProbSource;
 use crate::util::projection::projected_to_records;
 use bramble_rs::g2t::G2TTree;
-use bramble_rs::{GenomicAlignment, ProjectionConfig, project_group};
+use bramble_rs::{GenomicAlignment, ProjectionConfig, ProjectionContext, project_group_with};
 use noodles_bam as bam;
 use noodles_sam::alignment::record::cigar::op::Kind as CigarKind;
 use noodles_sam::header::record::value::map::tag;
@@ -523,6 +523,7 @@ fn project_and_add_group(
     proj_config: &ProjectionConfig,
     beta: f32,
     prob_source: ProjProbSource,
+    pctx: &mut ProjectionContext,
     query_name: &str,
     records_for_read: &[RecordBuf],
 ) -> bool {
@@ -547,7 +548,7 @@ fn project_and_add_group(
         .find(|&l| l > 0)
         .unwrap_or(0);
 
-    let projected = project_group(&alns, g2t, proj_config);
+    let projected = project_group_with(&alns, g2t, proj_config, pctx);
     if projected.is_empty() {
         return false;
     }
@@ -586,6 +587,9 @@ pub fn parse_genome_alignments<R: io::BufRead>(
     let mut prev_read = String::new();
     let mut num_unmapped = 0_u64;
     let mut records_for_read: Vec<RecordBuf> = vec![];
+    // reused across all read groups (avoids per-read allocation of bramble's
+    // projection scratch / ksw2 aligner).
+    let mut pctx = ProjectionContext::new();
 
     let pb = if quiet {
         indicatif::ProgressBar::hidden()
@@ -632,7 +636,7 @@ pub fn parse_genome_alignments<R: io::BufRead>(
         } else {
             if !prev_read.is_empty()
                 && project_and_add_group(
-                    store, txps, g2t, proj_config, beta, prob_source, &prev_read, &records_for_read,
+                    store, txps, g2t, proj_config, beta, prob_source, &mut pctx, &prev_read, &records_for_read,
                 )
             {
                 add_read_name(&records_for_read);
@@ -665,7 +669,7 @@ pub fn parse_genome_alignments<R: io::BufRead>(
 
     if !records_for_read.is_empty()
         && project_and_add_group(
-            store, txps, g2t, proj_config, beta, prob_source, &prev_read, &records_for_read,
+            store, txps, g2t, proj_config, beta, prob_source, &mut pctx, &prev_read, &records_for_read,
         )
     {
         add_read_name(&records_for_read);

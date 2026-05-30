@@ -14,8 +14,9 @@ use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::{write_infrep_file, write_out_prob, write_output};
 use crate::util::projection::{mapping_to_genomic_alignment, projected_to_records};
 use bramble_rs::ProjectionConfig;
+use bramble_rs::ProjectionContext;
 use bramble_rs::g2t::G2TTree;
-use bramble_rs::project_group;
+use bramble_rs::project_group_with;
 use crate::{logistic_prob, normalize_read_probs};
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use crossbeam::channel::Receiver;
@@ -469,6 +470,9 @@ pub fn quantify_genome_raw_reads(
                         let mut aln_group_boundaries: Vec<usize> = Vec::new();
                         let mut aln_group_read_names = write_assignment_probs.then(Vec::new);
                         aln_group_boundaries.push(0);
+                        // reused across all reads this worker projects (avoids
+                        // per-read allocation of bramble's projection scratch).
+                        let mut pctx = ProjectionContext::new();
 
                         for read_chunk in receiver {
                             for (name, seq) in read_chunk.iter() {
@@ -511,7 +515,8 @@ pub fn quantify_genome_raw_reads(
                                     galns[0].sequence = Some(seq.to_vec());
                                 }
 
-                                let projected = project_group(&galns, g2t, proj_config);
+                                let projected =
+                                    project_group_with(&galns, g2t, proj_config, &mut pctx);
                                 if projected.is_empty() {
                                     continue;
                                 }
