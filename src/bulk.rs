@@ -442,6 +442,10 @@ pub fn quantify_genome_raw_reads(
             ) = bounded(args.threads * 100);
 
             let write_assignment_probs: bool = args.write_assignment_probs.is_some();
+            // Diagnostics: reads minimap2 aligns to the genome vs reads that
+            // produce >=1 projected transcriptome alignment (projection loss).
+            let n_genome_mapped = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let n_projected = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
             // Mapper threads: align each read to the genome, then project its
             // mappings onto the transcriptome and filter.
             let consumers: Vec<_> = (0..map_threads)
@@ -451,6 +455,8 @@ pub fn quantify_genome_raw_reads(
                     let loc_aligner = aligner.clone();
                     let my_txp_info_view = &txp_info_view;
                     let aln_group_sender = aln_group_sender.clone();
+                    let n_genome_mapped = std::sync::Arc::clone(&n_genome_mapped);
+                    let n_projected = std::sync::Arc::clone(&n_projected);
 
                     s.spawn(move || {
                         let mut discard_table = DiscardTable::new();
@@ -481,6 +487,8 @@ pub fn quantify_genome_raw_reads(
                                 if galns.is_empty() {
                                     continue;
                                 }
+                                n_genome_mapped
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 // attach the read sequence to the first alignment when
                                 // soft-clip rescue is enabled (bramble shares one seq
                                 // across the read group).
@@ -492,6 +500,7 @@ pub fn quantify_genome_raw_reads(
                                 if projected.is_empty() {
                                     continue;
                                 }
+                                n_projected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 let recs = projected_to_records(&projected);
                                 let (ag, aprobs) = filter.filter_projected(
                                     &mut discard_table,
@@ -626,6 +635,15 @@ pub fn quantify_genome_raw_reads(
             info!(
                 "Parsed {} total reads",
                 total_reads.to_formatted_string(&Locale::en)
+            );
+            let n_gm = n_genome_mapped.load(std::sync::atomic::Ordering::Relaxed);
+            let n_pr = n_projected.load(std::sync::atomic::Ordering::Relaxed);
+            info!(
+                "reads aligned to genome: {}; of those, projected to >=1 transcript: {} ({:.2}%); projection-dropped: {}",
+                n_gm.to_formatted_string(&Locale::en),
+                n_pr.to_formatted_string(&Locale::en),
+                if n_gm > 0 { 100.0 * (n_pr as f64) / (n_gm as f64) } else { 0.0 },
+                (n_gm - n_pr).to_formatted_string(&Locale::en),
             );
             let aln_time = aln_start.elapsed()?;
             info!(
