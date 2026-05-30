@@ -300,6 +300,7 @@ pub fn quantify_genome_alignments_from_bam<R: BufRead>(
         g2t,
         proj_config,
         args.projected_prob_beta,
+        args.projected_prob_source,
         reader,
         txps,
         args.sort_check_num,
@@ -358,6 +359,7 @@ pub fn quantify_genome_raw_reads(
 
     let beta = args.projected_prob_beta;
     let use_fasta = proj_config.use_fasta;
+    let prob_source = args.projected_prob_source;
 
     type ReadGroup = ReadChunkWithNames;
     type AlignmentGroupInfo = (Vec<AlnInfo>, Vec<f32>, Vec<usize>, Option<Vec<String>>);
@@ -478,12 +480,25 @@ pub fn quantify_genome_raw_reads(
                                 };
 
                                 let query_name = String::from_utf8_lossy(name).into_owned();
-                                let mut galns: Vec<bramble_rs::GenomicAlignment> = mappings
-                                    .iter()
-                                    .filter_map(|m| {
+                                // build GenomicAlignments and a parallel vector of
+                                // their minimap2 alignment scores (used by the
+                                // score/combined probability sources).
+                                let mut galns: Vec<bramble_rs::GenomicAlignment> =
+                                    Vec::with_capacity(mappings.len());
+                                let mut src_scores: Vec<i32> = Vec::with_capacity(mappings.len());
+                                for m in mappings.iter() {
+                                    if let Some(ga) =
                                         mapping_to_genomic_alignment(m, &query_name, seq.len())
-                                    })
-                                    .collect();
+                                    {
+                                        galns.push(ga);
+                                        src_scores.push(
+                                            m.alignment
+                                                .as_ref()
+                                                .and_then(|a| a.alignment_score)
+                                                .unwrap_or(0),
+                                        );
+                                    }
+                                }
                                 if galns.is_empty() {
                                     continue;
                                 }
@@ -501,13 +516,14 @@ pub fn quantify_genome_raw_reads(
                                     continue;
                                 }
                                 n_projected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                let recs = projected_to_records(&projected);
+                                let recs = projected_to_records(&projected, &src_scores);
                                 let (ag, aprobs) = filter.filter_projected(
                                     &mut discard_table,
                                     my_txp_info_view,
                                     &recs,
                                     seq.len(),
                                     beta,
+                                    prob_source,
                                 );
 
                                 if !ag.is_empty() {

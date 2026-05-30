@@ -30,6 +30,20 @@ pub enum ReadAssignmentProbOut {
     Compressed,
 }
 
+/// Which signal to weight a read's projected (genome-mode) alignments by when
+/// forming conditional probabilities for the EM.
+#[derive(Debug, Clone, Copy, PartialEq, clap::ValueEnum, Serialize)]
+pub enum ProjProbSource {
+    /// bramble exonic-coverage similarity only: `exp((sim - best_sim) * beta)`.
+    Similarity,
+    /// minimap2 genomic-alignment score only: `exp((score - best_score) / 5)`.
+    /// Discriminates paralogous loci better than similarity.
+    Score,
+    /// combine both: `exp((score - best_score)/5 + beta*(sim - best_sim))`.
+    /// Score separates loci; similarity separates isoforms within a locus.
+    Combined,
+}
+
 fn parse_assign_prob_out_value(s: &str) -> anyhow::Result<ReadAssignmentProbOut> {
     match s.to_lowercase().as_str() {
         "raw" => Ok(ReadAssignmentProbOut::Uncompressed),
@@ -345,6 +359,12 @@ pub struct Args {
     /// probabilities in genome mode: `prob = exp((sim - best_sim) * beta)`.
     #[arg(long, hide = true, default_value_t = 10.0)]
     pub projected_prob_beta: f32,
+
+    /// which signal weights a read's projected alignments in genome mode:
+    /// `similarity` (bramble exonic coverage), `score` (minimap2 alignment
+    /// score), or `combined`.
+    #[arg(long, hide = true, value_enum, default_value_t = ProjProbSource::Similarity)]
+    pub projected_prob_source: ProjProbSource,
 
     /// If this flag is passed, oarfish only performs indexing and not quantification.
     /// Designed primarily for workflow management systems.

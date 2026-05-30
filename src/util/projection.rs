@@ -212,7 +212,15 @@ pub fn build_transcriptome_header_and_info(
 /// Convert bramble's per-alignment projection results into oarfish's neutral
 /// [`ProjectedAlnRecord`] hand-off type (consumed by
 /// [`crate::util::oarfish_types::AlignmentFilters::filter_projected`]).
-pub fn projected_to_records(projected: &[ProjectedAlignment]) -> Vec<ProjectedAlnRecord> {
+///
+/// `src_scores[i]` is the alignment score of the i-th source genomic alignment
+/// (the slice passed to `project_group`); each `ProjectedAlignment` carries its
+/// `input_index` into that slice, so projections from the same genomic locus
+/// share a score. An empty `src_scores` yields `aln_score = 0` for all.
+pub fn projected_to_records(
+    projected: &[ProjectedAlignment],
+    src_scores: &[i32],
+) -> Vec<ProjectedAlnRecord> {
     projected
         .iter()
         .map(|p| ProjectedAlnRecord {
@@ -223,6 +231,7 @@ pub fn projected_to_records(projected: &[ProjectedAlignment]) -> Vec<ProjectedAl
             query_aligned_len: p.query_aligned_len,
             is_reverse: p.is_reverse,
             similarity: p.similarity_score,
+            aln_score: src_scores.get(p.input_index).copied().unwrap_or(0),
         })
         .collect()
 }

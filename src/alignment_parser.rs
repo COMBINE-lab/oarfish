@@ -1,5 +1,6 @@
 use crate::util::constants::EMPTY_READ_NAME;
 use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
+use crate::prog_opts::ProjProbSource;
 use crate::util::projection::projected_to_records;
 use bramble_rs::g2t::G2TTree;
 use bramble_rs::{GenomicAlignment, ProjectionConfig, project_group};
@@ -514,19 +515,27 @@ fn record_buf_to_genomic_alignment(rec: &RecordBuf, query_name: &str) -> Option<
 /// Converts the group's records to [`GenomicAlignment`]s, projects them onto the
 /// transcriptome with bramble, and adds the (filtered) projected alignments to
 /// `store`. Returns `true` if any projected alignment was retained.
+#[allow(clippy::too_many_arguments)]
 fn project_and_add_group(
     store: &mut InMemoryAlignmentStore,
     txps: &mut [TranscriptInfo],
     g2t: &G2TTree,
     proj_config: &ProjectionConfig,
     beta: f32,
+    prob_source: ProjProbSource,
     query_name: &str,
     records_for_read: &[RecordBuf],
 ) -> bool {
-    let alns: Vec<GenomicAlignment> = records_for_read
-        .iter()
-        .filter_map(|r| record_buf_to_genomic_alignment(r, query_name))
-        .collect();
+    // build GenomicAlignments and a parallel vector of their alignment scores
+    // (the BAM `AS` tag, if present) used by the score/combined prob sources.
+    let mut alns: Vec<GenomicAlignment> = Vec::with_capacity(records_for_read.len());
+    let mut src_scores: Vec<i32> = Vec::with_capacity(records_for_read.len());
+    for r in records_for_read {
+        if let Some(ga) = record_buf_to_genomic_alignment(r, query_name) {
+            alns.push(ga);
+            src_scores.push(int_tag(r, [b'A', b'S']).unwrap_or(0) as i32);
+        }
+    }
     if alns.is_empty() {
         return false;
     }
@@ -542,8 +551,8 @@ fn project_and_add_group(
     if projected.is_empty() {
         return false;
     }
-    let recs = projected_to_records(&projected);
-    store.add_projected_group(txps, &recs, read_len, beta)
+    let recs = projected_to_records(&projected, &src_scores);
+    store.add_projected_group(txps, &recs, read_len, beta, prob_source)
 }
 
 /// Parse a name-collated, genome-aligned BAM, projecting each read's alignments
@@ -554,6 +563,7 @@ fn project_and_add_group(
 /// the transcriptome directly. `store` must have been created over the
 /// *transcriptome* header.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub fn parse_genome_alignments<R: io::BufRead>(
     store: &mut InMemoryAlignmentStore,
     name_vec: &mut Option<SwapVec<String>>,
@@ -561,6 +571,7 @@ pub fn parse_genome_alignments<R: io::BufRead>(
     g2t: &G2TTree,
     proj_config: &ProjectionConfig,
     beta: f32,
+    prob_source: ProjProbSource,
     reader: &mut bam::io::Reader<R>,
     txps: &mut [TranscriptInfo],
     check_order_thresh: usize,
@@ -621,7 +632,7 @@ pub fn parse_genome_alignments<R: io::BufRead>(
         } else {
             if !prev_read.is_empty()
                 && project_and_add_group(
-                    store, txps, g2t, proj_config, beta, &prev_read, &records_for_read,
+                    store, txps, g2t, proj_config, beta, prob_source, &prev_read, &records_for_read,
                 )
             {
                 add_read_name(&records_for_read);
@@ -654,7 +665,7 @@ pub fn parse_genome_alignments<R: io::BufRead>(
 
     if !records_for_read.is_empty()
         && project_and_add_group(
-            store, txps, g2t, proj_config, beta, &prev_read, &records_for_read,
+            store, txps, g2t, proj_config, beta, prob_source, &prev_read, &records_for_read,
         )
     {
         add_read_name(&records_for_read);

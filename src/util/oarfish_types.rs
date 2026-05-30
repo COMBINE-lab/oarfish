@@ -22,7 +22,7 @@ use sam::{Header, alignment::record::data::field::tag::Tag as AlnTag};
 #[allow(unused_imports)]
 use tracing::{error, info, warn};
 
-use crate::prog_opts::ReadAssignmentProbOut;
+use crate::prog_opts::{ProjProbSource, ReadAssignmentProbOut};
 use crate::util::constants::EMPTY_READ_NAME;
 
 pub(crate) struct NamedDigestVec(Vec<(String, DigestResult)>);
@@ -752,13 +752,19 @@ impl<'h> InMemoryAlignmentStore<'h> {
         recs: &[ProjectedAlnRecord],
         read_len: usize,
         beta: f32,
+        prob_source: ProjProbSource,
     ) -> bool {
         if recs.is_empty() {
             return false;
         }
-        let (alns, as_probs) =
-            self.filter_opts
-                .filter_projected(&mut self.discard_table, txps, recs, read_len, beta);
+        let (alns, as_probs) = self.filter_opts.filter_projected(
+            &mut self.discard_table,
+            txps,
+            recs,
+            read_len,
+            beta,
+            prob_source,
+        );
         self.add_filtered_group(&alns, &as_probs, txps)
     }
 
@@ -1164,6 +1170,11 @@ pub struct ProjectedAlnRecord {
     /// bramble similarity score (higher is better; best in a group anchors the
     /// probability), used in place of the integer alignment score.
     pub similarity: f64,
+    /// minimap2 alignment score of the *source genomic alignment* this was
+    /// projected from (shared by all transcripts at the same genomic locus).
+    /// Used by the `score`/`combined` probability sources to discriminate
+    /// paralogous loci, which similarity cannot. 0 if unavailable.
+    pub aln_score: i32,
 }
 
 impl AlignmentFilters {
@@ -1186,8 +1197,10 @@ impl AlignmentFilters {
         recs: &[ProjectedAlnRecord],
         read_len: usize,
         beta: f32,
+        prob_source: ProjProbSource,
     ) -> (Vec<AlnInfo>, Vec<f32>) {
         let mut best_sim = f64::MIN;
+        let mut best_score = i32::MIN;
         let mut aln_frac_at_best = 0_f32;
         let mut kept: Vec<&ProjectedAlnRecord> = Vec::with_capacity(recs.len());
 
@@ -1232,6 +1245,9 @@ impl AlignmentFilters {
                     0_f32
                 };
             }
+            if r.aln_score > best_score {
+                best_score = r.aln_score;
+            }
             kept.push(r);
         }
 
@@ -1264,7 +1280,17 @@ impl AlignmentFilters {
             let start = r.start.clamp(1, tlen);
             let end = r.end.clamp(start, tlen);
 
-            let f = ((r.similarity - msim) as f32) * beta;
+            // log-weight of this alignment relative to the read's best hit.
+            // `score` discriminates paralogous genomic loci (similarity saturates
+            // near 1.0 for any well-covered transcript and cannot); `similarity`
+            // discriminates isoforms sharing a locus (same genomic score).
+            let f = match prob_source {
+                ProjProbSource::Similarity => ((r.similarity - msim) as f32) * beta,
+                ProjProbSource::Score => ((r.aln_score - best_score) as f32) / 5.0,
+                ProjProbSource::Combined => {
+                    ((r.aln_score - best_score) as f32) / 5.0 + beta * ((r.similarity - msim) as f32)
+                }
+            };
             probabilities.push(f.exp());
             out_alns.push(AlnInfo {
                 ref_id: r.ref_id,
