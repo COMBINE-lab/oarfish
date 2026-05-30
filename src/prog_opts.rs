@@ -366,6 +366,12 @@ pub struct Args {
     #[arg(long, hide = true, value_enum, default_value_t = ProjProbSource::Similarity)]
     pub projected_prob_source: ProjProbSource,
 
+    /// genome mode: per-internal-junction-mismatch discount in (0,1] applied to a
+    /// transcript's projection similarity (sharpens isoform discrimination).
+    /// 1.0 = off (default).
+    #[arg(long, hide = true, default_value_t = 1.0)]
+    pub junc_miss_discount: f64,
+
     /// If this flag is passed, oarfish only performs indexing and not quantification.
     /// Designed primarily for workflow management systems.
     /// Note: A prebuilt index is not needed to quantify with oarfish; an index can be

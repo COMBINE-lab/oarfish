@@ -243,6 +243,7 @@ pub fn projection_config(args: &Args) -> ProjectionConfig {
     ProjectionConfig {
         long_reads: true,
         use_fasta: args.genome_fasta.is_some(),
+        junc_miss_discount: args.junc_miss_discount,
     }
 }
 
