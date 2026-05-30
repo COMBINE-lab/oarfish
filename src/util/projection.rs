@@ -13,6 +13,8 @@
 //! `ProjectedAlignment::transcript_id` directly indexes `txps`/`txps_name` and
 //! becomes `AlnInfo::ref_id` with no remapping.
 
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::num::NonZeroUsize;
 use std::path::Path;
 
@@ -26,7 +28,7 @@ use noodles_sam::header::record::value::Map as HeaderMap;
 use bramble_rs::GenomicAlignment;
 use bramble_rs::ProjectedAlignment;
 use bramble_rs::ProjectionConfig;
-use bramble_rs::annotation::load_transcripts;
+use bramble_rs::annotation::{Transcript, load_transcripts};
 use bramble_rs::fasta::FastaDb;
 use bramble_rs::g2t::{G2TTree, build_g2t_from_refnames};
 
@@ -49,7 +51,17 @@ pub fn load_g2t(
     let transcripts = load_transcripts(annotation)
         .with_context(|| format!("failed to load annotation {}", annotation.display()))?;
     info!("loaded {} transcripts from annotation", transcripts.len());
+    build_g2t_from_transcripts(&transcripts, refnames, genome_fasta)
+}
 
+/// Build the genome→transcriptome index from already-parsed transcripts. Lets
+/// callers (e.g. genome-read mode) parse the annotation once and reuse the
+/// transcripts for both junction extraction and index building.
+pub fn build_g2t_from_transcripts(
+    transcripts: &[Transcript],
+    refnames: &[String],
+    genome_fasta: Option<&Path>,
+) -> anyhow::Result<G2TTree> {
     // The FastaDb only needs to outlive `build_g2t_from_refnames`; bramble
     // copies the per-exon sequences it needs into the index.
     let fasta = match genome_fasta {
@@ -60,10 +72,75 @@ pub fn load_g2t(
         None => None,
     };
 
-    let g2t = build_g2t_from_refnames(&transcripts, refnames, fasta.as_ref())
+    let g2t = build_g2t_from_refnames(transcripts, refnames, fasta.as_ref())
         .context("failed to build genome-to-transcriptome index")?;
     info!("built g2t index over {} transcripts", g2t.num_transcripts());
     Ok(g2t)
+}
+
+/// Write a BED12 of transcript models derived from `transcripts`, suitable for
+/// minimap2 `--junc-bed` (`Aligner::read_junction_lr`). minimap2 derives the
+/// splice junctions from the exon-block structure and uses them to guide/score
+/// spliced alignment, which non-trivially improves alignment accuracy.
+///
+/// Only multi-exon transcripts (which actually define junctions) are written.
+/// Returns the number of transcript models written. Coordinates: bramble `Exon`
+/// is 1-based `start` with `end == 1-based-inclusive-end + 1`, so the 0-based
+/// half-open BED exon is `[start-1, end-1)` with size `end-start`.
+pub fn write_annotation_junction_bed(
+    transcripts: &[Transcript],
+    path: &Path,
+) -> anyhow::Result<usize> {
+    let f = File::create(path)
+        .with_context(|| format!("failed to create junction BED {}", path.display()))?;
+    let mut w = BufWriter::new(f);
+    let mut n = 0usize;
+    for tx in transcripts {
+        if tx.exons.len() < 2 {
+            continue; // single-exon transcripts contribute no junctions
+        }
+        let mut exons: Vec<(u32, u32)> = tx
+            .exons
+            .iter()
+            .map(|e| (e.start.saturating_sub(1), e.end.saturating_sub(1)))
+            .collect();
+        exons.sort_by_key(|e| e.0);
+        let chrom_start = exons[0].0;
+        let chrom_end = exons.last().unwrap().1;
+        let strand = match tx.strand {
+            '+' => '+',
+            '-' => '-',
+            _ => '.',
+        };
+        let mut sizes = String::new();
+        let mut starts = String::new();
+        for (s, e) in &exons {
+            sizes.push_str(&(e - s).to_string());
+            sizes.push(',');
+            starts.push_str(&(s - chrom_start).to_string());
+            starts.push(',');
+        }
+        // BED12: chrom start end name score strand thickStart thickEnd rgb blockCount blockSizes blockStarts
+        writeln!(
+            w,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            tx.seqname,
+            chrom_start,
+            chrom_end,
+            tx.id,
+            1000,
+            strand,
+            chrom_start,
+            chrom_end,
+            0,
+            exons.len(),
+            sizes,
+            starts,
+        )?;
+        n += 1;
+    }
+    w.flush()?;
+    Ok(n)
 }
 
 /// Build a transcriptome SAM header plus the parallel `TranscriptInfo` and name

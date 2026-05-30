@@ -328,10 +328,18 @@ pub struct Args {
     #[arg(long, help_heading = "genome mode")]
     pub genome_fasta: Option<PathBuf>,
 
-    /// optional BED file of known splice junctions used to hint the spliced
-    /// genome alignment (genome read mode only).
+    /// optional BED12 file of splice junctions / transcript models used to hint
+    /// the spliced genome alignment (genome read mode). If omitted, junctions are
+    /// derived automatically from `--annotation`; if provided, this file is used
+    /// instead.
     #[arg(long, help_heading = "genome mode", requires = "genome")]
     pub junctions: Option<PathBuf>,
+
+    /// do NOT derive splice junctions from `--annotation` for spliced genome
+    /// alignment (genome read mode). By default annotated junctions are used, as
+    /// they improve alignment; this flag disables that (e.g. for ablation).
+    #[arg(long, help_heading = "genome mode", hide = true)]
+    pub ignore_annotation_junctions: bool,
 
     /// spread (`beta`) used to convert bramble similarity scores into alignment
     /// probabilities in genome mode: `prob = exp((sim - best_sim) * beta)`.

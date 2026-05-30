@@ -326,15 +326,8 @@ pub(crate) fn get_genome_aligner_from_args(
     // up to best_n secondary mappings, and the same seed as command-line minimap2.
     aligner.mapopt.best_n = args.best_n as i32;
     aligner.mapopt.seed = 11;
-
-    // optionally load known splice junctions (minimap2 --junc-bed).
-    if let Some(bed) = args.junctions.as_ref() {
-        let bed_str = bed.to_str().expect("could not convert junctions path to &str");
-        aligner
-            .read_junction_lr(bed_str)
-            .map_err(|code| anyhow::anyhow!("failed to load junction BED {} (code {})", bed_str, code))?;
-        info!("loaded known splice junctions from {}", bed_str);
-    }
+    // Splice-junction loading (annotated and/or user-supplied) happens in the
+    // caller, after the annotation transcripts have been parsed.
 
     let refnames = genome_aligner_ref_names(&aligner);
     info!(
