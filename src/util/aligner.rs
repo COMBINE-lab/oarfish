@@ -146,7 +146,7 @@ pub(crate) fn get_aligner_from_fastas(
 
     // if we created an index, append the digest
     if let Some(idx_file) = idx_output {
-        digest_utils::append_digest_to_mm2_index(idx_file, &digests)?;
+        digest_utils::append_digest_footer(idx_file, &digests)?;
     }
 
     Ok((header, None, Some(aligner), digests))
@@ -195,7 +195,7 @@ fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAligner
 
     let header = make_header(&mut aligner)?;
 
-    let digests = match digest_utils::read_digest_from_mm2_index(
+    let digests = match digest_utils::read_digest_footer(
         idx_file.to_str().expect("could not convert to string"),
     ) {
         // we read a pre-computed digest from an oarfish-constructed
@@ -457,17 +457,30 @@ fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAligner
 
     let header = rammap_make_header(&aligner)?;
 
-    // Prefer the oarfish digest footer appended at index-build time; fall back to
-    // a name/length-based digest if the index has no footer.
-    let digests = match digest_utils::read_digest_from_mm2_index(idx_str) {
+    // Prefer the oarfish digest footer appended at index-build time. If absent,
+    // recompute the full reference signature from the index sequences (rammap
+    // retains them), matching what the minimap2 backend does via
+    // `digest_from_index`; only if the index is sequence-stripped do we fall
+    // back to a name/length-only digest.
+    let digests = match digest_utils::read_digest_footer(idx_str) {
         Ok(d) => d,
         _ => {
-            warn!(
-                "the provided index has no oarfish digest footer; recording a \
-                 sequence-name/length digest instead of the full reference signature."
-            );
-            let d = digest_utils::digest_from_header(&header)?;
-            vec![("prexisting_index".to_string(), d)].into()
+            if aligner.index().has_sequences() {
+                warn!(
+                    "the provided index has no oarfish digest footer; recomputing the \
+                     reference signature from the index sequences."
+                );
+                let d = digest_utils::digest_from_rammap_index(&aligner)?;
+                vec![("prexisting_index".to_string(), d)].into()
+            } else {
+                warn!(
+                    "the provided index has no oarfish digest footer and no sequences; \
+                     recording a sequence-name/length digest instead of the full \
+                     reference signature."
+                );
+                let d = digest_utils::digest_from_header(&header)?;
+                vec![("prexisting_index".to_string(), d)].into()
+            }
         }
     };
 
@@ -523,10 +536,6 @@ pub(crate) fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderRea
         .expect("could not convert reference path to &str")
         .to_owned();
 
-    if args.index_out.is_some() {
-        warn!("--index-out is ignored with the rammap backend; no index file will be written.");
-    }
-
     let preset = rammap_txome_preset(&args.seq_tech)?;
     let mut aligner = rammap::api::Aligner::from_fasta(&input_path, preset)?;
     // up to best_n secondary mappings; same seed as command-line minimap2.
@@ -551,6 +560,15 @@ pub(crate) fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderRea
     if let Some(handle) = novel_digest_handle {
         let digest = handle.join().expect("valid digest")?;
         digests.push(("novel_transcripts_digest".to_string(), digest));
+    }
+
+    // if the user requested a persistent index alongside quantification, write it
+    // (with its reference-signature footer) now that the in-memory index is built.
+    if let Some(idx_out) = args.index_out.clone() {
+        let idx_str = idx_out
+            .to_str()
+            .expect("could not convert --index-out path to &str");
+        write_rammap_index_with_footer(&aligner, idx_str, &digests)?;
     }
 
     Ok((header, None, Some(std::sync::Arc::new(aligner)), digests))
@@ -609,14 +627,113 @@ pub(crate) fn get_genome_aligner_from_args(
     Ok((std::sync::Arc::new(aligner), refnames))
 }
 
-/// The rammap backend does not write a reusable index in oarfish, so the
-/// `--only-index` path (which calls this directly) is unsupported.
+/// Build a rammap index from the provided reference FASTA(s) and (when
+/// `--index-out` is set) persist it to disk as a native RMMI file with the
+/// oarfish reference-signature footer appended. This backs the `--only-index`
+/// path and mirrors the minimap2 [`get_aligner_from_fastas`] above; the
+/// resulting signature is computed from the FASTA via
+/// [`digest_utils::get_digest_from_fasta`], so it is byte-identical to the
+/// signature a minimap2 index built from the same FASTA would carry.
 #[cfg(feature = "rammap")]
 pub(crate) fn get_aligner_from_fastas(
-    _args: &mut Args,
+    args: &mut Args,
 ) -> anyhow::Result<HeaderReaderAlignerDigest> {
-    anyhow::bail!(
-        "index construction / --only-index is not supported with the rammap backend \
-         (rammap uses its own index format and oarfish does not persist it)."
-    )
+    assert!(
+        args.annotated
+            .as_ref()
+            .is_none_or(|f| is_fasta(f).expect("couldn't read input file to `--annotated`."))
+    );
+    assert!(
+        args.novel
+            .as_ref()
+            .is_none_or(|f| is_fasta(f).expect("couldn't read input file to `--novel`."))
+    );
+
+    // compute the reference digests on background threads (identical to the
+    // minimap2 path, so the resulting signatures are comparable).
+    let ref_digest_handle = args
+        .annotated
+        .clone()
+        .map(|refs| digest_utils::get_digest_from_fasta(&refs));
+    let novel_digest_handle = args
+        .novel
+        .clone()
+        .map(|refs| digest_utils::get_digest_from_fasta(&refs));
+
+    let thread_sub = if ref_digest_handle
+        .as_ref()
+        .xor(novel_digest_handle.as_ref())
+        .is_some()
+    {
+        1
+    } else {
+        2
+    };
+    let idx_threads = args.threads.saturating_sub(thread_sub).max(1);
+    rammap_set_index_threads(idx_threads);
+
+    // combine annotated + novel references (via a fifo) when both are present.
+    let input_source = get_ref_source(args.annotated.clone(), args.novel.clone())?;
+    let input_path = input_source
+        .file_path()
+        .to_str()
+        .expect("could not convert reference path to &str")
+        .to_owned();
+
+    let preset = rammap_txome_preset(&args.seq_tech)?;
+    let mut aligner = rammap::api::Aligner::from_fasta(&input_path, preset)?;
+    aligner.options_mut().filtering.best_n = args.best_n as i32;
+    aligner.options_mut().filtering.seed = 11;
+
+    let n_seq = aligner.index().seqs.len();
+    info!(
+        "index contains {} sequences",
+        n_seq.to_formatted_string(&Locale::en)
+    );
+
+    input_source.join_if_needed()?;
+
+    let header = rammap_make_header(&aligner)?;
+
+    let mut digests = NamedDigestVec::new();
+    if let Some(handle) = ref_digest_handle {
+        let digest = handle.join().expect("valid digest")?;
+        digests.push(("annotated_transcripts_digest".to_string(), digest));
+    }
+    if let Some(handle) = novel_digest_handle {
+        let digest = handle.join().expect("valid digest")?;
+        digests.push(("novel_transcripts_digest".to_string(), digest));
+    }
+
+    // persist the index (+ signature footer) if the user asked for it.
+    if let Some(idx_out) = args.index_out.clone() {
+        let idx_str = idx_out
+            .to_str()
+            .expect("could not convert --index-out path to &str");
+        write_rammap_index_with_footer(&aligner, idx_str, &digests)?;
+    }
+
+    Ok((header, None, Some(std::sync::Arc::new(aligner)), digests))
+}
+
+/// Persist a rammap aligner's index to `idx_out` as a native RMMI file and
+/// append the oarfish reference-signature footer. The footer is tolerated by
+/// rammap's loader (which stops at the end of the bincode structure), so the
+/// index remains a single self-contained file that round-trips through
+/// [`rammap::api::Aligner::from_index`] while carrying its signature.
+#[cfg(feature = "rammap")]
+fn write_rammap_index_with_footer(
+    aligner: &rammap::api::Aligner,
+    idx_out: &str,
+    digests: &NamedDigestVec,
+) -> anyhow::Result<()> {
+    aligner
+        .save_index(idx_out)
+        .map_err(|e| anyhow::anyhow!("failed to write rammap index to {}: {}", idx_out, e))?;
+    digest_utils::append_digest_footer(idx_out, digests)?;
+    info!(
+        "wrote rammap index to {} with oarfish reference-signature footer",
+        idx_out
+    );
+    Ok(())
 }

@@ -26,7 +26,7 @@ impl SourceType {
         if is_fasta(p.as_ref()).unwrap_or(false) {
             Self::Fastx(PathBuf::from(p.as_ref()))
         } else {
-            match digest_utils::read_digest_from_mm2_index(
+            match digest_utils::read_digest_footer(
                 p.as_ref().to_str().expect("can be represented as a str"),
             ) {
                 // we read a pre-computed digest from an oarfish-constructed
