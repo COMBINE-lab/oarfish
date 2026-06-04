@@ -258,6 +258,7 @@ pub fn projection_config(args: &Args) -> ProjectionConfig {
 /// `read_len` carries the query length needed for NH / aligned-fraction.
 ///
 /// Returns `None` for mappings lacking a CIGAR (the projection needs one).
+#[cfg(not(feature = "rammap"))]
 pub fn mapping_to_genomic_alignment(
     m: &minimap2::Mapping,
     query_name: &str,
@@ -276,6 +277,48 @@ pub fn mapping_to_genomic_alignment(
         ref_id: m.target_id,
         ref_start: (m.target_start as i64) + 1, // minimap2 target_start is 0-based; SAM POS is 1-based
         is_reverse: matches!(m.strand, minimap2::Strand::Reverse),
+        cigar,
+        sequence: None,
+        is_paired: false,
+        is_first_in_pair: false,
+        xs_strand: None,
+        ts_strand,
+        hit_index: 0,
+        mate_ref_id: None,
+        mate_ref_start: None,
+        mate_is_unmapped: false,
+        read_len,
+    })
+}
+
+/// rammap-backend variant of [`mapping_to_genomic_alignment`]: convert a rammap
+/// spliced genome alignment (wrapped as `OMapping`) into a bramble
+/// [`GenomicAlignment`]. rammap's `target_id` is the 0-based index into the
+/// aligner's reference list (the same order the `G2TTree` is built in), so it is
+/// used directly as the bramble `ref_id`. Returns `None` for mappings lacking a
+/// CIGAR (the projection needs one).
+#[cfg(feature = "rammap")]
+pub fn mapping_to_genomic_alignment(
+    m: &crate::util::mapper::OMapping,
+    query_name: &str,
+    read_len: usize,
+) -> Option<GenomicAlignment> {
+    let cigar_ops = m.m.cigar_ops.as_ref()?;
+    if cigar_ops.is_empty() {
+        return None;
+    }
+    // rammap CigarOp uses BAM op codes (0=M,1=I,2=D,3=N,4=S,5=H,...), matching
+    // the `(len, op)` representation bramble expects.
+    let cigar: Vec<(u32, u8)> = cigar_ops.iter().map(|c| (c.len, c.op)).collect();
+    let ts_strand = m.m.trans_strand.map(|s| match s {
+        rammap::api::Strand::Forward => '+',
+        rammap::api::Strand::Reverse => '-',
+    });
+    Some(GenomicAlignment {
+        query_name: query_name.to_string(),
+        ref_id: m.m.target_id as i32,
+        ref_start: (m.m.target_start as i64) + 1, // rammap target_start is 0-based; SAM POS is 1-based
+        is_reverse: matches!(m.m.strand, rammap::api::Strand::Reverse),
         cigar,
         sequence: None,
         is_paired: false,

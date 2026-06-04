@@ -335,9 +335,10 @@ pub fn quantify_genome_alignments_from_bam<R: BufRead>(
 /// annotation; `aligner` is a spliced genome aligner; `g2t` the genome→
 /// transcriptome index over the same reference order as the aligner targets.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "rammap", allow(unused_mut))]
 pub fn quantify_genome_raw_reads(
     txp_header: &noodles_sam::Header,
-    mut aligner: minimap2::Aligner<minimap2::Built>,
+    mut aligner: crate::util::mapper::Mapper,
     g2t: &G2TTree,
     proj_config: &ProjectionConfig,
     filter_opts: AlignmentFilters,
@@ -354,9 +355,13 @@ pub fn quantify_genome_raw_reads(
     }
 
     let map_threads = args.threads.saturating_sub(2).max(1);
-    let per_thread_cap_kalloc =
-        ((args.thread_buff_size as f64) / (args.threads as f64)).ceil() as i64;
-    aligner.mapopt.cap_kalloc = per_thread_cap_kalloc;
+    // minimap2-only: cap the per-thread kalloc arena. rammap has no equivalent.
+    #[cfg(not(feature = "rammap"))]
+    {
+        let per_thread_cap_kalloc =
+            ((args.thread_buff_size as f64) / (args.threads as f64)).ceil() as i64;
+        aligner.mapopt.cap_kalloc = per_thread_cap_kalloc;
+    }
 
     let beta = args.projected_prob_beta;
     let use_fasta = proj_config.use_fasta;
@@ -477,7 +482,7 @@ pub fn quantify_genome_raw_reads(
                         for read_chunk in receiver {
                             for (name, seq) in read_chunk.iter() {
                                 let map_res_opt =
-                                    loc_aligner.map(seq, true, false, None, None, Some(name));
+                                    crate::util::mapper::map_read(&loc_aligner, name, seq);
                                 let Ok(mappings) = map_res_opt else {
                                     warn!("Error encountered mapping read: {}", map_res_opt.unwrap_err());
                                     continue;
@@ -495,12 +500,7 @@ pub fn quantify_genome_raw_reads(
                                         mapping_to_genomic_alignment(m, &query_name, seq.len())
                                     {
                                         galns.push(ga);
-                                        src_scores.push(
-                                            m.alignment
-                                                .as_ref()
-                                                .and_then(|a| a.alignment_score)
-                                                .unwrap_or(0),
-                                        );
+                                        src_scores.push(crate::util::mapper::alignment_score(m));
                                     }
                                 }
                                 if galns.is_empty() {
@@ -728,9 +728,10 @@ fn get_source_type(pb: &std::path::Path) -> InputSourceType {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(feature = "rammap", allow(unused_mut))]
 pub fn quantify_bulk_alignments_raw_reads(
     header: &noodles_sam::Header,
-    mut aligner: minimap2::Aligner<minimap2::Built>,
+    mut aligner: crate::util::mapper::Mapper,
     filter_opts: AlignmentFilters,
     read_paths: &[std::path::PathBuf],
     txps: &mut [TranscriptInfo],
@@ -751,9 +752,13 @@ pub fn quantify_bulk_alignments_raw_reads(
     // and the in memory alignment store populator
     let map_threads = args.threads.saturating_sub(2).max(1);
 
-    let per_thread_cap_kalloc =
-        ((args.thread_buff_size as f64) / (args.threads as f64)).ceil() as i64;
-    aligner.mapopt.cap_kalloc = per_thread_cap_kalloc;
+    // minimap2-only: cap the per-thread kalloc arena. rammap has no equivalent.
+    #[cfg(not(feature = "rammap"))]
+    {
+        let per_thread_cap_kalloc =
+            ((args.thread_buff_size as f64) / (args.threads as f64)).ceil() as i64;
+        aligner.mapopt.cap_kalloc = per_thread_cap_kalloc;
+    }
 
     type ReadGroup = ReadChunkWithNames;
     type AlignmentGroupInfo = (Vec<AlnInfo>, Vec<f32>, Vec<usize>, Option<Vec<String>>);
@@ -869,7 +874,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                             for (name, seq) in read_chunk.iter() {
                                 // map the next read, with cigar string
                                 let map_res_opt =
-                                    loc_aligner.map(seq, true, false, None, None, Some(name));
+                                    crate::util::mapper::map_read(&loc_aligner, name, seq);
                                 if let Ok(mut mappings) = map_res_opt {
                                     let (ag, aprobs) = filter.filter(
                                         &mut discard_table,

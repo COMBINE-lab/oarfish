@@ -222,13 +222,11 @@ fn run_genome_reads(args: &mut Args, filter_opts: AlignmentFilters) -> anyhow::R
     let transcripts = bramble_rs::annotation::load_transcripts(&annotation)?;
     info!("loaded {} transcripts from annotation", transcripts.len());
 
-    // build the spliced genome aligner and obtain its reference (chromosome)
-    // names in target-id order (== the g2t RefId order).
-    let (aligner, refnames) = crate::util::aligner::get_genome_aligner_from_args(args)?;
-
-    // Load splice junctions into the genome index so minimap2 can use annotated
-    // junctions during spliced alignment. Prefer a user-supplied BED; otherwise
-    // derive a BED12 of transcript models from the annotation (default on).
+    // Determine the splice-junction BED to bias spliced alignment toward
+    // annotated junctions (minimap2 `--junc-bed` / rammap `load_junctions_bed`).
+    // Prefer a user-supplied BED; otherwise derive a BED12 of transcript models
+    // from the annotation (default on). Computed before the aligner is built so
+    // it can be loaded into the index by the aligner builder.
     let junc_bed: Option<std::path::PathBuf> = if let Some(b) = args.junctions.clone() {
         Some(b)
     } else if !args.ignore_annotation_junctions {
@@ -240,7 +238,7 @@ fn run_genome_reads(args: &mut Args, filter_opts: AlignmentFilters) -> anyhow::R
         bed.set_file_name(fname);
         let n = projection::write_annotation_junction_bed(&transcripts, &bed)?;
         info!(
-            "derived {} spliced transcript models from the annotation for minimap2 --junc-bed",
+            "derived {} spliced transcript models from the annotation for the splice-junction BED",
             n
         );
         Some(bed)
@@ -248,13 +246,12 @@ fn run_genome_reads(args: &mut Args, filter_opts: AlignmentFilters) -> anyhow::R
         info!("not using annotated splice junctions (--ignore-annotation-junctions)");
         None
     };
-    if let Some(bed) = &junc_bed {
-        let bs = bed.to_str().expect("junction BED path must be valid UTF-8");
-        aligner
-            .read_junction_lr(bs)
-            .map_err(|code| anyhow::anyhow!("failed to load splice junctions {} (code {})", bs, code))?;
-        info!("loaded splice junctions into the genome index from {}", bs);
-    }
+
+    // build the spliced genome aligner (loading the junction BED into the index)
+    // and obtain its reference (chromosome) names in target-id order (== the g2t
+    // RefId order).
+    let (aligner, refnames) =
+        crate::util::aligner::get_genome_aligner_from_args(args, junc_bed.as_deref())?;
 
     // build the genome->transcriptome index and the transcriptome header/info.
     let g2t = projection::build_g2t_from_transcripts(&transcripts, &refnames, args.genome_fasta.as_deref())?;

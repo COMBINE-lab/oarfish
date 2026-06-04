@@ -72,12 +72,27 @@ minimap2 = { version = "0.1.30" }     # git = "https://github.com/rob-p/minimap2
 # bramble-rs: project spliced genome alignments into transcriptome space.
 bramble-rs = "0.1.1"
 
+# rammap: pure-Rust minimap2 reimplementation, used as an alternative mapping
+# backend behind the (off-by-default) `rammap` feature so we can A/B benchmark
+# mapping speed/memory against the minimap2-rs backend on the `dev` branch.
+# Published as the `rammap-core` library crate; renamed to `rammap` here so the
+# `rammap::` paths in the source are unchanged. Includes the upstreamed
+# splice-junction loaders (jwanglab/rammap#7).
+rammap = { package = "rammap-core", version = "1.1.0", default-features = false, features = [
+  "parallel",
+], optional = true }
+
 needletail = "0.6.3"
 indicatif = "0.18.3"
 rustc-hash = "2.1.1"
 parse-size = "1.1.0"
 niffler = "3.0.0"
 humantime = "2.3.0"
+
+[features]
+# Use the rammap (pure-Rust) mapper instead of minimap2-rs. Off by default so
+# the default build matches the `dev` branch for benchmarking.
+rammap = ["dep:rammap"]
 
 [[bin]]
 name = "oarfish"

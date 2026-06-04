@@ -7,6 +7,7 @@ pub mod digest_utils;
 pub mod file_utils;
 pub mod kde_utils;
 pub mod logistic_probability;
+pub mod mapper;
 pub mod mm_utils;
 pub mod normalize_probability;
 pub mod oarfish_types;
