@@ -510,9 +510,17 @@ pub fn quantify_genome_raw_reads(
                                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 // attach the read sequence to the first alignment when
                                 // soft-clip rescue is enabled (bramble shares one seq
-                                // across the read group).
+                                // across the read group). bramble expects the seq in
+                                // forward-reference orientation (as a BAM stores SEQ),
+                                // so reverse-complement it when the canonical mapping is
+                                // on the reverse strand — the read is held here in its
+                                // original FASTQ orientation.
                                 if use_fasta {
-                                    galns[0].sequence = Some(seq.to_vec());
+                                    galns[0].sequence = Some(if galns[0].is_reverse {
+                                        crate::util::projection::revcomp(seq)
+                                    } else {
+                                        seq.to_vec()
+                                    });
                                 }
 
                                 let projected =

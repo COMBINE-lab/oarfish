@@ -247,6 +247,29 @@ pub fn projection_config(args: &Args) -> ProjectionConfig {
     }
 }
 
+/// Reverse-complement a nucleotide sequence into a fresh uppercase buffer.
+///
+/// bramble's soft-clip rescue expects the read sequence in *forward-reference*
+/// orientation — the orientation in which a BAM stores `SEQ` (reverse-complemented
+/// relative to the original read when the alignment is on the reverse strand), and
+/// the orientation the CIGAR is written in. The genome-BAM path gets this for free
+/// from the BAM. In genome *read* mode we hold the read in its original FASTQ
+/// orientation, so a reverse-strand mapping must be reverse-complemented before it
+/// is handed to bramble; otherwise the clip-rescue slices the wrong end of the read.
+pub fn revcomp(seq: &[u8]) -> Vec<u8> {
+    seq.iter()
+        .rev()
+        .map(|&b| match b {
+            b'A' | b'a' => b'T',
+            b'C' | b'c' => b'G',
+            b'G' | b'g' => b'C',
+            b'T' | b't' => b'A',
+            b'U' | b'u' => b'A',
+            _ => b'N',
+        })
+        .collect()
+}
+
 /// Convert a minimap2 [`Mapping`](minimap2::Mapping) (spliced genome alignment)
 /// into a bramble [`GenomicAlignment`].
 ///
