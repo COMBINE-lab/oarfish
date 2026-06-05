@@ -22,9 +22,6 @@ use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use crossbeam::channel::Receiver;
 use crossbeam::channel::Sender;
 use crossbeam::channel::bounded;
-#[allow(unused_imports)]
-use minimap2_sys as mm_ffi;
-//use minimap2_temp as minimap2;
 
 use needletail::parse_fastx_file;
 use noodles_bam as bam;
@@ -478,6 +475,10 @@ pub fn quantify_genome_raw_reads(
                         // reused across all reads this worker projects (avoids
                         // per-read allocation of bramble's projection scratch).
                         let mut pctx = ProjectionContext::new();
+                        // Reused across every read this worker projects, to avoid
+                        // re-allocating the per-read alignment/score scratch vectors.
+                        let mut galns: Vec<bramble_rs::GenomicAlignment> = Vec::new();
+                        let mut src_scores: Vec<i32> = Vec::new();
 
                         for read_chunk in receiver {
                             for (name, seq) in read_chunk.iter() {
@@ -492,9 +493,8 @@ pub fn quantify_genome_raw_reads(
                                 // build GenomicAlignments and a parallel vector of
                                 // their minimap2 alignment scores (used by the
                                 // score/combined probability sources).
-                                let mut galns: Vec<bramble_rs::GenomicAlignment> =
-                                    Vec::with_capacity(mappings.len());
-                                let mut src_scores: Vec<i32> = Vec::with_capacity(mappings.len());
+                                galns.clear();
+                                src_scores.clear();
                                 for m in mappings.iter() {
                                     if let Some(ga) =
                                         mapping_to_genomic_alignment(m, &query_name, seq.len())

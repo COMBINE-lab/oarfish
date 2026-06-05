@@ -106,15 +106,15 @@ pub fn read_and_verify_genome_header<R: io::BufRead>(
 
     if let Some(inner_header) = header.header() {
         let so = tag::Other::try_from([b'S', b'O'])?;
-        if let Some(so_type) = inner_header.other_fields().get(&so) {
-            if so_type == "coordinate" {
-                error!("oarfish cannot project a coordinate-sorted genome BAM.");
-                anyhow::bail!(
-                    "You provided a coordinate-sorted genome BAM, but genome-projection mode requires\n\
-                     a BAM collated by read name so that all alignments of a read are contiguous.\n\
-                     Please collate it first, e.g. `samtools collate -o collated.bam input.bam`."
-                );
-            }
+        if let Some(so_type) = inner_header.other_fields().get(&so)
+            && so_type == "coordinate"
+        {
+            error!("oarfish cannot project a coordinate-sorted genome BAM.");
+            anyhow::bail!(
+                "You provided a coordinate-sorted genome BAM, but genome-projection mode requires\n\
+                 a BAM collated by read name so that all alignments of a read are contiguous.\n\
+                 Please collate it first, e.g. `samtools collate -o collated.bam input.bam`."
+            );
         }
     }
 
@@ -563,7 +563,6 @@ fn project_and_add_group(
 /// check), but each group is projected with bramble instead of filtered against
 /// the transcriptome directly. `store` must have been created over the
 /// *transcriptome* header.
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 pub fn parse_genome_alignments<R: io::BufRead>(
     store: &mut InMemoryAlignmentStore,
