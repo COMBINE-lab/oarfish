@@ -3,6 +3,13 @@ use noodles_sam::Header;
 use std::num::NonZeroUsize;
 use util::oarfish_types::NamedDigestVec;
 
+// Genome-projection mapping churns many small allocations across worker threads;
+// glibc malloc fragments/retains that into large peak RSS. mimalloc keeps the
+// peak down and returns memory to the OS. (Disable with `--no-default-features`.)
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 // Or now
 // use minimap2::ffi as mm_ffi;
 //use minimap2_temp as minimap2;

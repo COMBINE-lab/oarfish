@@ -91,7 +91,16 @@ parse-size = "1.1.0"
 niffler = "3.0.0"
 humantime = "2.3.0"
 
+# mimalloc global allocator. Long-read genome-projection mapping does a lot of
+# small alloc/free across many worker threads; glibc malloc retains/fragments
+# that into large peak RSS. mimalloc handles the churn and returns memory to the
+# OS far better. On by default; disable with `--no-default-features`.
+mimalloc = { version = "0.1.43", default-features = false, optional = true }
+
 [features]
+default = ["mimalloc"]
+# Use mimalloc as the global allocator (large peak-RSS reduction in genome mode).
+mimalloc = ["dep:mimalloc"]
 # Use the rammap (pure-Rust) mapper instead of minimap2-rs. Off by default so
 # the default build matches the `dev` branch for benchmarking.
 rammap = ["dep:rammap"]
