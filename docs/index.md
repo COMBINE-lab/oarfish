@@ -1,6 +1,8 @@
 # oarfish: transcript quantification from long-read RNA-seq data
 
-`oarfish` is a program, written in Rust (https://www.rust-lang.org/), for quantifying transcript-level expression from long-read (i.e. Oxford nanopore cDNA and direct RNA and PacBio) sequencing technologies. `oarfish` requires a sample of sequencing reads aligned to the _transcriptome_ (currntly not to the genome). It handles multi-mapping reads through the use of probabilistic allocation via an expectation-maximization (EM) algorithm.
+`oarfish` is a program, written in Rust (https://www.rust-lang.org/), for quantifying transcript-level expression from long-read (i.e. Oxford nanopore cDNA and direct RNA and PacBio) sequencing technologies. It handles multi-mapping reads through the use of probabilistic allocation via an expectation-maximization (EM) algorithm.
+
+`oarfish` can consume your data in several ways: pre-computed alignments to the *transcriptome* (a BAM file), raw reads that it maps to the transcriptome for you, or — added more recently — *genome*-based input, where reads are spliced-aligned to the genome (or a spliced genome BAM is provided) and the resulting genomic alignments are projected onto the annotated transcripts before quantification. See [Quantification modes](#quantification-modes) for an overview.
 
 It optionally employs many filters to help discard alignments that may reduce quantification accuracy. Currently, the set of filters applied in `oarfish` are directly derived from the [`NanoCount`](https://github.com/a-slide/NanoCount)[^Gleeson] tool; both the filters that exist, and the way their values are set (with the exception of the `--three-prime-clip` filter, which is not set by default in `oarfish` but is in `NanoCount`).
 
@@ -40,6 +42,19 @@ You can find the crate on [crates.io](https://crates.io/crates/oarfish).
 conda install -c bioconda oarfish
 ```
 
+## Quantification modes
+
+`oarfish` supports four ways of providing input. All of them feed the same EM-based quantification core; they differ only in how alignments to the transcriptome are obtained. The mode is selected implicitly by which input flag you pass.
+
+| Mode | Selected by | What it does |
+|------|-------------|--------------|
+| **Alignment** (transcriptome BAM) | `--alignments` | Quantify pre-computed alignments of reads to the **transcriptome** (a name-sorted BAM, e.g. from `minimap2`/`pbmm2`). |
+| **Read** (transcriptome mapping) | `--reads` + `--annotated`/`--index` | Map raw reads to the **transcriptome** internally (with the built-in [rammap](#the-mapping-backend) mapper), then quantify. |
+| **Genome read-projection** | `--reads` + `--genome` + `--annotation` | Spliced-align raw reads to the **genome**, project each read's genomic alignments onto the annotated transcripts (via [bramble](https://github.com/COMBINE-lab/bramble)), then quantify. |
+| **Genome-alignment projection** | `--genome-alignments` + `--annotation` | Project an existing **spliced genome BAM** (e.g. from `minimap2 -ax splice`) onto the annotated transcripts, then quantify. |
+
+> **Which should I use?** The transcriptome read/alignment modes are the most mature and are the right default when you have (or can build) a transcriptome reference. The genome-based modes are useful when you want to align against the genome — for example to keep one genomic alignment pass for multiple downstream analyses, to start from genome BAMs you already have, or to capture reads that fall outside annotated transcript boundaries (recovered via soft-clip [rescue](#soft-clip-rescue)). On our benchmarks, genome read-projection quantification closely matches direct transcriptome quantification when rescue is enabled (see [expectations](#expectations-for-the-genome-based-modes)).
+
 ## Basic usage
 
 The usage can be provided by passing `-h` at the command line.
@@ -47,171 +62,198 @@ The usage can be provided by passing `-h` at the command line.
 ```
 A fast, accurate and versatile tool for long-read transcript quantification.
 
-Usage: oarfish [OPTIONS] <--alignments <ALIGNMENTS>|--reads <READS>|--only-index>
+Usage: oarfish [OPTIONS] <--alignments <ALIGNMENTS>|--reads <READS>|--only-index|--genome-alignments <GENOME_ALIGNMENTS>>
 
 Options:
-      --quiet
-          be quiet (i.e. don't output log messages that aren't at least warnings)
-      --verbose
-          be verbose (i.e. output all non-developer logging messages)
-  -o, --output <OUTPUT>
-          location where output quantification file should be written
-      --single-cell
-          input is assumed to be a single-cell BAM and to have the `CB:z` tag for all read records
-  -j, --threads <THREADS>
-          number of cores that oarfish will use during different phases of quantification. Note: This value will be at least 2 for bulk quantification and at least 3 for single-cell quantifi
-cation due to the use of dedicated parsing threads [default: 3]
+      --quiet              be quiet (only warnings and errors)
+      --verbose            be verbose (all non-developer logging)
+  -o, --output <OUTPUT>    location where output quantification file should be written
+      --single-cell        input is a single-cell BAM with the `CB:z` tag on all records
+  -j, --threads <THREADS>  number of cores oarfish will use [default: 3]
       --num-bootstraps <NUM_BOOTSTRAPS>
-          number of bootstrap replicates to produce to assess quantification uncertainty [default: 0]
-  -h, --help
-          Print help
-  -V, --version
-          Print version
+                           number of bootstrap replicates for uncertainty [default: 0]
+  -h, --help               Print help
+  -V, --version            Print version
 
 alignment mode:
-  -a, --alignments <ALIGNMENTS>  path to the file containing the input alignments
+  -a, --alignments <ALIGNMENTS>  path to a transcriptome-aligned BAM to quantify
 
 raw read mode:
-      --reads <READS>
-          path to the file containing the input reads; these can be in FASTA/Q format (possibly gzipped), or provided in uBAM (unaligned BAM) format. The format will be inferred from the fil
-e suffixes, and if a format cannot be inferred, it will be assumed to be (possibly gzipped) FASTA/Q
-      --annotated <ANNOTATED>
-          path to the file containing the annotated transcriptome (e.g. GENCODE) against which to map
-      --novel <NOVEL>
-          path to the file containing novel (de novo, or reference-guided assembled) transcripts against which to map. These are ultimately indexed together with reference transcripts, but p
-assed in separately for the purposes of provenance tracking
-      --index <INDEX>
-          path to an existing minimap2 index (either created with oarfish, which is preferred, or with minimap2 itself)
-      --seq-tech <SEQ_TECH>
-          sequencing technology in which to expect reads if using mapping based mode [possible values: ont-cdna, ont-drna, pac-bio, pac-bio-hifi]
-      --best-n <BEST_N>
-          maximum number of secondary mappings to consider when mapping reads to the transcriptome [default: 100]
-      --thread-buff-size <THREAD_BUFF_SIZE>
-          total memory to allow for thread-local alignment buffers (each buffer will get this value / # of alignment threads) [default: 1GB]
+      --reads <READS>          input reads: FASTA/Q (optionally gzipped) or uBAM; format inferred from suffix
+      --annotated <ANNOTATED>  transcriptome FASTA (e.g. GENCODE) to map against
+      --novel <NOVEL>          additional novel/assembled transcripts (indexed together, tracked separately)
+      --index <INDEX>          an existing index (oarfish-created preferred, or a compatible prebuilt index)
+      --seq-tech <SEQ_TECH>    [possible values: ont-cdna, ont-drna, pac-bio, pac-bio-hifi]
+      --best-n <BEST_N>        max secondary mappings to consider [default: 100]
+      --dp-cache-cap-mb <DP_CACHE_CAP_MB>
+                               cap (MB) on the per-thread DP scratch buffer the mapper retains; bounds peak
+                               RSS. Unset = default 128 MB / `RAMMAP_DP_CACHE_CAP_MB` env var; `0` = unbounded
 
-indexing:
-      --only-index             If this flag is passed, oarfish only performs indexing and not quantification. Designed primarily for workflow management systems. Note: A prebuilt index is no
-t needed to quantify with oarfish; an index can be written concurrently with quantification using the `--index-out` parameter
-      --index-out <INDEX_OUT>  path where minimap2 index will be written (if provided)
+genome mode:
+      --genome-alignments <GENOME_ALIGNMENTS>
+                               a spliced, genome-aligned BAM (name-collated) to project onto `--annotation`
+      --genome <GENOME>        a genome FASTA or prebuilt genome index; with `--reads`, spliced-align then project
+      --annotation <ANNOTATION>
+                               transcript annotation (GTF/GFF); required in genome mode (projection target)
+      --genome-fasta <GENOME_FASTA>
+                               genome FASTA for soft-clip rescue (auto-taken from `--genome` when it is a FASTA)
+      --no-rescue              disable bramble soft-clip rescue during projection (on by default)
+      --junctions <JUNCTIONS>  optional BED12 of splice junctions to hint alignment (else derived from `--annotation`)
 
 filters:
-      --filter-group <FILTER_GROUP>
-          [possible values: no-filters, nanocount-filters]
-  -t, --three-prime-clip <THREE_PRIME_CLIP>
-          maximum allowable distance of the right-most end of an alignment from the 3' transcript end [default: *4294967295]
-  -f, --five-prime-clip <FIVE_PRIME_CLIP>
-          maximum allowable distance of the left-most end of an alignment from the 5' transcript end [default: *4294967295]
-  -s, --score-threshold <SCORE_THRESHOLD>
-          fraction of the best possible alignment score that a secondary alignment must have for consideration [default: *0.95]
-  -m, --min-aligned-fraction <MIN_ALIGNED_FRACTION>
-          fraction of a query that must be mapped within an alignemnt to consider the alignemnt valid [default: *0.5]
-  -l, --min-aligned-len <MIN_ALIGNED_LEN>
-          minimum number of nucleotides in the aligned portion of a read [default: *50]
-  -d, --strand-filter <STRAND_FILTER>
-          only alignments to this strand will be allowed; options are (fw /+, rc/-, or both/.) [default: .]
+      --score-prob-denom <SCORE_PROB_DENOM>
+                               denominator D in exp((score-best)/D) weighting (default 5). Transcriptome mode only
+      --filter-group <FILTER_GROUP>     [possible values: no-filters, nanocount-filters]
+  -t, --three-prime-clip <THREE_PRIME_CLIP>     max 3' end distance [default: *4294967295]
+  -f, --five-prime-clip <FIVE_PRIME_CLIP>       max 5' end distance [default: *4294967295]
+  -s, --score-threshold <SCORE_THRESHOLD>       min fraction of best score for a secondary aln [default: *0.95]
+  -m, --min-aligned-fraction <MIN_ALIGNED_FRACTION>  min mapped fraction of a query [default: *0.5]
+  -l, --min-aligned-len <MIN_ALIGNED_LEN>       min aligned nucleotides [default: *50]
+  -d, --strand-filter <STRAND_FILTER>           allowed strand (fw/+, rc/-, both/.) [default: .]
+
+indexing:
+      --only-index             only build the index, do not quantify
+      --index-out <INDEX_OUT>  path where the index will be written (if provided)
 
 coverage model:
       --model-coverage             apply the coverage model
-  -k, --growth-rate <GROWTH_RATE>  if using the coverage model, use this as the value of `k` in the logistic equation [default: 2]
-  -b, --bin-width <BIN_WIDTH>      width of the bins used in the coverage model [default: 100]
+  -k, --growth-rate <GROWTH_RATE>  logistic `k` [default: 2]
+  -b, --bin-width <BIN_WIDTH>      coverage bin width [default: 100]
 
 output read-txps probabilities:
-      --write-assignment-probs[=<WRITE_ASSIGNMENT_PROBS>]
-          write output alignment probabilites (optionally compressed) for each mapped read. If <WRITE_ASSIGNMENT_PROBS> is present, it must be one of `uncompressed` (default) or `compressed`
-, which will cause the output file to be lz4 compressed
+      --write-assignment-probs[=<WRITE_ASSIGNMENT_PROBS>]  write per-read assignment probs (uncompressed|compressed)
+      --display-thresh <DISPLAY_THRESH>  min posterior prob to write to .prob, or 'none' [default: 0.000001]
 
 EM:
-      --max-em-iter <MAX_EM_ITER>
-          maximum number of iterations for which to run the EM algorithm [default: 1000]
-      --convergence-thresh <CONVERGENCE_THRESH>
-          maximum number of iterations for which to run the EM algorithm [default: 0.001]
-  -q, --short-quant <SHORT_QUANT>
-          location of short read quantification (if provided)
+      --max-em-iter <MAX_EM_ITER>            max EM iterations [default: 1000]
+      --convergence-thresh <CONVERGENCE_THRESH>  EM convergence threshold [default: 0.001]
+  -q, --short-quant <SHORT_QUANT>            short-read quantification (if provided)
 ```
+
+> The block above is abridged for readability; run `oarfish --help` for the exact, complete option text for your installed version.
 
 ## Usage examples
 
-Assume that you have ONT cDNA sequencing reads in a file named `sample1_reads.fq.gz`, and you'd like to quantify the transcripts in a *transcriptome* reference in the file `transcripts.fa`.
-To accomplish this with oarfish, you can use either [alignment-based](index.md#alignment-based-input) or [read-based](index.md#read-based-input) mode.  Here we give a brief example
-of each.  To use alignment-based mode, we assume you have [minimap2](https://github.com/lh3/minimap2) and [samtools](http://www.htslib.org/) installed.  
+### Alignment-mode example (transcriptome BAM)
 
-### aligment-mode example
+Assume you have ONT cDNA reads in `sample1_reads.fq.gz` and a *transcriptome* reference `transcripts.fa`, and you have [minimap2](https://github.com/lh3/minimap2) and [samtools](http://www.htslib.org/) installed:
 
-You can quantify the transcript abundances in this sample using the following commands:
-
-```{bash}
-$ minimap2 -t 16 -ax map-ont transcripts.fa sample1_reads.fq.gz | samtools view -@4 -b -o alignments.bam
+```bash
+$ minimap2 -t 16 --eqx -N 100 -ax map-ont transcripts.fa sample1_reads.fq.gz | samtools view -@4 -b -o alignments.bam
 $ oarfish -j 16 -a alignments.bam -o sample1 --filter-group no-filters --model-coverage
 ```
 
-This will produce several output files, as described [below](index.md#output).
+### Read-mode example (oarfish maps to the transcriptome)
 
-### read-mode example
+Here `oarfish` maps the reads to the transcriptome for you (no external aligner needed):
 
-In read-based mode, you can quantify the transcript abundances in this sample using the following commands:
-
-```{bash}
+```bash
 $ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
 ```
 
-If you are going to quantify more than one sample against these reference transcripts, it makes sense to save the minimap2 index that the above
-command creates.  This can be done using the following command:
+If you will quantify more than one sample against the same reference, save the index that the above command builds and reuse it:
 
-```{bash}
-$ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa --index-out transcripts.mmi --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
+```bash
+# build + quantify, writing the index out
+$ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa --index-out transcripts.oar --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
+# subsequent samples reuse the index
+$ oarfish -j 16 --reads sample2_reads.fq.gz --index transcripts.oar --seq-tech ont-cdna -o sample2 --filter-group no-filters --model-coverage
 ```
 
-Then, in subsequent runs (say when quantifying `sample2_reads.fq.gz`), you can directly provide the `minimap2` index in place of the reference to
-speed up quantification.  That command would look like the following:
+### Genome read-projection example (reads → genome → transcripts)
 
-```{bash}
-$ oarfish -j 16 --reads sample2_reads.fq.gz --index transcripts.mmi --seq-tech ont-cdna -o sample2 --filter-group no-filters --model-coverage
+Spliced-align the reads to the genome and project onto the annotated transcripts. You need a genome FASTA (or a prebuilt genome index) and a transcript annotation (GTF/GFF):
+
+```bash
+$ oarfish -j 16 --reads sample1_reads.fq.gz --genome genome.fa --annotation annotation.gtf \
+    --seq-tech pac-bio-hifi -o sample1 --filter-group no-filters
 ```
 
-As with alignment-based mode, these commands will produce several output files, as described [below](index.md#output).
+Soft-clip rescue is on by default and, when `--genome` is a FASTA, the rescue reference sequence is taken from it automatically. Add `--no-rescue` to disable rescue, or `--junctions models.bed12` to supply your own splice-junction hints instead of deriving them from the annotation.
 
+### Genome-alignment projection example (project an existing genome BAM)
+
+If you already have a spliced genome BAM (e.g. produced with `minimap2 -ax splice`), project it onto the transcripts directly — no reads or genome FASTA required for the projection itself, though a genome FASTA is needed if you want soft-clip rescue:
+
+```bash
+# BAM must be collated by read name
+$ minimap2 -t 16 --eqx -ax splice genome.fa sample1_reads.fq.gz | samtools collate -@4 -O -u - | samtools view -b -o genome.bam
+$ oarfish -j 16 --genome-alignments genome.bam --annotation annotation.gtf --genome-fasta genome.fa \
+    -o sample1 --filter-group no-filters
+```
+
+All of these commands produce the output files described [below](#output).
 
 ## Input to `oarfish`
 
-`Oarfish` can accept as input either a `bam` file containing reads aligned to the transcriptome as specified [below](index.md#alignment-based-input), or
-raw sequencing reads themselves (along with a reference transcriptome), which are then mapped to the reference using [minimap2-rs](https://github.com/jguhlin/minimap2-rs)
-and subsequently processed with `oarfish`.  With equivalent alignment options, the results of these input modes should be equivalent, so which to use is therefore
-based on the preference of the user.
+### Read-based input (transcriptome)
 
+The read-based transcriptome mode takes reference transcript sequences (`--annotated` and/or `--novel`, `FASTA` files) plus a set of reads (`--reads`) and a `--seq-tech`. `oarfish` maps the reads to the transcriptome internally with its built-in [rammap](#the-mapping-backend) mapper and quantifies the result.
 
-### Read-based input
+The `--annotated` and `--novel` flags distinguish the *provenance* of the underlying transcripts; their provenance is tracked separately in the output. It is recommended that you provide transcripts from known reference annotations (e.g. GENCODE) via `--annotated`, and transcripts assembled from your samples via `--novel`. **Importantly**, how transcripts are split between `--annotated` and `--novel` has no effect on the final quantification (they are joined and indexed together); only the per-source sequence signature in the output differs.
 
-The read-based input mode takes as input reference transcript sequences (specified with the `--annotated` and `--novel` arguments) which are `FASTA` files containing transcriptome sequence.  The `--annotated` and `--novel` flags take care of the source of the underlying transcripts, as their provenance is tracked separately. It is recommended that you provide transcripts from known reference annotations (e.g. gencode) using the `--annotated` option, while you provide novel transcripts that may have beeen assembled from your samples using the `--novel` option. **Importantly**, how the transcripts are split between `--annotated` and `--novel` will have no effect on how the final quantification is performed, as the transcripts from both sources are joined and indexed together.  However, a separate sequence signature is kept and propagated to the output for each source, and mixing novel transcripts into the `--annotated` source may complicate attempts to automatically detect the reference annotation used in downstream tools.
-
-Alternatively, you can provide `oarfish` with an index (built from a previous run of `oarfish`) to avoid re-indexing the same reference. You can also provide a pre-built `minimap2` index, though such an index will not be able to separately track `--annotated` and `--novel` transcripts.
-
-Finally, you provide `orafish` with a set of reads (specified with the `--reads` argument) which should be a `FASTQ` file (possibly gzipped) or a `uBAM` file, and a `--seq-tech` argument specifying the sequencing technology 
-type of the reads to be mapped.
-
-The mapping between the potential values that can be passed to `oarfish`'s `--seq-tech` argument and the `minimap2` presets is as follows:
-
-  - `oarfish` seq-tech `ont-cdna` corresponds to `minimap2` preset `map-ont`
-  - `oarfish` seq-tech `ont-drna` corresponds to `minimap2` preset `map-ont`
-  - `oarfish` seq-tech `pac-bio` corresponds to `minimap2` preset `map-pb`
-  - `oarfish` seq-tech `pac-bio-hifi` corresponds to `minimap2` preset `map-hifi`
-
-Given these inputs, `oarfish` will either load the pre-built `minimap2` index, or build one according to the parameter specified by `--seq-tech`, and will then align
-the reads to this index using [`minimap2-rs`](https://github.com/jguhlin/minimap2-rs).  Optionally, the maximum multimapping rate (i.e. the number of secondary alignments 
-corresponding to the `minimap2` parameter `-N`) can be specified with the command line parameter `--best-n`. The default value of this parameter is 100.
+Alternatively you can provide a pre-built index via `--index` (an index built from a previous `oarfish` run is preferred, since it preserves the `--annotated`/`--novel` provenance tracking). The maximum multimapping rate is controlled by `--best-n` (default 100).
 
 #### Read-based input formats
 
-`oarfish` is capable of taking input in either `FASTA` format `FASTQ` format, or unaligned `BAM` (`uBAM`) format.  When you pass the raw reads to `oarfish` via the `--reads` flag, `oarfish` will attempt to infer the type of the input by looking at the file suffix.  If it matches one of `.fa`, `.fasta`, `.FA`, `.FASTA`, `.fq`, `.fastq`, `.FQ`, `.FASTQ`, `.fa.gz`, `.fasta.gz`, `.FA.GZ`, `.FASTA.GZ`, `.fq.gz`, `.fastq.gz`, `.FQ.GZ`, or `.FASTQ.GZ`, then the input file will be assumed to be an (appropriately compressed) `FASTA` or `FASTQ` format. Otherwise, if it ends in `.bam` or `.ubam` or `.BAM` or `.UBAM`, it will be assumed to be in `uBAM` format. If  the format cannot be inferred via the file suffix (e.g. if the file is being provided via process substitution), then an attempt will be made to parse it as a (possibly compressed) `FASTA`/`FASTQ` format file.
+`oarfish` accepts `FASTA`, `FASTQ`, or unaligned `BAM` (`uBAM`) reads. When you pass reads via `--reads`, the type is inferred from the file suffix: one of `.fa`, `.fasta`, `.fq`, `.fastq` (and their upper-case and `.gz` variants) is treated as (possibly compressed) `FASTA`/`FASTQ`; `.bam`/`.ubam` (any case) is treated as `uBAM`. If the format cannot be inferred from the suffix (e.g. with process substitution), it is parsed as (possibly compressed) `FASTA`/`FASTQ`.
 
-### Alignmment-based input
+### Alignment-based input (transcriptome BAM)
 
-In alignment-based mode, `oarfish` processes pre-computed alignments of the read to the transcriptome. The input should be a `bam` format file, with reads aligned using [`minimap2`](https://github.com/lh3/minimap2) against the _transcriptome_. That is, `oarfish` does not currently handle spliced alignment to the genome. Further, the output alignments should be name sorted (the default order produced by `minimap2` should be fine). _Specifically_, `oarfish` relies on the existence of the `AS` tag in the `bam` records that encodes the alignment score in order to obtain the score for each alignment (which is used in probabilistic read assignment), and the score of the best alignment, overall, for each read. 
+In alignment-based mode (`--alignments`), `oarfish` processes pre-computed alignments of the reads to the *transcriptome*. The input is a `BAM` file, name-sorted (the default order produced by `minimap2` is fine), with reads aligned against the transcriptome. `oarfish` relies on the `AS` tag in each record to obtain the alignment score used in probabilistic read assignment. See [Choosing aligner options](#choosing-aligner-options-for-bam-input) for recommended aligner flags.
 
-### Choosing `minimap2` alignment options 
+### Genome-based input (projection onto transcripts)
 
-Since the purpose of `oarfish` is to estimate transcript abundance from a collection of alignments to the target transcriptome, it is important that the alignments are generated in a fashion that is compatible with this goal.  Primarily, this means that the aligner should be configured to report as many optimal (and near-optimal) alignments as exist, so that `oarfish` can observe all of this information and determine how to allocate reads to transcripts.  We recommend using the following options with `minimap2` when aligning data for later processing by `oarfish` * For ONT data (either dRNA or cDNA): please use the flags `--eqx -N 100 -ax map-ont` For PacBio data: please use the flags `--eqx -N 100 -ax pacbio` **Note (1)**: It may be worthwile using an even larger `N` value (e.g. the [TranSigner manuscript](https://www.biorxiv.org/content/10.1101/2024.04.13.589356v1.full) recommends `-N 181`). A larger value should not diminish the accuracy of `oarfish`, but it may make alignment take longer and produce a larger `bam` file.
+The two genome-based modes both end by *projecting* genomic alignments onto the transcripts defined by `--annotation` (a GTF/GFF), using [bramble](https://github.com/COMBINE-lab/bramble), and then quantifying those projected transcriptome alignments. `--annotation` is **required** in genome mode.
 
-**Note (2)**: For very high quality PacBio data, it may be most appropriate to use the `-ax map-hifi` flag in place of `-ax pacbio`.  We are currently evaluating the effect of this option, and also welcome feedback if you have experiences to share on the use of data aligned with these different flags with `oarfish`.
+* **Genome read-projection** (`--reads` + `--genome`): `oarfish` builds (or loads) a spliced genome index from `--genome` and spliced-aligns the reads to the genome, then projects. `--genome` may be a genome `FASTA` or a prebuilt genome index. The spliced-alignment preset is chosen from `--seq-tech` (`pac-bio-hifi` uses a high-quality splice preset; other technologies use the general splice preset).
+
+* **Genome-alignment projection** (`--genome-alignments`): `oarfish` projects an existing spliced genome `BAM`. The BAM must be **collated by read name** (e.g. `samtools collate`). This lets you reuse alignments produced by `minimap2`, `pbmm2`, STAR, etc.
+
+#### Soft-clip rescue
+
+Projection can lose discriminating sequence at read ends that were soft-clipped during genomic alignment. **Rescue is ON by default in genome mode**: bramble re-aligns soft-clipped read ends against the transcript's neighboring exons to recover that signal, which improves isoform-level accuracy at negligible cost. Rescue needs the genome reference sequence:
+
+* In genome read-projection mode, when `--genome` is a FASTA the sequence is taken from it automatically.
+* In genome-alignment (BAM) mode, or to override the source, supply `--genome-fasta`.
+* Use `--no-rescue` to disable rescue entirely.
+
+#### Splice-junction hints
+
+In genome read-projection mode, splice junctions are derived automatically from `--annotation` to guide spliced alignment. You may instead supply your own junctions/transcript models as a `BED12` file via `--junctions`, in which case that file is used.
+
+#### Expectations for the genome-based modes
+
+These modes are newer than the transcriptome modes. On our human PacBio HiFi simulation benchmark:
+
+* **Accuracy.** With rescue enabled, genome read-projection quantification closely tracks direct transcriptome quantification (essentially the same mapped-read counts and per-transcript estimates). Disabling rescue (`--no-rescue`) measurably lowers isoform-level accuracy, so leave it on unless you have a reason not to.
+* **Resources.** Genome mode is heavier than transcriptome mode: it builds/holds a spliced genome index (tens of GB for a mammalian genome) and runs projection per read. On the 80k-read human benchmark at 48 threads, peak RSS was ~24–25 GB and wall time under a minute (excluding any one-time index build). Peak memory scales with thread count; see [`--dp-cache-cap-mb`](#the-mapping-backend) and `-j` if you need to bound it.
+* **Filters.** For genome projection we typically run with `--filter-group no-filters`; the NanoCount-style transcriptome filters are tuned for direct transcriptome alignments.
+* **Probability weighting.** In genome mode, a read's projected alignments are weighted by bramble exonic-coverage similarity, so the transcriptome-only `--score-prob-denom` option is rejected (it is an error to pass it with `--genome`/`--genome-alignments`).
+
+### Choosing aligner options (for BAM input)
+
+When you provide your own BAM (`--alignments` or `--genome-alignments`), it is important that the alignments are generated in a way compatible with quantification. Primarily, the aligner should report as many optimal and near-optimal alignments as exist, so `oarfish` can see all of them and allocate reads accordingly. We recommend the following `minimap2` options:
+
+* For transcriptome alignment (`--alignments`): ONT data (dRNA or cDNA) — `--eqx -N 100 -ax map-ont`; PacBio data — `--eqx -N 100 -ax map-pb` (or `-ax map-hifi` for very high-quality PacBio HiFi).
+* For genome alignment (`--genome-alignments`): use a spliced preset, e.g. `--eqx -ax splice` (or `-ax splice:hq` for PacBio HiFi), and collate the BAM by read name.
+
+**Note**: a larger `-N` (e.g. the [TranSigner manuscript](https://www.biorxiv.org/content/10.1101/2024.04.13.589356v1.full) recommends `-N 181`) should not diminish accuracy, but will make alignment slower and the BAM larger.
+
+## The mapping backend
+
+For raw-read input (`--reads`), `oarfish` no longer shells out to `minimap2`; mapping is performed in-process by [rammap](https://github.com/jwanglab/rammap), a pure-Rust long-read mapper. This removes the external alignment step and the `minimap2`/`htslib` build dependencies. Externally produced BAMs (`--alignments`, `--genome-alignments`) are of course still fully supported — those can come from `minimap2`, `pbmm2`, STAR, or any compatible aligner.
+
+The `--seq-tech` value selects the mapping preset:
+
+| `--seq-tech` | transcriptome preset (`--annotated`/`--index`) | genome preset (`--genome`) |
+|--------------|-----------------------------------------------|----------------------------|
+| `ont-cdna`   | `map-ont`  | `splice`     |
+| `ont-drna`   | `map-ont`  | `splice`     |
+| `pac-bio`    | `map-pb`   | `splice`     |
+| `pac-bio-hifi` | `map-hifi` | `splice:hq` |
+
+**Bounding peak memory.** The mapper retains a per-thread DP alignment-scratch buffer between reads to avoid reallocation. Rare reads with large unaligned gaps can produce very large buffers, and at high thread counts the retained per-thread high-water marks can dominate peak RSS. `oarfish` caps that buffer at 128 MB by default (frees larger one-off buffers instead of pinning them), which on our genome benchmark cut peak RSS by ~20% with bit-identical output. Tune it with `--dp-cache-cap-mb <MB>` (or the `RAMMAP_DP_CACHE_CAP_MB` environment variable); pass `0` to disable the cap and restore the previous unbounded behavior.
 
 ## Other notes on `oarfish` parameters
 
