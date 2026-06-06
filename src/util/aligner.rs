@@ -606,7 +606,15 @@ pub(crate) fn get_genome_aligner_from_args(
     let genome_str = genome
         .to_str()
         .expect("could not convert genome path to &str");
-    let mut aligner = rammap::api::Aligner::from_fasta(genome_str, preset)?;
+    // `--genome` may be a FASTA (build the index now) or a prebuilt rammap index
+    // (load it). A loaded index that retains its reference sequences also enables
+    // soft-clip rescue without a separate FASTA (see `rescue_db_from_genome_index`).
+    let mut aligner = if is_fasta(&genome).unwrap_or(false) {
+        rammap::api::Aligner::from_fasta(genome_str, preset)?
+    } else {
+        info!("loading prebuilt rammap genome index from {}", genome.display());
+        rammap::api::Aligner::from_index(genome_str, preset)?
+    };
     aligner.options_mut().filtering.best_n = args.best_n as i32;
     aligner.options_mut().filtering.seed = 11;
 
