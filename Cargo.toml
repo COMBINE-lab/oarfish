@@ -80,7 +80,14 @@ bramble-rs = "0.1.4"
 # Published as the `rammap-core` library crate; renamed to `rammap` here so the
 # `rammap::` paths in the source are unchanged. Includes the upstreamed
 # splice-junction loaders (jwanglab/rammap#7).
-rammap = { package = "rammap-core", version = "1.1.0", default-features = false, features = [
+#
+# TEMPORARY: pinned to `rammap-core-temp` 1.2.0 — our published fork of
+# rammap-core 1.1.0 carrying the per-thread DP scratch-cache cap (jwanglab/rammap
+# PR #9) that bounds genome-mode peak RSS (30.1 -> 24.0 GB @ j48). The cap is
+# default-on (128 MB; tune via `rammap::set_dp_cache_cap_mb` or
+# `RAMMAP_DP_CACHE_CAP_MB`). Switch back to `package = "rammap-core"` once the PR
+# is merged and released upstream.
+rammap = { package = "rammap-core-temp", version = "1.2.0", default-features = false, features = [
   "parallel",
 ], optional = true }
 
