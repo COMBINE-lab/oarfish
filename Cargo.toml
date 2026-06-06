@@ -70,9 +70,10 @@ minimap2-sys = { version = "0.1.30" } #, git = "https://github.com/rob-p/minimap
 minimap2 = { version = "0.1.30" }     # git = "https://github.com/rob-p/minimap2-rs.git", branch = "main" }
 
 # bramble-rs: project spliced genome alignments into transcriptome space.
-# 0.1.2 fixes the FASTA-header-keying bug so genome-mode soft-clip rescue
-# actually populates exon sequences (was a silent no-op in 0.1.1).
-bramble-rs = "0.1.2"
+# 0.1.2 fixed the FASTA-header-keying bug so genome-mode soft-clip rescue
+# populates exon sequences; 0.1.3 caps the rescue SW clip length to bound
+# per-thread memory (large peak-RSS reduction at high thread counts).
+bramble-rs = "0.1.3"
 
 # rammap: pure-Rust minimap2 reimplementation, used as an alternative mapping
 # backend behind the (off-by-default) `rammap` feature so we can A/B benchmark
