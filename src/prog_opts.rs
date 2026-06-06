@@ -24,6 +24,19 @@ fn parse_strand(arg: &str) -> anyhow::Result<bio_types::strand::Strand> {
     }
 }
 
+/// Parse a strictly-positive `f32` (used for parameters that divide, so 0 and
+/// negatives are rejected to avoid degenerate probabilities).
+fn parse_pos_f32(arg: &str) -> anyhow::Result<f32> {
+    let v: f32 = arg
+        .parse()
+        .map_err(|_| anyhow::anyhow!("`{}` is not a valid number", arg))?;
+    if v > 0.0 {
+        Ok(v)
+    } else {
+        anyhow::bail!("value must be > 0, but got {}", v)
+    }
+}
+
 #[derive(Debug, Clone, clap::ValueEnum, Serialize)]
 pub enum ReadAssignmentProbOut {
     Uncompressed,
@@ -365,6 +378,14 @@ pub struct Args {
     /// score), or `combined`.
     #[arg(long, hide = true, value_enum, default_value_t = ProjProbSource::Similarity)]
     pub projected_prob_source: ProjProbSource,
+
+    /// denominator `D` in the score→probability conversion `exp((score - best)/D)`
+    /// used to weight a read's alignments in the EM. Larger `D` flattens the
+    /// weighting across alignments of differing score; smaller `D` sharpens it
+    /// toward the best-scoring alignment. Applies to transcriptome mode and to the
+    /// `score`/`combined` projected-probability sources in genome mode.
+    #[arg(long, default_value_t = 5.0, value_parser = parse_pos_f32, help_heading = "filters")]
+    pub score_prob_denom: f32,
 
     /// genome mode: per-internal-junction-mismatch discount in (0,1] applied to a
     /// transcript's projection similarity (sharpens isoform discrimination).

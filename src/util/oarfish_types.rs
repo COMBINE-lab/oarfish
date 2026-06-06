@@ -851,6 +851,12 @@ pub struct AlignmentFilters {
     // false otherwise.
     pub write_assignment_probs: bool,
     pub write_assignment_probs_type: Option<ReadAssignmentProbOut>,
+    /// Denominator `D` in the score→probability conversion
+    /// `exp((score - best_score) / D)` used to weight a read's alignments in the
+    /// EM (transcriptome mode and the `score`/`combined` projected sources).
+    /// Larger flattens, smaller sharpens. Exposed via `--score-prob-denom`.
+    #[builder(default = 5.0)]
+    pub score_prob_denom: f32,
 }
 
 /// This structure records information about
@@ -1117,13 +1123,12 @@ impl AlignmentFilters {
 
         let _min_allowed_score = self.score_threshold * mscore;
 
+        let score_prob_denom = self.score_prob_denom;
         for score in scores.iter_mut() {
-            const SCORE_PROB_DENOM: f32 = 5.0;
             let fscore = *score as f32;
             let score_ok = (fscore * inv_max_score) >= self.score_threshold; //>= thresh_score;
             if score_ok {
-                //let f = ((fscore - mscore) / (mscore - min_allowed_score)) * SCORE_PROB_DENOM;
-                let f = (fscore - mscore) / SCORE_PROB_DENOM;
+                let f = (fscore - mscore) / score_prob_denom;
                 probabilities.push(f.exp());
             } else {
                 *score = i32::MIN;
@@ -1284,11 +1289,13 @@ impl AlignmentFilters {
             // `score` discriminates paralogous genomic loci (similarity saturates
             // near 1.0 for any well-covered transcript and cannot); `similarity`
             // discriminates isoforms sharing a locus (same genomic score).
+            let score_prob_denom = self.score_prob_denom;
             let f = match prob_source {
                 ProjProbSource::Similarity => ((r.similarity - msim) as f32) * beta,
-                ProjProbSource::Score => ((r.aln_score - best_score) as f32) / 5.0,
+                ProjProbSource::Score => ((r.aln_score - best_score) as f32) / score_prob_denom,
                 ProjProbSource::Combined => {
-                    ((r.aln_score - best_score) as f32) / 5.0 + beta * ((r.similarity - msim) as f32)
+                    ((r.aln_score - best_score) as f32) / score_prob_denom
+                        + beta * ((r.similarity - msim) as f32)
                 }
             };
             probabilities.push(f.exp());
