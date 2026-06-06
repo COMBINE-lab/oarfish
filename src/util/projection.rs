@@ -366,8 +366,32 @@ pub fn mapping_to_genomic_alignment(
         return None;
     }
     // rammap CigarOp uses BAM op codes (0=M,1=I,2=D,3=N,4=S,5=H,...), matching
-    // the `(len, op)` representation bramble expects.
-    let cigar: Vec<(u32, u8)> = cigar_ops.iter().map(|c| (c.len, c.op)).collect();
+    // the `(len, op)` representation bramble expects. BUT rammap's `cigar_ops`
+    // cover only the *aligned* span (M/N/I/D); the soft-clips are implicit in
+    // `query_start`/`query_end` (rammap only materializes them when writing SAM).
+    // bramble's soft-clip rescue keys on explicit leading/trailing `S` ops, so we
+    // reconstruct them here in reference-forward orientation — exactly as
+    // minimap2-rs builds its CIGAR — otherwise rescue never fires for the rammap
+    // backend (and isoform accuracy silently drops to the no-rescue baseline).
+    let is_reverse = matches!(m.m.strand, rammap::api::Strand::Reverse);
+    let clip5 = if is_reverse {
+        read_len.saturating_sub(m.m.query_end)
+    } else {
+        m.m.query_start
+    };
+    let clip3 = if is_reverse {
+        m.m.query_start
+    } else {
+        read_len.saturating_sub(m.m.query_end)
+    };
+    let mut cigar: Vec<(u32, u8)> = Vec::with_capacity(cigar_ops.len() + 2);
+    if clip5 > 0 {
+        cigar.push((clip5 as u32, 4)); // 4 = S (soft clip)
+    }
+    cigar.extend(cigar_ops.iter().map(|c| (c.len, c.op)));
+    if clip3 > 0 {
+        cigar.push((clip3 as u32, 4));
+    }
     let ts_strand = m.m.trans_strand.map(|s| match s {
         rammap::api::Strand::Forward => '+',
         rammap::api::Strand::Reverse => '-',
@@ -376,7 +400,7 @@ pub fn mapping_to_genomic_alignment(
         query_name: query_name.to_string(),
         ref_id: m.m.target_id as i32,
         ref_start: (m.m.target_start as i64) + 1, // rammap target_start is 0-based; SAM POS is 1-based
-        is_reverse: matches!(m.m.strand, rammap::api::Strand::Reverse),
+        is_reverse,
         cigar,
         sequence: None,
         is_paired: false,
