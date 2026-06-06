@@ -253,7 +253,7 @@ fn parse_filter_f32(arg: &str) -> anyhow::Result<FilterArg> {
 #[command(group(
     clap::ArgGroup::new("input")
     .required(true)
-    .args(["alignments", "reads", "only_index", "genome_bam"])
+    .args(["alignments", "reads", "only_index", "genome_alignments"])
 ))]
 #[command(group(
     clap::ArgGroup::new("raw_input_type")
@@ -331,7 +331,7 @@ pub struct Args {
         requires = "annotation",
         conflicts_with_all = ["alignments", "reads", "only_index", "annotated", "novel", "index", "genome"]
     )]
-    pub genome_bam: Option<PathBuf>,
+    pub genome_alignments: Option<PathBuf>,
 
     /// path to a genome FASTA or minimap2 index. Used with `--reads` to perform
     /// spliced alignment of the reads to the genome, followed by projection onto
@@ -349,11 +349,20 @@ pub struct Args {
     #[arg(long, help_heading = "genome mode")]
     pub annotation: Option<PathBuf>,
 
-    /// optional genome FASTA enabling bramble's soft-clip rescue during
-    /// projection (both genome modes). Provides the reference sequence used to
-    /// re-align soft-clipped read ends.
+    /// genome FASTA providing the reference sequence for bramble's soft-clip
+    /// rescue during projection. Soft-clip rescue is ON by default in genome
+    /// mode; in read mode the sequence is taken from `--genome` automatically
+    /// when it is a FASTA, so this is only needed to override that or to supply
+    /// the reference in genome-alignments (BAM) mode. See `--no-rescue` to disable.
     #[arg(long, help_heading = "genome mode")]
     pub genome_fasta: Option<PathBuf>,
+
+    /// disable bramble's soft-clip rescue during projection (genome mode). Rescue
+    /// re-aligns soft-clipped read ends against the transcript's neighboring exons
+    /// to recover discriminating sequence; it is on by default (improves isoform
+    /// accuracy at negligible cost). Use this to turn it off.
+    #[arg(long, help_heading = "genome mode")]
+    pub no_rescue: bool,
 
     /// optional BED12 file of splice junctions / transcript models used to hint
     /// the spliced genome alignment (genome read mode). If omitted, junctions are
@@ -380,12 +389,13 @@ pub struct Args {
     pub projected_prob_source: ProjProbSource,
 
     /// denominator `D` in the score→probability conversion `exp((score - best)/D)`
-    /// used to weight a read's alignments in the EM. Larger `D` flattens the
-    /// weighting across alignments of differing score; smaller `D` sharpens it
-    /// toward the best-scoring alignment. Applies to transcriptome mode and to the
-    /// `score`/`combined` projected-probability sources in genome mode.
-    #[arg(long, default_value_t = 5.0, value_parser = parse_pos_f32, help_heading = "filters")]
-    pub score_prob_denom: f32,
+    /// used to weight a read's alignments in the EM (default 5). Larger `D`
+    /// flattens the weighting across alignments of differing score; smaller `D`
+    /// sharpens it toward the best-scoring alignment. Transcriptome mode only —
+    /// in genome mode projected alignments are weighted by bramble similarity, so
+    /// passing this with `--genome`/`--genome-alignments` is an error.
+    #[arg(long, value_parser = parse_pos_f32, help_heading = "filters")]
+    pub score_prob_denom: Option<f32>,
 
     /// genome mode: per-internal-junction-mismatch discount in (0,1] applied to a
     /// transcript's projection similarity (sharpens isoform discrimination).
@@ -408,7 +418,7 @@ pub struct Args {
     #[arg(
         long,
         help_heading = "raw read mode",
-        required_unless_present_any = ["alignments", "genome_bam"],
+        required_unless_present_any = ["alignments", "genome_alignments"],
         value_parser = clap::value_parser!(SequencingTech)
     )]
     pub seq_tech: Option<SequencingTech>,
@@ -606,11 +616,11 @@ mod tests {
     }
 
     #[test]
-    fn genome_bam_requires_annotation() {
-        // genome-BAM mode without --annotation must fail
+    fn genome_alignments_requires_annotation() {
+        // genome-alignments mode without --annotation must fail
         let missing = Args::try_parse_from([
             "oarfish",
-            "--genome-bam",
+            "--genome-alignments",
             "aln.genome.bam",
             "-o",
             "out",
@@ -620,7 +630,7 @@ mod tests {
         // with --annotation it should parse (and not require --seq-tech)
         let ok = Args::try_parse_from([
             "oarfish",
-            "--genome-bam",
+            "--genome-alignments",
             "aln.genome.bam",
             "--annotation",
             "anno.gtf",
@@ -630,7 +640,7 @@ mod tests {
         assert!(ok.is_ok(), "expected parse success, got {ok:?}");
         let ok = ok.expect("valid arguments");
         assert_eq!(
-            ok.genome_bam.as_deref(),
+            ok.genome_alignments.as_deref(),
             Some(std::path::Path::new("aln.genome.bam"))
         );
         assert_eq!(

@@ -239,10 +239,33 @@ pub fn projected_to_records(
 /// The projection configuration to use for the run. oarfish is a long-read
 /// quantifier, so genome-space projection always uses long-read tolerances;
 /// soft-clip rescue is enabled when a genome FASTA is available.
+/// Resolve the genome FASTA used for bramble's soft-clip rescue, honoring the
+/// rescue-on-by-default policy and `--no-rescue`. Priority: explicit
+/// `--genome-fasta`; else `--genome` itself when it is a FASTA (genome read
+/// mode). Returns `None` when rescue is disabled, or when no sequence source is
+/// available — e.g. `--genome` is a prebuilt index and no `--genome-fasta` was
+/// given (index-sourced rescue is a separate path).
+pub fn rescue_fasta_path(args: &Args) -> Option<std::path::PathBuf> {
+    if args.no_rescue {
+        return None;
+    }
+    if let Some(p) = &args.genome_fasta {
+        return Some(p.clone());
+    }
+    if let Some(g) = &args.genome
+        && crate::util::file_utils::is_fasta(g).unwrap_or(false)
+    {
+        return Some(g.clone());
+    }
+    None
+}
+
 pub fn projection_config(args: &Args) -> ProjectionConfig {
     ProjectionConfig {
         long_reads: true,
-        use_fasta: args.genome_fasta.is_some(),
+        // Soft-clip rescue is on by default whenever a reference sequence is
+        // available (see `rescue_fasta_path`); `--no-rescue` turns it off.
+        use_fasta: rescue_fasta_path(args).is_some(),
         junc_miss_discount: args.junc_miss_discount,
     }
 }

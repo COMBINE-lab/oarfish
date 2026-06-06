@@ -71,6 +71,22 @@ fn get_txp_info_from_header(
 }
 
 fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
+    // `--score-prob-denom` tunes the transcriptome-mode score→probability
+    // conversion. In genome (projection) mode a read's projected alignments are
+    // weighted by bramble's exonic-coverage similarity (see `--projected-prob-source`),
+    // not that conversion, so the flag has no effect there — reject it explicitly
+    // rather than silently ignoring it.
+    if args.score_prob_denom.is_some()
+        && (args.genome.is_some() || args.genome_alignments.is_some())
+    {
+        anyhow::bail!(
+            "--score-prob-denom does not apply in genome (projection) mode: a read's \
+             projected alignments are weighted by bramble's exonic-coverage similarity \
+             (see --projected-prob-source), not the score→probability conversion that \
+             --score-prob-denom controls. Please omit --score-prob-denom in genome mode."
+        );
+    }
+
     // set all of the filter options that the user
     // wants to apply.
     match args.filter_group {
@@ -106,7 +122,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .logistic_growth_rate(args.growth_rate)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
-                .score_prob_denom(args.score_prob_denom)
+                .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
                 .build())
         }
         Some(FilterGroup::NanocountFilters) => {
@@ -142,7 +158,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .logistic_growth_rate(args.growth_rate)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
-                .score_prob_denom(args.score_prob_denom)
+                .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
                 .build())
         }
         None => {
@@ -158,7 +174,7 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .logistic_growth_rate(args.growth_rate)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
-                .score_prob_denom(args.score_prob_denom)
+                .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
                 .build())
         }
     }
@@ -166,14 +182,17 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
 
 /// Genome-BAM mode: project a spliced, genome-aligned (name-collated) BAM onto
 /// the transcripts in `--annotation` and quantify.
-fn run_genome_bam(args: &Args, filter_opts: AlignmentFilters) -> anyhow::Result<()> {
-    let bam_path = args.genome_bam.clone().expect("genome_bam present");
+fn run_genome_alignments(args: &Args, filter_opts: AlignmentFilters) -> anyhow::Result<()> {
+    let bam_path = args
+        .genome_alignments
+        .clone()
+        .expect("genome_alignments present");
     let annotation = args
         .annotation
         .clone()
-        .expect("--annotation is required with --genome-bam");
+        .expect("--annotation is required with --genome-alignments");
 
-    info!("oarfish is operating in genome-BAM (projection) mode");
+    info!("oarfish is operating in genome-alignment (projection) mode");
 
     // open the genome BAM with a multithreaded bgzf decoder
     let afile = File::open(&bam_path)?;
@@ -192,7 +211,8 @@ fn run_genome_bam(args: &Args, filter_opts: AlignmentFilters) -> anyhow::Result<
         .collect();
 
     // build the genome->transcriptome index and the transcriptome header/info.
-    let g2t = projection::load_g2t(&annotation, &refnames, args.genome_fasta.as_deref())?;
+    let rescue_fasta = projection::rescue_fasta_path(args);
+    let g2t = projection::load_g2t(&annotation, &refnames, rescue_fasta.as_deref())?;
     let (txp_header, mut txps, txps_name) =
         projection::build_transcriptome_header_and_info(&g2t, args)?;
     let proj_config = projection::projection_config(args);
@@ -264,7 +284,10 @@ fn run_genome_reads(args: &mut Args, filter_opts: AlignmentFilters) -> anyhow::R
         crate::util::aligner::get_genome_aligner_from_args(args, junc_bed.as_deref())?;
 
     // build the genome->transcriptome index and the transcriptome header/info.
-    let g2t = projection::build_g2t_from_transcripts(&transcripts, &refnames, args.genome_fasta.as_deref())?;
+    // Rescue is on by default; in read mode the sequence comes from `--genome`
+    // when it is a FASTA (see `rescue_fasta_path`).
+    let rescue_fasta = projection::rescue_fasta_path(args);
+    let g2t = projection::build_g2t_from_transcripts(&transcripts, &refnames, rescue_fasta.as_deref())?;
     let (txp_header, mut txps, txps_name) =
         projection::build_transcriptome_header_and_info(&g2t, args)?;
     let proj_config = projection::projection_config(args);
@@ -335,8 +358,8 @@ fn main() -> anyhow::Result<()> {
     // `--annotation` (via bramble) and quantify those. These paths build the
     // transcriptome header / `TranscriptInfo` from the annotation, not from the
     // input header, so they are handled separately and return early.
-    if args.genome_bam.is_some() {
-        run_genome_bam(&args, filter_opts)?;
+    if args.genome_alignments.is_some() {
+        run_genome_alignments(&args, filter_opts)?;
         info!("oarfish completed successfully.");
         return Ok(());
     } else if args.genome.is_some() {
