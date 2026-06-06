@@ -1,0 +1,60 @@
+name: Deploy docs
+
+# Build the mkdocs-material site and publish it to the `gh-pages` branch
+# (served at https://COMBINE-lab.github.io/oarfish/). Runs only when the docs
+# sources actually change, and can also be triggered manually from the Actions
+# tab ("Run workflow").
+#
+# Branches: `dev` is the active integration branch where docs are edited; `main`
+# is the default/release branch. Both publish to the same `gh-pages` site, so a
+# push to whichever you treat as canonical wins. If you'd rather publish only
+# release docs, drop `dev` from the list below.
+on:
+  push:
+    branches:
+      - main
+      - dev
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/workflows/deploy-docs.yml"
+  workflow_dispatch:
+
+# Allow the job to push the built site to the gh-pages branch via GITHUB_TOKEN.
+permissions:
+  contents: write
+
+# Don't let concurrent runs race to publish gh-pages; cancel older in-flight runs.
+concurrency:
+  group: deploy-docs
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure git for gh-pages push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # Cache mkdocs-material's build cache (keyed weekly) to speed up builds.
+      - run: echo "cache_id=$(date --utc '+%V')" >> "$GITHUB_ENV"
+      - uses: actions/cache@v4
+        with:
+          key: mkdocs-material-${{ env.cache_id }}
+          path: .cache
+          restore-keys: |
+            mkdocs-material-
+
+      - name: Install build dependencies
+        run: pip install mkdocs-material pymdown-extensions
+
+      - name: Build and deploy to gh-pages
+        run: mkdocs gh-deploy --force --no-history
