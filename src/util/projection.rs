@@ -45,34 +45,29 @@ use crate::util::oarfish_types::{ProjectedAlnRecord, TranscriptInfo};
 pub fn load_g2t(
     annotation: &Path,
     refnames: &[String],
-    genome_fasta: Option<&Path>,
+    rescue_fasta: Option<FastaDb>,
 ) -> anyhow::Result<G2TTree> {
     info!("loading annotation from {}", annotation.display());
     let transcripts = load_transcripts(annotation)
         .with_context(|| format!("failed to load annotation {}", annotation.display()))?;
     info!("loaded {} transcripts from annotation", transcripts.len());
-    build_g2t_from_transcripts(&transcripts, refnames, genome_fasta)
+    build_g2t_from_transcripts(&transcripts, refnames, rescue_fasta)
 }
 
 /// Build the genome→transcriptome index from already-parsed transcripts. Lets
 /// callers (e.g. genome-read mode) parse the annotation once and reuse the
 /// transcripts for both junction extraction and index building.
+///
+/// `rescue_fasta` is the (already-resolved) reference sequence for bramble's
+/// soft-clip rescue, sourced by the caller either from a FASTA file or from the
+/// loaded aligner index; `None` disables rescue. bramble copies the per-exon
+/// sequences it needs into the index, so the `FastaDb` is dropped on return.
 pub fn build_g2t_from_transcripts(
     transcripts: &[Transcript],
     refnames: &[String],
-    genome_fasta: Option<&Path>,
+    rescue_fasta: Option<FastaDb>,
 ) -> anyhow::Result<G2TTree> {
-    // The FastaDb only needs to outlive `build_g2t_from_refnames`; bramble
-    // copies the per-exon sequences it needs into the index.
-    let fasta = match genome_fasta {
-        Some(p) => {
-            info!("loading genome FASTA for soft-clip rescue from {}", p.display());
-            Some(FastaDb::load(p).with_context(|| format!("failed to load genome FASTA {}", p.display()))?)
-        }
-        None => None,
-    };
-
-    let g2t = build_g2t_from_refnames(transcripts, refnames, fasta.as_ref())
+    let g2t = build_g2t_from_refnames(transcripts, refnames, rescue_fasta.as_ref())
         .context("failed to build genome-to-transcriptome index")?;
     info!("built g2t index over {} transcripts", g2t.num_transcripts());
     Ok(g2t)
@@ -260,12 +255,29 @@ pub fn rescue_fasta_path(args: &Args) -> Option<std::path::PathBuf> {
     None
 }
 
-pub fn projection_config(args: &Args) -> ProjectionConfig {
+/// Load the soft-clip-rescue reference from a FASTA path, if one is resolved by
+/// [`rescue_fasta_path`] (explicit `--genome-fasta`, or a FASTA `--genome`).
+/// Returns `None` when rescue is disabled or no FASTA source applies (e.g.
+/// `--genome` is a prebuilt index — sequences are then sourced from the index).
+pub fn load_rescue_fasta(args: &Args) -> anyhow::Result<Option<FastaDb>> {
+    match rescue_fasta_path(args) {
+        Some(p) => {
+            info!("loading genome FASTA for soft-clip rescue from {}", p.display());
+            Ok(Some(FastaDb::load(&p).with_context(|| {
+                format!("failed to load genome FASTA {}", p.display())
+            })?))
+        }
+        None => Ok(None),
+    }
+}
+
+/// Long-read projection config. `use_fasta` reflects whether a rescue reference
+/// was actually resolved (from a FASTA or the aligner index) — soft-clip rescue
+/// is on by default and disabled by `--no-rescue` or the absence of any source.
+pub fn projection_config(args: &Args, use_fasta: bool) -> ProjectionConfig {
     ProjectionConfig {
         long_reads: true,
-        // Soft-clip rescue is on by default whenever a reference sequence is
-        // available (see `rescue_fasta_path`); `--no-rescue` turns it off.
-        use_fasta: rescue_fasta_path(args).is_some(),
+        use_fasta,
         junc_miss_discount: args.junc_miss_discount,
     }
 }

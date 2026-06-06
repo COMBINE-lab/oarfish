@@ -737,3 +737,55 @@ fn write_rammap_index_with_footer(
     );
     Ok(())
 }
+
+/// Build a bramble rescue reference (`FastaDb`) from the reference sequences
+/// already resident in the loaded genome aligner index, so genome-mode soft-clip
+/// rescue works from a prebuilt index (no separate FASTA). Returns `None` if the
+/// index stores no sequences.
+#[cfg(feature = "rammap")]
+pub(crate) fn rescue_db_from_genome_index(
+    aligner: &rammap::api::Aligner,
+) -> Option<bramble_rs::fasta::FastaDb> {
+    use std::collections::HashMap;
+    let idx = aligner.index();
+    if !idx.has_sequences() {
+        info!(
+            "the genome index stores no reference sequences; soft-clip rescue is off \
+             (pass --genome-fasta, or rebuild the index with sequences, to enable it)"
+        );
+        return None;
+    }
+    info!("sourcing soft-clip-rescue reference sequences from the loaded genome index");
+    let mut seqs: HashMap<String, Vec<u8>> = HashMap::with_capacity(idx.seqs.len());
+    let mut nt4: Vec<u8> = Vec::new();
+    for (rid, ts) in idx.seqs.iter().enumerate() {
+        nt4.clear();
+        nt4.resize(ts.len, 0u8);
+        idx.extract_nt4_into(rid, 0, ts.len, &mut nt4);
+        // nt4 (0..=4) -> ASCII; bramble's get_slice upper-cases/N-maps identically
+        // for a file-loaded FASTA, so the result is interchangeable.
+        let ascii: Vec<u8> = nt4
+            .iter()
+            .map(|&b| match b {
+                0 => b'A',
+                1 => b'C',
+                2 => b'G',
+                3 => b'T',
+                _ => b'N',
+            })
+            .collect();
+        let name = ts.name.split_whitespace().next().unwrap_or("").to_string();
+        seqs.insert(name, ascii);
+    }
+    Some(bramble_rs::fasta::FastaDb::from_seqs(seqs))
+}
+
+/// minimap2 backend: `.mmi` sequence extraction is not implemented (the backend
+/// is being retired). A FASTA `--genome`/`--genome-fasta` still provides the
+/// rescue reference; a prebuilt `.mmi` simply leaves rescue off.
+#[cfg(not(feature = "rammap"))]
+pub(crate) fn rescue_db_from_genome_index(
+    _aligner: &Aligner<minimap2::Built>,
+) -> Option<bramble_rs::fasta::FastaDb> {
+    None
+}

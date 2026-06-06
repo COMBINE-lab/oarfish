@@ -211,11 +211,14 @@ fn run_genome_alignments(args: &Args, filter_opts: AlignmentFilters) -> anyhow::
         .collect();
 
     // build the genome->transcriptome index and the transcriptome header/info.
-    let rescue_fasta = projection::rescue_fasta_path(args);
-    let g2t = projection::load_g2t(&annotation, &refnames, rescue_fasta.as_deref())?;
+    // genome-alignments (BAM) mode has no aligner index, so the rescue reference
+    // comes from a FASTA (`--genome-fasta`) only.
+    let rescue_db = projection::load_rescue_fasta(args)?;
+    let use_fasta = rescue_db.is_some();
+    let g2t = projection::load_g2t(&annotation, &refnames, rescue_db)?;
     let (txp_header, mut txps, txps_name) =
         projection::build_transcriptome_header_and_info(&g2t, args)?;
-    let proj_config = projection::projection_config(args);
+    let proj_config = projection::projection_config(args, use_fasta);
 
     let seqcol_digest = digest_utils::digest_from_header(&txp_header)?;
     let digest: NamedDigestVec = vec![("transcriptome_digest".to_string(), seqcol_digest)].into();
@@ -284,13 +287,20 @@ fn run_genome_reads(args: &mut Args, filter_opts: AlignmentFilters) -> anyhow::R
         crate::util::aligner::get_genome_aligner_from_args(args, junc_bed.as_deref())?;
 
     // build the genome->transcriptome index and the transcriptome header/info.
-    // Rescue is on by default; in read mode the sequence comes from `--genome`
-    // when it is a FASTA (see `rescue_fasta_path`).
-    let rescue_fasta = projection::rescue_fasta_path(args);
-    let g2t = projection::build_g2t_from_transcripts(&transcripts, &refnames, rescue_fasta.as_deref())?;
+    // Rescue is on by default: source its reference from a FASTA (`--genome-fasta`,
+    // or a FASTA `--genome`), else from the reference sequences resident in the
+    // loaded genome index (`--genome` is a prebuilt index). `--no-rescue` / no
+    // available source => off.
+    let rescue_db = match projection::load_rescue_fasta(args)? {
+        Some(db) => Some(db),
+        None if !args.no_rescue => crate::util::aligner::rescue_db_from_genome_index(&aligner),
+        None => None,
+    };
+    let use_fasta = rescue_db.is_some();
+    let g2t = projection::build_g2t_from_transcripts(&transcripts, &refnames, rescue_db)?;
     let (txp_header, mut txps, txps_name) =
         projection::build_transcriptome_header_and_info(&g2t, args)?;
-    let proj_config = projection::projection_config(args);
+    let proj_config = projection::projection_config(args, use_fasta);
 
     let seqcol_digest = digest_utils::digest_from_header(&txp_header)?;
     let digest: NamedDigestVec = vec![("transcriptome_digest".to_string(), seqcol_digest)].into();
