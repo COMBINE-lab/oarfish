@@ -1,66 +1,24 @@
 //! Mapping-backend abstraction.
 //!
-//! oarfish can map raw reads with one of two backends:
+//! oarfish maps raw reads with the pure-Rust
+//! [`rammap`](https://github.com/jwanglab/rammap) backend.
 //!
-//! * the default [`minimap2`]/`minimap2-rs` backend (matches the `dev` branch), or
-//! * the pure-Rust [`rammap`](https://github.com/jwanglab/rammap) backend, enabled
-//!   with the `rammap` Cargo feature.
+//! The backend is exposed to the rest of the crate through a small, uniform
+//! surface so the hot mapping loops in [`crate::bulk`] don't need to care about
+//! its internals:
 //!
-//! Both backends are exposed to the rest of the crate through a small, uniform
-//! surface so the hot mapping loops in [`crate::bulk`] don't need to care which
-//! one is in use:
-//!
-//! * [`Mapper`] — the built aligner type (cheaply `clone`-able per worker thread;
-//!   `minimap2::Aligner<Built>` clones its `Arc`-shared index, and the rammap
-//!   variant is an [`Arc`] around a single shared aligner).
-//! * [`OMapping`] — the per-alignment record type yielded for a read. It always
+//! * [`Mapper`] — the built aligner type. rammap's `Aligner` is `Send + Sync`,
+//!   so a single shared instance is held behind an [`Arc`] across worker threads.
+//! * [`OMapping`] — the per-alignment record type yielded for a read. It
 //!   implements [`AlnRecordLike`](crate::util::oarfish_types::AlnRecordLike)
 //!   (transcriptome filter) and is convertible to a bramble `GenomicAlignment`
 //!   via [`crate::util::projection::mapping_to_genomic_alignment`] (genome path).
 //! * [`map_read`] — map one read, returning `anyhow::Result<Vec<OMapping>>`.
 
 // ---------------------------------------------------------------------------
-// Default backend: minimap2-rs
+// Mapping backend: rammap (pure Rust)
 // ---------------------------------------------------------------------------
 
-#[cfg(not(feature = "rammap"))]
-mod backend {
-    /// The built aligner. `minimap2::Aligner<Built>` is `Clone` (it shares the
-    /// underlying index behind an `Arc`), so each worker thread can hold its own
-    /// handle with per-thread mapping buffers.
-    pub(crate) type Mapper = minimap2::Aligner<minimap2::Built>;
-
-    /// The per-alignment record yielded for a read.
-    pub(crate) type OMapping = minimap2::Mapping;
-
-    /// Map a single read against the index, returning all of its alignments.
-    #[inline]
-    pub(crate) fn map_read(
-        aligner: &Mapper,
-        name: &[u8],
-        seq: &[u8],
-    ) -> anyhow::Result<Vec<OMapping>> {
-        // (seq, cigar = true, md = false, max_frag_len = None, extra_flags = None, name)
-        aligner
-            .map(seq, true, false, None, None, Some(name))
-            .map_err(anyhow::Error::msg)
-    }
-
-    /// The minimap2 alignment score (`AS`), or 0 if absent.
-    #[inline]
-    pub(crate) fn alignment_score(m: &OMapping) -> i32 {
-        m.alignment
-            .as_ref()
-            .and_then(|a| a.alignment_score)
-            .unwrap_or(0)
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Alternative backend: rammap (pure Rust)
-// ---------------------------------------------------------------------------
-
-#[cfg(feature = "rammap")]
 mod backend {
     use crate::util::oarfish_types::AlnRecordLike;
     use noodles_sam::header::Header;
@@ -87,7 +45,7 @@ mod backend {
     ///
     /// rammap's `map_seq` is infallible and operates on a single read, which fits
     /// oarfish's existing per-thread mapping loop directly. We wrap the result in
-    /// `Ok(..)` so the call sites are identical to the minimap2 backend.
+    /// `Ok(..)` so the call sites are uniform across the mapping surface.
     #[inline]
     pub(crate) fn map_read(
         aligner: &Mapper,
@@ -160,6 +118,4 @@ mod backend {
     }
 }
 
-// `OMapping` is only named by other modules in the rammap cfg path.
-#[allow(unused_imports)]
 pub(crate) use backend::{Mapper, OMapping, alignment_score, map_read};

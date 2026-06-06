@@ -14,8 +14,6 @@ use typed_builder::TypedBuilder;
 
 use bio_types::strand::Strand;
 use bstr::{B, ByteSlice};
-//use minimap2_temp as minimap2;
-use minimap2;
 use noodles_sam as sam;
 use sam::{Header, alignment::record::data::field::tag::Tag as AlnTag};
 
@@ -235,6 +233,7 @@ impl CigarOp {
         )
     }
 
+    #[allow(dead_code)]
     pub fn consumes_reference(&self) -> bool {
         matches!(
             self,
@@ -244,74 +243,6 @@ impl CigarOp {
                 | Self::SequenceMatch
                 | Self::SequenceMismatch
         )
-    }
-}
-
-impl AlnRecordLike for minimap2::Mapping {
-    fn opt_sequence_len(&self) -> Option<usize> {
-        self.query_len.map(|x| x.get() as usize)
-    }
-
-    fn is_reverse_complemented(&self) -> bool {
-        self.strand == minimap2::Strand::Reverse
-    }
-
-    fn is_unmapped(&self) -> bool {
-        self.target_name.is_none()
-    }
-
-    fn ref_id(&self, _header: &Header) -> anyhow::Result<usize> {
-        if let Some(ref tgt_name) = self.target_name {
-            let tgt_str = tgt_name.as_bytes();
-            if let Some(id) = _header.reference_sequences().get_index_of(tgt_str) {
-                return Ok(id);
-            }
-            anyhow::bail!("Could not get ref_id of target {}", tgt_name);
-        }
-        anyhow::bail!("Could not get ref_id of mapping without target name")
-    }
-
-    fn aln_span(&self) -> Option<usize> {
-        if let Some(ref aln) = self.alignment {
-            return if let Some(ref cigar) = aln.cigar {
-                let mut span = 0_usize;
-                for (len, op) in cigar.iter() {
-                    let co: CigarOp = (*op).into();
-                    if co.consumes_reference() {
-                        span += *len as usize;
-                    }
-                }
-                Some(span)
-            } else {
-                error!("Had an alignment but no CIGAR!");
-                None
-            };
-        }
-        None
-    }
-
-    fn aln_score(&self) -> Option<i64> {
-        if let Some(ref aln) = self.alignment {
-            aln.alignment_score.map(|x| x as i64)
-        } else {
-            None
-        }
-    }
-
-    fn aln_start(&self) -> u32 {
-        self.target_start as u32
-    }
-
-    fn aln_end(&self) -> u32 {
-        self.target_end as u32
-    }
-
-    fn is_supp(&self) -> bool {
-        self.is_supplementary
-    }
-
-    fn name(&self) -> Option<String> {
-        self.query_name.as_ref().map(|q| q.to_string())
     }
 }
 
@@ -1175,7 +1106,7 @@ pub struct ProjectedAlnRecord {
     /// bramble similarity score (higher is better; best in a group anchors the
     /// probability), used in place of the integer alignment score.
     pub similarity: f64,
-    /// minimap2 alignment score of the *source genomic alignment* this was
+    /// alignment score of the *source genomic alignment* this was
     /// projected from (shared by all transcripts at the same genomic locus).
     /// Used by the `score`/`combined` probability sources to discriminate
     /// paralogous loci, which similarity cannot. 0 if unavailable.

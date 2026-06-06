@@ -322,8 +322,9 @@ pub fn quantify_genome_alignments_from_bam<R: BufRead>(
     )
 }
 
-/// Genome-read mode: spliced-align raw reads to the genome with minimap2, project
-/// each read's mappings onto the transcriptome with bramble, and quantify.
+/// Genome-read mode: spliced-align raw reads to the genome with the rammap
+/// aligner, project each read's mappings onto the transcriptome with bramble,
+/// and quantify.
 ///
 /// This mirrors [`quantify_bulk_alignments_raw_reads`] (same producer → mapper →
 /// consumer pipeline), but the mapper projects each read's genomic mappings onto
@@ -332,7 +333,7 @@ pub fn quantify_genome_alignments_from_bam<R: BufRead>(
 /// annotation; `aligner` is a spliced genome aligner; `g2t` the genome→
 /// transcriptome index over the same reference order as the aligner targets.
 #[allow(clippy::too_many_arguments)]
-#[cfg_attr(feature = "rammap", allow(unused_mut))]
+#[allow(unused_mut)]
 pub fn quantify_genome_raw_reads(
     txp_header: &noodles_sam::Header,
     mut aligner: crate::util::mapper::Mapper,
@@ -352,13 +353,6 @@ pub fn quantify_genome_raw_reads(
     }
 
     let map_threads = args.threads.saturating_sub(2).max(1);
-    // minimap2-only: cap the per-thread kalloc arena. rammap has no equivalent.
-    #[cfg(not(feature = "rammap"))]
-    {
-        let per_thread_cap_kalloc =
-            ((args.thread_buff_size as f64) / (args.threads as f64)).ceil() as i64;
-        aligner.mapopt.cap_kalloc = per_thread_cap_kalloc;
-    }
 
     let beta = args.projected_prob_beta;
     let use_fasta = proj_config.use_fasta;
@@ -447,7 +441,7 @@ pub fn quantify_genome_raw_reads(
             ) = bounded(args.threads * 100);
 
             let write_assignment_probs: bool = args.write_assignment_probs.is_some();
-            // Diagnostics: reads minimap2 aligns to the genome vs reads that
+            // Diagnostics: reads the aligner maps to the genome vs reads that
             // produce >=1 projected transcriptome alignment (projection loss).
             let n_genome_mapped = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
             let n_projected = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
@@ -491,7 +485,7 @@ pub fn quantify_genome_raw_reads(
 
                                 let query_name = String::from_utf8_lossy(name).into_owned();
                                 // build GenomicAlignments and a parallel vector of
-                                // their minimap2 alignment scores (used by the
+                                // their alignment scores (used by the
                                 // score/combined probability sources).
                                 galns.clear();
                                 src_scores.clear();
@@ -736,7 +730,7 @@ fn get_source_type(pb: &std::path::Path) -> InputSourceType {
 }
 
 #[allow(clippy::too_many_arguments)]
-#[cfg_attr(feature = "rammap", allow(unused_mut))]
+#[allow(unused_mut)]
 pub fn quantify_bulk_alignments_raw_reads(
     header: &noodles_sam::Header,
     mut aligner: crate::util::mapper::Mapper,
@@ -759,14 +753,6 @@ pub fn quantify_bulk_alignments_raw_reads(
     // at least one mapping thread, otherwise everything but the fastx parser
     // and the in memory alignment store populator
     let map_threads = args.threads.saturating_sub(2).max(1);
-
-    // minimap2-only: cap the per-thread kalloc arena. rammap has no equivalent.
-    #[cfg(not(feature = "rammap"))]
-    {
-        let per_thread_cap_kalloc =
-            ((args.thread_buff_size as f64) / (args.threads as f64)).ceil() as i64;
-        aligner.mapopt.cap_kalloc = per_thread_cap_kalloc;
-    }
 
     type ReadGroup = ReadChunkWithNames;
     type AlignmentGroupInfo = (Vec<AlnInfo>, Vec<f32>, Vec<usize>, Option<Vec<String>>);
@@ -1038,7 +1024,7 @@ pub fn quantify_bulk_alignments_raw_reads(
 
             let aln_time = aln_start.elapsed()?;
             info!(
-                "Alignment of raw reads using minimap2-rs took: {}",
+                "Alignment of raw reads using rammap took: {}",
                 humantime::format_duration(aln_time).to_string()
             );
 

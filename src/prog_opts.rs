@@ -1,5 +1,4 @@
 use clap::{Parser, builder::ArgPredicate};
-use parse_size::parse_size;
 use serde::Serialize;
 use std::fmt;
 use std::path::PathBuf;
@@ -49,7 +48,7 @@ pub enum ReadAssignmentProbOut {
 pub enum ProjProbSource {
     /// bramble exonic-coverage similarity only: `exp((sim - best_sim) * beta)`.
     Similarity,
-    /// minimap2 genomic-alignment score only: `exp((score - best_score) / 5)`.
+    /// aligner genomic-alignment score only: `exp((score - best_score) / 5)`.
     /// Discriminates paralogous loci better than similarity.
     Score,
     /// combine both: `exp((score - best_score)/5 + beta*(sim - best_sim))`.
@@ -313,8 +312,8 @@ pub struct Args {
     #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]
     pub novel: Option<PathBuf>,
 
-    /// path to an existing minimap2 index (either created with oarfish, which is preferred, or
-    /// with minimap2 itself)
+    /// path to an existing index (an oarfish-created index, which is preferred, or a
+    /// compatible prebuilt index)
     #[arg(
         long,
         conflicts_with_all = ["alignments", "raw_input_type"],
@@ -333,7 +332,7 @@ pub struct Args {
     )]
     pub genome_alignments: Option<PathBuf>,
 
-    /// path to a genome FASTA or minimap2 index. Used with `--reads` to perform
+    /// path to a genome FASTA or prebuilt genome index. Used with `--reads` to perform
     /// spliced alignment of the reads to the genome, followed by projection onto
     /// the transcripts in `--annotation`.
     #[arg(
@@ -383,7 +382,7 @@ pub struct Args {
     pub projected_prob_beta: f32,
 
     /// which signal weights a read's projected alignments in genome mode:
-    /// `similarity` (bramble exonic coverage), `score` (minimap2 alignment
+    /// `similarity` (bramble exonic coverage), `score` (aligner alignment
     /// score), or `combined`.
     #[arg(long, hide = true, value_enum, default_value_t = ProjProbSource::Similarity)]
     pub projected_prob_source: ProjProbSource,
@@ -410,7 +409,7 @@ pub struct Args {
     #[arg(long, help_heading = "indexing")]
     pub only_index: bool,
 
-    /// path where minimap2 index will be written (if provided)
+    /// path where the index will be written (if provided)
     #[arg(long, conflicts_with_all = ["alignments", "index"], requires_ifs([(ArgPredicate::IsPresent, "only_index")]), help_heading = "indexing")]
     pub index_out: Option<PathBuf>,
 
@@ -432,16 +431,12 @@ pub struct Args {
     )]
     pub best_n: usize,
 
-    /// total memory to allow for thread-local alignment buffers (each buffer will get this value /
-    /// # of alignment threads)
-    #[arg(
-        long,
-        conflicts_with = "alignments",
-        help_heading = "raw read mode",
-        default_value = "1GB",
-        value_parser = |s: &str| parse_size(s)
-    )]
-    pub thread_buff_size: u64,
+    /// cap (in MB) on the per-thread DP alignment-scratch buffer the rammap mapper
+    /// retains between reads; bounds peak RSS at high thread counts. Unset = use the
+    /// default (128 MB) or the `RAMMAP_DP_CACHE_CAP_MB` env var; `0` = unbounded
+    /// (largest buffer pinned per thread, original behavior).
+    #[arg(long, conflicts_with = "alignments", help_heading = "raw read mode")]
+    pub dp_cache_cap_mb: Option<usize>,
 
     /// location where output quantification file should be written
     #[arg(short, long, required_unless_present = "only_index")]

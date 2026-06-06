@@ -40,7 +40,7 @@ use crate::util::oarfish_types::{ProjectedAlnRecord, TranscriptInfo};
 /// `refnames[i]` is the chromosome whose 0-based reference id is `i`; it must
 /// match the `ref_id` placed on every `GenomicAlignment` handed to
 /// [`bramble_rs::project_group`] (i.e. the input BAM header order, or the
-/// minimap2 target order). When `genome_fasta` is provided, exon sequences are
+/// aligner target order). When `genome_fasta` is provided, exon sequences are
 /// loaded so bramble can perform soft-clip rescue.
 pub fn load_g2t(
     annotation: &Path,
@@ -74,9 +74,10 @@ pub fn build_g2t_from_transcripts(
 }
 
 /// Write a BED12 of transcript models derived from `transcripts`, suitable for
-/// minimap2 `--junc-bed` (`Aligner::read_junction_lr`). minimap2 derives the
-/// splice junctions from the exon-block structure and uses them to guide/score
-/// spliced alignment, which non-trivially improves alignment accuracy.
+/// the aligner's `--junc-bed`-equivalent junction loader. The aligner derives
+/// the splice junctions from the exon-block structure and uses them to
+/// guide/score spliced alignment, which non-trivially improves alignment
+/// accuracy.
 ///
 /// Only multi-exon transcripts (which actually define junctions) are written.
 /// Returns the number of transcript models written. Coordinates: bramble `Exon`
@@ -305,57 +306,14 @@ pub fn revcomp(seq: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// Convert a minimap2 [`Mapping`](minimap2::Mapping) (spliced genome alignment)
-/// into a bramble [`GenomicAlignment`].
-///
-/// `minimap2`'s `target_id` is the 0-based index into the aligner's reference
-/// list, which is the same order used to build the [`G2TTree`] (see
+/// Convert a rammap spliced genome alignment (wrapped as `OMapping`) into a
+/// bramble [`GenomicAlignment`]. rammap's `target_id` is the 0-based index into
+/// the aligner's reference list (the same order the `G2TTree` is built in; see
 /// [`crate::util::aligner::get_genome_aligner_from_args`]), so it is used
 /// directly as the bramble `ref_id`. The query sequence is not attached here
-/// (soft-clip rescue is handled by the caller when `--genome-fasta` is set);
-/// `read_len` carries the query length needed for NH / aligned-fraction.
-///
-/// Returns `None` for mappings lacking a CIGAR (the projection needs one).
-#[cfg(not(feature = "rammap"))]
-pub fn mapping_to_genomic_alignment(
-    m: &minimap2::Mapping,
-    query_name: &str,
-    read_len: usize,
-) -> Option<GenomicAlignment> {
-    let cigar = m.alignment.as_ref()?.cigar.as_ref()?.clone();
-    if cigar.is_empty() {
-        return None;
-    }
-    let ts_strand = m.trans_strand.map(|s| match s {
-        minimap2::Strand::Forward => '+',
-        minimap2::Strand::Reverse => '-',
-    });
-    Some(GenomicAlignment {
-        query_name: query_name.to_string(),
-        ref_id: m.target_id,
-        ref_start: (m.target_start as i64) + 1, // minimap2 target_start is 0-based; SAM POS is 1-based
-        is_reverse: matches!(m.strand, minimap2::Strand::Reverse),
-        cigar,
-        sequence: None,
-        is_paired: false,
-        is_first_in_pair: false,
-        xs_strand: None,
-        ts_strand,
-        hit_index: 0,
-        mate_ref_id: None,
-        mate_ref_start: None,
-        mate_is_unmapped: false,
-        read_len,
-    })
-}
-
-/// rammap-backend variant of [`mapping_to_genomic_alignment`]: convert a rammap
-/// spliced genome alignment (wrapped as `OMapping`) into a bramble
-/// [`GenomicAlignment`]. rammap's `target_id` is the 0-based index into the
-/// aligner's reference list (the same order the `G2TTree` is built in), so it is
-/// used directly as the bramble `ref_id`. Returns `None` for mappings lacking a
-/// CIGAR (the projection needs one).
-#[cfg(feature = "rammap")]
+/// (soft-clip rescue is handled by the caller); `read_len` carries the query
+/// length needed for NH / aligned-fraction. Returns `None` for mappings lacking
+/// a CIGAR (the projection needs one).
 pub fn mapping_to_genomic_alignment(
     m: &crate::util::mapper::OMapping,
     query_name: &str,
@@ -370,9 +328,8 @@ pub fn mapping_to_genomic_alignment(
     // cover only the *aligned* span (M/N/I/D); the soft-clips are implicit in
     // `query_start`/`query_end` (rammap only materializes them when writing SAM).
     // bramble's soft-clip rescue keys on explicit leading/trailing `S` ops, so we
-    // reconstruct them here in reference-forward orientation — exactly as
-    // minimap2-rs builds its CIGAR — otherwise rescue never fires for the rammap
-    // backend (and isoform accuracy silently drops to the no-rescue baseline).
+    // reconstruct them here in reference-forward orientation, otherwise rescue
+    // never fires (and isoform accuracy silently drops to the no-rescue baseline).
     let is_reverse = matches!(m.m.strand, rammap::api::Strand::Reverse);
     let clip5 = if is_reverse {
         read_len.saturating_sub(m.m.query_end)

@@ -30,7 +30,7 @@ impl SourceType {
                 p.as_ref().to_str().expect("can be represented as a str"),
             ) {
                 // we read a pre-computed digest from an oarfish-constructed
-                // minimap2 index
+                // index
                 Ok(_d) => Self::ExistingOarfishIndex(PathBuf::from(p.as_ref())),
                 _ => Self::ExistingMM2Index(PathBuf::from(p.as_ref())),
             }
@@ -107,7 +107,7 @@ pub(crate) fn get_ref_source(
 
     // The `ref_file` input argument is either a FASTA file with annotated
     // sequences, in which case we will compute the proper digest in a separate
-    // thread, OR an existing minimap2 index, in which case we won't attempt
+    // thread, OR an existing prebuilt index, in which case we won't attempt
     // to treat it as a FASTA file and we will later get the digest from
     // the index.
     let input_path = if annotated.is_some() && novel.is_some() {

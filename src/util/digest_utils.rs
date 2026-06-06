@@ -1,11 +1,7 @@
 use anyhow::{Context, bail};
-#[cfg(not(feature = "rammap"))]
-use minimap2_sys::MmIdx;
 use seqcol_rs;
 use std::io::{Read, Seek, Write};
 use std::str;
-#[cfg(not(feature = "rammap"))]
-use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use crate::NamedDigestVec;
@@ -30,9 +26,9 @@ pub fn get_digest_from_fasta(
 
 /// Append the oarfish reference-signature footer
 /// (`[json][len:u64][ver:u8]["OARFISHSIG"]`) to an on-disk index file. This is
-/// backend-neutral: it works for a minimap2 `.mmi` and for a rammap `RMMI`
+/// format-neutral: it works for a legacy `.mmi` and for a rammap `RMMI`
 /// file, because both index loaders stop at the end of their own structure and
-/// ignore trailing bytes (minimap2 has no EOF check; rammap's
+/// ignore trailing bytes (the `.mmi` loader has no EOF check; rammap's
 /// `bincode::deserialize_from` stops at the struct boundary). The footer is read
 /// back by [`read_digest_footer`], which seeks from the end of the file.
 pub(crate) fn append_digest_footer(
@@ -110,7 +106,7 @@ fn get_digest_from_value(value: &mut serde_json::Value) -> anyhow::Result<seqcol
 }
 
 /// Reads the oarfish reference-signature footer from an on-disk index file
-/// (minimap2 `.mmi` or rammap `RMMI`), *if* that index was originally created
+/// (legacy `.mmi` or rammap `RMMI`), *if* that index was originally created
 /// with oarfish. Otherwise, it returns an error. The footer is located by
 /// seeking from the end of the file, so it is independent of the index body
 /// format.
@@ -205,29 +201,13 @@ pub(crate) fn digest_from_header(
     Ok(seqcol_digest)
 }
 
-#[cfg(not(feature = "rammap"))]
-pub(crate) fn digest_from_index(mmi: &Arc<MmIdx>) -> anyhow::Result<seqcol_rs::DigestResult> {
-    let idx_iter = crate::util::mm_utils::MMIdxNameSeqIter::from_idx(mmi);
-    let mut sq = seqcol_rs::SeqCol::try_from_name_seq_iter(idx_iter)?;
-    let d = sq
-        .digest(seqcol_rs::DigestConfig {
-            level: seqcol_rs::DigestLevel::Level1,
-            additional_attr: vec![seqcol_rs::KnownAttr::SortedNameLengthPairs],
-        })
-        .context("failed to compute the seqcol digest for the information from the index")?;
-    info!("done calculating seqcol digest");
-    Ok(d)
-}
-
 /// Computes a full Level1 SeqCol `DigestResult` from a loaded rammap aligner by
-/// reconstructing each reference sequence from the (4-bit packed) index. This is
-/// the rammap analog of [`digest_from_index`]: it yields the same
-/// sequence-content digest as [`get_digest_from_fasta`] would on the original
-/// FASTA, and is used as the fallback signature when a rammap index has no
-/// oarfish footer. The index must still retain its sequences
+/// reconstructing each reference sequence from the (4-bit packed) index. It
+/// yields the same sequence-content digest as [`get_digest_from_fasta`] would on
+/// the original FASTA, and is used as the fallback signature when a rammap index
+/// has no oarfish footer. The index must still retain its sequences
 /// (`index.has_sequences()`); a sequence-stripped index cannot produce a
 /// sequence digest and the caller should fall back to [`digest_from_header`].
-#[cfg(feature = "rammap")]
 pub(crate) fn digest_from_rammap_index(
     aligner: &rammap::api::Aligner,
 ) -> anyhow::Result<seqcol_rs::DigestResult> {
@@ -262,7 +242,7 @@ pub(crate) fn digest_from_rammap_index(
     Ok(d)
 }
 
-#[cfg(all(test, feature = "rammap"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;

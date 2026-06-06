@@ -10,9 +10,6 @@ use util::oarfish_types::NamedDigestVec;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-// Or now
-// use minimap2::ffi as mm_ffi;
-//use minimap2_temp as minimap2;
 use num_format::{Locale, ToFormattedString};
 use std::{fs::File, io};
 use tracing::info;
@@ -237,8 +234,8 @@ fn run_genome_alignments(args: &Args, filter_opts: AlignmentFilters) -> anyhow::
     )
 }
 
-/// Genome-read mode: spliced-align raw reads to the genome with minimap2, then
-/// project onto the transcripts in `--annotation` and quantify.
+/// Genome-read mode: spliced-align raw reads to the genome with the rammap
+/// aligner, then project onto the transcripts in `--annotation` and quantify.
 fn run_genome_reads(args: &mut Args, filter_opts: AlignmentFilters) -> anyhow::Result<()> {
     let annotation = args
         .annotation
@@ -256,7 +253,7 @@ fn run_genome_reads(args: &mut Args, filter_opts: AlignmentFilters) -> anyhow::R
     info!("loaded {} transcripts from annotation", transcripts.len());
 
     // Determine the splice-junction BED to bias spliced alignment toward
-    // annotated junctions (minimap2 `--junc-bed` / rammap `load_junctions_bed`).
+    // annotated junctions (rammap `load_junctions_bed`).
     // Prefer a user-supplied BED; otherwise derive a BED12 of transcript models
     // from the annotation (default on). Computed before the aligner is built so
     // it can be loaded into the index by the aligner builder.
@@ -345,6 +342,12 @@ fn main() -> anyhow::Result<()> {
         reload_handle.modify(|filter| *filter = EnvFilter::new("TRACE"))?;
     }
 
+    // Apply an explicit DP scratch-cache cap if the user set one; otherwise the
+    // rammap mapper uses its default (128 MB) or the RAMMAP_DP_CACHE_CAP_MB env var.
+    if let Some(mb) = args.dp_cache_cap_mb {
+        rammap::set_dp_cache_cap_mb(mb);
+    }
+
     // if we are just indexing, don't bother with anything else
     if args.only_index {
         let (header, _reader, _aligner, digest) = get_aligner_from_fastas(&mut args)?;
@@ -409,8 +412,8 @@ fn main() -> anyhow::Result<()> {
 
         let decoder = bgzf::io::MultithreadedReader::with_worker_count(worker_count, afile);
         let mut reader = bam::io::Reader::from(decoder);
-        // parse the header, and ensure that the reads were mapped with minimap2 (as far as we
-        // can tell).
+        // parse the header, and ensure that the reads were mapped with a known long-read
+        // aligner (as far as we can tell).
         let header = alignment_parser::read_and_verify_header(&mut reader, &alignments)?;
         let seqcol_digest = digest_utils::digest_from_header(&header)?;
         (
