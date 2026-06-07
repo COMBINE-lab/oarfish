@@ -477,8 +477,16 @@ pub struct Args {
     )]
     pub strand_filter: bio_types::strand::Strand,
 
-    /// input is assumed to be a single-cell BAM and to have the `CB:z` tag for all read records
-    #[arg(long, conflicts_with = "reads")]
+    /// input is assumed to be a single-cell, transcriptome-aligned BAM (passed
+    /// with `--alignments`) and to have the `CB:z` tag for all read records.
+    /// Single-cell mode is not supported for raw reads or the genome (projection)
+    /// modes, so it requires `--alignments` and conflicts with `--reads`,
+    /// `--genome`, and `--genome-alignments`.
+    #[arg(
+        long,
+        requires = "alignments",
+        conflicts_with_all = ["reads", "genome", "genome_alignments"]
+    )]
     pub single_cell: bool,
 
     /// apply the coverage model

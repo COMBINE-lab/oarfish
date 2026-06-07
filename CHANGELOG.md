@@ -55,6 +55,10 @@ should read the **Breaking changes** below.
   per-thread DP scratch-cache; alignment output is bit-identical.
 - A transcriptome `--alignments` BAM produced by an unrecognized aligner now yields
   a clear error message instead of a panic.
+- `--single-cell` now explicitly requires `--alignments` and conflicts with
+  `--reads`, `--genome`, and `--genome-alignments`. Single-cell quantification has
+  always required a transcriptome-aligned BAM; previously combining it with a
+  genome mode silently ran bulk projection instead. It now errors clearly.
 - **Build no longer requires a C toolchain / clang / bindgen** (the `minimap2-sys`
   dependency is gone), simplifying installation and cross-compilation.
 
