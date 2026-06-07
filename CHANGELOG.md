@@ -9,7 +9,7 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > rename the `## Unreleased` heading below to the chosen version, e.g.
 > `## 0.10.0 - 2026-06-06`, so the notes are picked up automatically.
 
-## Unreleased
+## 0.10.0 - 2026-06-06
 
 This release replaces the read-mode aligner and adds genome-based quantification.
 Most users of alignment/BAM input are unaffected; users of raw-read mapping mode
