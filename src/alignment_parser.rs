@@ -61,8 +61,8 @@ pub fn read_and_verify_header<R: io::BufRead>(
 
     let mut matched_prog = None;
     let mut progs = vec![];
-    // explicitly check that alignment was done with a supported
-    // aligner (right now, minimap2, pbmm2, and bramble).
+    // Check that the alignment was produced by an aligner we have validated
+    // (right now, minimap2, pbmm2, and bramble).
     for (prog, _pmap) in header.programs().roots() {
         if KNOWN_MAPPERS.iter().any(|known| prog == *known) {
             matched_prog = Some(prog);
@@ -71,17 +71,30 @@ pub fn read_and_verify_header<R: io::BufRead>(
             progs.push(prog);
         }
     }
-    assert!(
-        matched_prog.is_some(),
-        "Currently supported aligners are [{}]. The bam file listed {:?}.",
-        KNOWN_MAPPERS.join(", "),
-        progs
-    );
-    info!(
-        "saw supported mapper {} as a program in the header; proceeding.",
-        matched_prog.unwrap()
-    );
-    Ok(header)
+    match matched_prog {
+        Some(prog) => {
+            info!(
+                "saw supported mapper {} as a program in the header; proceeding.",
+                prog
+            );
+            Ok(header)
+        }
+        None => {
+            // A previously fatal `assert!` here turned an unrecognized aligner
+            // into a panic. Fail gracefully with an actionable message instead.
+            anyhow::bail!(
+                "Could not find a validated aligner in the BAM @PG header.\n\
+                 oarfish's transcriptome alignment mode currently recognizes [{}], but this BAM \
+                 listed {:?}.\n\
+                 Alignments from other tools may still work (oarfish only requires the per-record \
+                 `AS` alignment-score tag), but they have not been validated. If you would like \
+                 support for your aligner, please open an issue at \
+                 https://github.com/COMBINE-lab/oarfish/issues.",
+                KNOWN_MAPPERS.join(", "),
+                progs
+            )
+        }
+    }
 }
 
 /// Read and verify the header of a *genome*-aligned BAM (genome-BAM projection
