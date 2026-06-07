@@ -1,0 +1,71 @@
+name: Publish to crates.io
+
+# Publish the oarfish crate to crates.io after a *successful* release.
+#
+# Flow: the "Sanitize Cargo" workflow tags `v<version>` (on a commit whose
+# Cargo.toml has already been sanitized — git-dependency overrides reduced to
+# their crates.io versions). That tag triggers the cargo-dist "Release" workflow,
+# which builds the binaries / installers / GitHub Release. When that Release run
+# finishes **successfully** for a tag push, this workflow checks out the exact
+# released commit and runs `cargo publish`. Because the tagged Cargo.toml is
+# already sanitized, no further manifest rewriting is needed here.
+#
+# Gating on the Release workflow's success (rather than the tag push) is
+# deliberate: a crates.io publish is irreversible, so it must not happen if the
+# release build failed.
+#
+# Requirements / setup:
+#   * Add a crates.io API token as the repository secret `CARGO_REGISTRY_TOKEN`
+#     (Settings → Secrets and variables → Actions). Without it the publish step
+#     fails with an auth error.
+#   * This file must exist on the default branch for the `workflow_run` trigger to
+#     fire (it reaches `main` via the same merge that cuts the release).
+#
+# `workflow_dispatch` is provided to (re)publish a specific tag by hand — e.g. if
+# the token was missing on the first attempt, or the auto-run didn't fire.
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Git tag to publish (e.g. v0.10.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Never run two publishes at once; don't cancel an in-flight publish.
+concurrency:
+  group: publish-crates-io
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Manual dispatch, or a successful *tag-triggered* Release run (dist PR "plan"
+    # runs have event == 'pull_request' and are skipped).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the released commit
+        uses: actions/checkout@v4
+        with:
+          # workflow_run: the exact commit the Release built (the sanitized,
+          # tagged commit). workflow_dispatch: the tag the user supplied.
+          ref: ${{ github.event.inputs.tag || github.event.workflow_run.head_sha }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        # The crate version comes from the (already-sanitized) Cargo.toml. If that
+        # version is already on crates.io this step fails loudly rather than
+        # double-publishing, which is the safe behavior.
+        run: cargo publish
