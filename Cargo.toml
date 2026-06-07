@@ -19,6 +19,7 @@ include = [
   "/Cargo.toml",
   "/Cargo.lock",
   "/README.md",
+  "/CHANGELOG.md",
   "/LICENSE",
 ]
 keywords = ["RNA-seq", "quantification", "long-read", "transcriptomics"]
