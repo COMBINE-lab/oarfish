@@ -14,7 +14,7 @@ use std::path::Path;
 use swapvec::SwapVec;
 use tracing::{error, info};
 
-const KNOWN_MAPPERS: [&str; 3] = ["minimap2", "pbmm2", "bramble"];
+const KNOWN_MAPPERS: [&str; 4] = ["minimap2", "pbmm2", "bramble", "rammap"];
 
 pub fn read_and_verify_header<R: io::BufRead>(
     reader: &mut bam::io::Reader<R>,
@@ -62,7 +62,7 @@ pub fn read_and_verify_header<R: io::BufRead>(
     let mut matched_prog = None;
     let mut progs = vec![];
     // Check that the alignment was produced by an aligner we have validated
-    // (right now, minimap2, pbmm2, and bramble).
+    // (right now, minimap2, pbmm2, bramble, and rammap).
     for (prog, _pmap) in header.programs().roots() {
         if KNOWN_MAPPERS.iter().any(|known| prog == *known) {
             matched_prog = Some(prog);
