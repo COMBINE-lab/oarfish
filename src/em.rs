@@ -5,7 +5,6 @@ use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
 use atomic_float::AtomicF64;
 use itertools::izip;
 use num_format::{Locale, ToFormattedString};
-use rand::rng as trng;
 use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
 use tracing::{info, span, trace};
 
@@ -270,8 +269,20 @@ pub fn em(em_info: &EMInfo, _nthreads: usize) -> Vec<f64> {
     do_em(em_info, make_iter, true)
 }
 
-pub fn do_bootstrap(em_info: &EMInfo) -> Vec<f64> {
-    let mut rng = trng();
+pub fn do_bootstrap(em_info: &EMInfo, seed: Option<u64>, rep_idx: u64) -> Vec<f64> {
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
+
+    let mut rng: StdRng = match seed {
+        Some(s) => {
+            // Derive a deterministic per-replicate seed so that parallel execution
+            // yields the same results regardless of scheduling.
+            let derived = s.wrapping_add(0x9E37_79B9_7F4A_7C15u64.wrapping_mul(rep_idx + 1));
+            StdRng::seed_from_u64(derived)
+        }
+        None => StdRng::from_os_rng(),
+    };
+
     let n = em_info.eq_map.len();
     let inds = bootstrap::get_sample_inds(n, &mut rng);
 
@@ -289,7 +300,12 @@ pub fn do_bootstrap(em_info: &EMInfo) -> Vec<f64> {
     do_em(em_info, make_iter, false)
 }
 
-pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f64>> {
+pub fn bootstrap(
+    em_info: &EMInfo,
+    num_boot: u32,
+    nthreads: usize,
+    seed: Option<u64>,
+) -> Vec<Vec<f64>> {
     let span = span!(tracing::Level::INFO, "bootstrap");
     let _guard = span.enter();
 
@@ -307,7 +323,7 @@ pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f6
                 let span = span!(tracing::Level::INFO, "bootstrap");
                 let _guard = span.enter();
                 info!("evaluating bootstrap replicate {}", i);
-                do_bootstrap(em_info)
+                do_bootstrap(em_info, seed, i as u64)
             })
             .collect()
     })

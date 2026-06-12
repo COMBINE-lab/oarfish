@@ -563,6 +563,11 @@ pub struct Args {
     /// use a KDE model of the observed fragment length distribution
     #[arg(short, long, hide = true)]
     pub use_kde: bool,
+
+    /// RNG seed to make stochastic components (e.g. bootstrapping) deterministic.
+    /// If provided, oarfish will also force the EM implementation to be single-threaded
+    #[arg(long, help_heading = "reproducibility")]
+    pub seed: Option<u64>,
 }
 
 #[cfg(test)]

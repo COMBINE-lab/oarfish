@@ -176,7 +176,7 @@ fn perform_inference_and_write_output(
     // if the user requested bootstrap replicates,
     // compute and write those out now.
     if args.num_bootstraps > 0 {
-        let breps = em::bootstrap(&emi, args.num_bootstraps, args.threads);
+        let breps = em::bootstrap(&emi, args.num_bootstraps, args.threads, args.seed);
 
         let mut new_arrays = vec![];
         let mut bs_fields = vec![];

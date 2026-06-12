@@ -333,6 +333,12 @@ fn main() -> anyhow::Result<()> {
 
     let mut args = Args::parse();
 
+    // If a seed is provided force single-threaded execution
+    if let Some(seed) = args.seed {
+        info!("reproducibility: using seed {seed}; forcing single-threaded execution");
+        args.threads = 1;
+    }
+
     // change the logging filter if the user specified quiet or
     // verbose.
     if args.quiet {
