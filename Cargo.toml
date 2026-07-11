@@ -1,6 +1,6 @@
 [package]
 name = "oarfish"
-version = "0.10.0"
+version = "0.10.1"
 edition = "2024"
 rust-version = "1.91"
 authors = [
@@ -68,8 +68,11 @@ sprs = "0.11.4"
 
 # bramble-rs: project spliced genome alignments into transcriptome space.
 # 0.1.2 FASTA-header-keying fix; 0.1.3 rescue SW clip-length cap (per-thread
-# memory bound); 0.1.4 adds FastaDb::from_seqs (rescue from index sequences).
-bramble-rs = "0.1.4"
+# memory bound); 0.1.4 adds FastaDb::from_seqs (rescue from index sequences);
+# 0.1.6 exports SeqMap + FastaDb::from_seq_map for the zero-copy rescue path
+# and makes from_seqs hasher-agnostic (0.1.5's deterministic-hasher signature
+# broke default-RandomState callers — COMBINE-lab/oarfish#68; 0.1.5 yanked).
+bramble-rs = "0.1.6"
 
 # rammap: pure-Rust long-read mapper; oarfish's sole read-mapping backend.
 # Published as the `rammap-core` library crate; renamed to `rammap` here so the

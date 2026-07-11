@@ -388,7 +388,6 @@ fn write_rammap_index_with_footer(
 pub(crate) fn rescue_db_from_genome_index(
     aligner: &rammap::api::Aligner,
 ) -> Option<bramble_rs::fasta::FastaDb> {
-    use std::collections::HashMap;
     let idx = aligner.index();
     if !idx.has_sequences() {
         info!(
@@ -398,7 +397,9 @@ pub(crate) fn rescue_db_from_genome_index(
         return None;
     }
     info!("sourcing soft-clip-rescue reference sequences from the loaded genome index");
-    let mut seqs: HashMap<String, Vec<u8>> = HashMap::with_capacity(idx.seqs.len());
+    // Build bramble's own map type so it's moved into `from_seq_map` without a
+    // rehash and picks up bramble's deterministic hasher (see bramble_rs SeqMap).
+    let mut seqs = bramble_rs::fasta::FastaDb::new_seq_map(idx.seqs.len());
     let mut nt4: Vec<u8> = Vec::new();
     for (rid, ts) in idx.seqs.iter().enumerate() {
         nt4.clear();
@@ -419,5 +420,5 @@ pub(crate) fn rescue_db_from_genome_index(
         let name = ts.name.split_whitespace().next().unwrap_or("").to_string();
         seqs.insert(name, ascii);
     }
-    Some(bramble_rs::fasta::FastaDb::from_seqs(seqs))
+    Some(bramble_rs::fasta::FastaDb::from_seq_map(seqs))
 }

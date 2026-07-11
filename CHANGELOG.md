@@ -9,6 +9,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > rename the `## Unreleased` heading below to the chosen version, e.g.
 > `## 0.10.0 - 2026-06-06`, so the notes are picked up automatically.
 
+## 0.10.1 - 2026-07-11
+
+Patch release fixing a `cargo install oarfish` build failure. No behavior change.
+
+### Fixed
+
+- **`cargo install oarfish` failed to compile against `bramble-rs` 0.1.5.** A
+  fresh install re-resolves dependencies and picked up `bramble-rs` 0.1.5, whose
+  `FastaDb::from_seqs` had switched to an internal deterministic-hasher map,
+  rejecting the default-`RandomState` `HashMap` oarfish passed (a type mismatch
+  in `src/util/aligner.rs`). See [#68](https://github.com/COMBINE-lab/oarfish/issues/68).
+  Fixed by requiring `bramble-rs` 0.1.6, which makes `from_seqs` hasher-agnostic
+  and exports `SeqMap` + `FastaDb::from_seq_map`; oarfish now builds bramble's map
+  type directly and hands it over with no rehash. (`bramble-rs` 0.1.5 was yanked.)
+
 ## 0.10.0 - 2026-06-06
 
 This release replaces the read-mode aligner and adds genome-based quantification.
