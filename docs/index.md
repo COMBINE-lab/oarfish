@@ -283,6 +283,8 @@ Here, `<m>` is the number of transcripts in the reference, `<n>` is the number o
 
 The format of each of these lines is as follows; `<rname>` is the name of the read, `<k>` is the number of alignments for which probabilities are reported (if it is determined an alignment is invalid under the model, it may not be reported). Subsequently, there is a list of `k` integers, and `k` floating point numbers. Each of the `k` integers is the index of some transcript in the list of `m` transcripts given at the start of the file, and the subsequent list of `k` floating point numbers are the assignment probabilities of this read to each of the transcripts.
 
+The reported probabilities are renormalized over the alignments that pass `--display-thresh`, so the `k` values on a line sum to 1. They are printed with enough decimal places that an assignment passing `--display-thresh` is never rounded to `0`: the precision tracks the threshold (the default `--display-thresh 1e-6` prints 6 decimal places, and thresholds of `1e-3` or larger keep 3), so lowering the threshold both reports more alignments and prints them at a resolution that can represent them.
+
 For example:
 
 ```

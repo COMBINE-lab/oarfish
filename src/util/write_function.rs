@@ -208,6 +208,21 @@ pub(crate) fn write_infrep_file(
     parquet_utils::write_chunk_to_file(output_path.to_str().unwrap(), schema, chunk)
 }
 
+/// Number of decimal places to use when printing assignment probabilities to
+/// the `.prob` file. Chosen so that an assignment that passes `--display-thresh`
+/// never rounds to `0.000`: with the fixed 3-decimal format an entry could pass
+/// the (default `1e-6`) threshold yet print as zero (COMBINE-lab/oarfish#71).
+/// Precision tracks the threshold — `decimals = ceil(-log10(display_thresh))` —
+/// clamped to `[3, 9]` so it stays at the historical 3 decimals for thresholds
+/// >= 1e-3 and never grows without bound (e.g. the `none` sentinel).
+fn prob_display_decimals(display_thresh: f64) -> usize {
+    if display_thresh > 0.0 && display_thresh.is_finite() {
+        (-display_thresh.log10()).ceil().clamp(3.0, 9.0) as usize
+    } else {
+        9
+    }
+}
+
 pub fn write_out_prob(
     output: &PathBuf,
     emi: &EMInfo,
@@ -261,6 +276,10 @@ pub fn write_out_prob(
     let mut txps = Vec::<usize>::new();
     let mut txp_probs = Vec::<f64>::new();
 
+    // print enough decimals that a probability passing `display_thresh` is not
+    // shown as 0.000 (see `prob_display_decimals` / oarfish#71).
+    let prob_decimals = prob_display_decimals(display_thresh);
+
     for ((alns, probs, coverage_probs), name) in izip!(emi.eq_map.iter(), names_iter) {
         let mut denom = 0.0_f64;
 
@@ -305,7 +324,7 @@ pub fn write_out_prob(
             .join("\t");
         let prob_vals = txp_probs
             .iter()
-            .map(|x| format!("{:.3}", x))
+            .map(|x| format!("{:.*}", prob_decimals, x))
             .collect::<Vec<String>>()
             .join("\t");
         writeln!(writer_prob, "{}\t{}\t{}", txps.len(), txp_ids, prob_vals)
@@ -318,4 +337,37 @@ pub fn write_out_prob(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::prob_display_decimals;
+
+    #[test]
+    fn prob_decimals_track_threshold() {
+        // >= 1e-3 keeps the historical 3-decimal output
+        assert_eq!(prob_display_decimals(1e-2), 3);
+        assert_eq!(prob_display_decimals(1e-3), 3);
+        assert_eq!(prob_display_decimals(0.5), 3);
+        // below 1e-3 the precision grows to match the threshold
+        assert_eq!(prob_display_decimals(1e-6), 6); // the default
+        assert_eq!(prob_display_decimals(1e-4), 4);
+        // capped at 9 (e.g. the `none` sentinel = f64::MIN_POSITIVE)
+        assert_eq!(prob_display_decimals(1e-12), 9);
+        assert_eq!(prob_display_decimals(f64::MIN_POSITIVE), 9);
+        // degenerate inputs fall back to the max precision
+        assert_eq!(prob_display_decimals(0.0), 9);
+    }
+
+    #[test]
+    fn passing_prob_never_prints_as_zero() {
+        // an entry at the (default) threshold must not render as all-zeros
+        let thresh = 1e-6;
+        let d = prob_display_decimals(thresh);
+        let s = format!("{:.*}", d, thresh);
+        assert!(
+            s.chars().any(|c| c.is_ascii_digit() && c != '0'),
+            "value at threshold printed as zero: {s}"
+        );
+    }
 }
