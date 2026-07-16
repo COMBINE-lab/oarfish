@@ -9,6 +9,33 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > rename the `## Unreleased` heading below to the chosen version, e.g.
 > `## 0.10.0 - 2026-06-06`, so the notes are picked up automatically.
 
+## 0.10.2 - 2026-07-16
+
+Patch release fixing raw-read mapping of ONT direct-RNA data basecalled in RNA
+(uracil) mode.
+
+### Fixed
+
+- **ONT direct-RNA reads containing `U` (uracil) mapped at a near-zero rate in
+  raw-read mode (`--reads`).** Reads basecalled in RNA mode carry `U`/`u`
+  instead of `T`/`t`. The `rammap` seed encoding recognizes only `A/C/G/T` (`U`
+  encodes as ambiguous), so `U`-containing k-mers never matched the `T`-based
+  transcriptome index and ~99% of reads produced no mapping — even though the
+  same reads map normally through minimap2 or the `rammap` CLI, both of which
+  normalize `U` internally. oarfish now converts `U`→`T` (and `u`→`t`) once at
+  read ingestion, so direct-RNA reads map as expected. BAM-input modes
+  (`--alignments`, `--genome-alignments`) were never affected. See
+  [#70](https://github.com/COMBINE-lab/oarfish/issues/70).
+
+### Changed
+
+- The raw-read discard table now reports two additional per-read outcomes —
+  **read had no mapping** (the mapper returned no alignment record) and **read
+  had no valid alignment** (alignments were found but none had a positive best
+  score). These reads were previously dropped without being counted, so the
+  table did not reconcile to the total number of reads; the new rows make the
+  cause of unmapped reads visible (and were what pinpointed #70).
+
 ## 0.10.1 - 2026-07-11
 
 Patch release fixing a `cargo install oarfish` build failure. No behavior change.
