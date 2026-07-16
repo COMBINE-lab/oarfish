@@ -115,7 +115,22 @@ impl ReadChunkWithNames {
     pub fn add_id_and_read(&mut self, id: &[u8], read: &[u8]) {
         self.read_names.extend_from_slice(id);
         self.read_names.push(b'\0');
+        // Normalize RNA (uracil) bases to DNA (thymine) as the read is copied in.
+        // ONT direct-RNA reads basecalled in RNA mode contain 'U'/'u', but the
+        // rammap index and its seed encoding only recognize A/C/G/T (U encodes as
+        // ambiguous). Without this, U-containing k-mers never match the
+        // transcriptome index and essentially nothing maps in read mode, even
+        // though the same reads map fine via minimap2 or the rammap CLI (which
+        // normalize U internally). See COMBINE-lab/oarfish#70.
+        let start = self.read_seq.len();
         self.read_seq.extend_from_slice(read);
+        for b in &mut self.read_seq[start..] {
+            match *b {
+                b'U' => *b = b'T',
+                b'u' => *b = b't',
+                _ => {}
+            }
+        }
         self.name_sep.push(self.read_names.len());
         self.seq_sep.push(self.read_seq.len());
     }
@@ -802,6 +817,11 @@ pub struct DiscardTable {
     discard_aln_len: u32,
     discard_ori: u32,
     discard_supp: u32,
+    // reads for which the mapper returned no (mapped) alignment records at all.
+    no_mapping: u32,
+    // reads that had candidate alignments, but none survived with a positive
+    // best score (all alignments filtered out, zero-length, or score <= 0).
+    no_valid_aln: u32,
     valid_best_aln: u32,
 }
 
@@ -815,6 +835,8 @@ impl DiscardTable {
             discard_aln_len: 0,
             discard_ori: 0,
             discard_supp: 0,
+            no_mapping: 0,
+            no_valid_aln: 0,
             valid_best_aln: 0,
         }
     }
@@ -827,6 +849,8 @@ impl DiscardTable {
         self.discard_aln_len += other.discard_aln_len;
         self.discard_ori += other.discard_ori;
         self.discard_supp += other.discard_supp;
+        self.no_mapping += other.no_mapping;
+        self.no_valid_aln += other.no_valid_aln;
         self.valid_best_aln += other.valid_best_aln;
     }
 }
@@ -840,6 +864,8 @@ impl DiscardTable {
         let dlen = format!("{}", self.discard_aln_len);
         let dori = format!("{}", self.discard_ori);
         let dsupp = format!("{}", self.discard_supp);
+        let dnomap = format!("{}", self.no_mapping);
+        let dnoval = format!("{}", self.no_valid_aln);
         let vread = format!("{}", self.valid_best_aln);
 
         let data = vec![
@@ -851,6 +877,8 @@ impl DiscardTable {
             ["aligned length too short", &dlen],
             ["inconsistent orientation", &dori],
             ["supplementary alignment", &dsupp],
+            ["read had no mapping", &dnomap],
+            ["read had no valid alignment", &dnoval],
             ["reads with valid best alignment", &vread],
         ];
         let mut binding = Builder::from_iter(data).build();
@@ -902,6 +930,14 @@ impl fmt::Display for DiscardTable {
             "discarded because alignment is supplemental {}",
             self.discard_supp
         )
+        .expect("couldn't format discard table.");
+        writeln!(f, "discarded because read had no mapping {}", self.no_mapping)
+            .expect("couldn't format discard table.");
+        writeln!(
+            f,
+            "discarded because read had no valid alignment {}",
+            self.no_valid_aln
+        )
     }
 }
 
@@ -933,6 +969,11 @@ impl AlignmentFilters {
         // the number of nucleotides contained in the alignment
         // for the best read.
         let mut aln_len_at_best_retained = 0_u32;
+
+        // how many mapped alignment records the mapper produced for this read
+        // (before filtering). used to distinguish "the mapper returned nothing"
+        // from "the mapper returned candidates but none survived filtering".
+        let n_mapped_in = ag.iter().filter(|x| !x.is_unmapped()).count();
 
         // because of the SAM format, we can't rely on the sequence
         // itself to be present in each alignment record (only the primary)
@@ -1029,7 +1070,16 @@ impl AlignmentFilters {
         });
 
         if ag.is_empty() || aln_len_at_best_retained == 0 || best_retained_score <= 0 {
-            // There were no valid alignments
+            // There were no valid alignments. Record *why* so this large class of
+            // dropped reads is visible in the discard table instead of silently
+            // vanishing: either the mapper produced no alignment records at all
+            // (`no_mapping`), or it produced candidates but none survived with a
+            // positive best score (`no_valid_aln`).
+            if n_mapped_in == 0 {
+                discard_table.no_mapping += 1;
+            } else {
+                discard_table.no_valid_aln += 1;
+            }
             return (vec![], vec![]);
         }
         if aln_frac_at_best_retained < self.min_aligned_fraction {
@@ -1250,6 +1300,7 @@ impl AlignmentFilters {
 #[cfg(test)]
 mod tests {
     use crate::util::oarfish_types::AlnInfo;
+    use crate::util::oarfish_types::ReadChunkWithNames;
     use bio_types::strand::Strand;
 
     #[test]
@@ -1262,5 +1313,18 @@ mod tests {
             strand: Strand::Forward,
         };
         assert_eq!(ainf.alignment_span(), 100);
+    }
+
+    // ONT direct-RNA reads basecalled in RNA mode carry 'U'/'u'; these must be
+    // normalized to 'T'/'t' on ingestion so they seed against the T-based rammap
+    // index (COMBINE-lab/oarfish#70). DNA bases must pass through untouched.
+    #[test]
+    fn add_id_and_read_normalizes_uracil() {
+        let mut rg = ReadChunkWithNames::new();
+        rg.add_id_and_read(b"rna_read", b"ACGUacguNn");
+        rg.add_id_and_read(b"dna_read", b"ACGTacgtNn");
+        let seqs: Vec<Vec<u8>> = rg.iter().map(|(_, s)| s.to_vec()).collect();
+        assert_eq!(seqs[0], b"ACGTacgtNn", "U/u should become T/t");
+        assert_eq!(seqs[1], b"ACGTacgtNn", "DNA bases unchanged");
     }
 }
