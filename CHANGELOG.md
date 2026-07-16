@@ -9,6 +9,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > rename the `## Unreleased` heading below to the chosen version, e.g.
 > `## 0.10.0 - 2026-06-06`, so the notes are picked up automatically.
 
+## 0.10.3 - 2026-07-16
+
+Patch release improving the numeric precision of the `--write-assignment-probs`
+output.
+
+### Fixed
+
+- **Assignment probabilities in the `.prob`/`.prob.lz4` file could be reported
+  as `0.000`.** The values were always printed with 3 decimal places, but the
+  default `--display-thresh` (`1e-6`) admits assignments far smaller than
+  3-decimal resolution, so a probability that passed the reporting threshold
+  could still round to `0.000`. The printed precision now tracks
+  `--display-thresh` (`decimals = ceil(-log10(display_thresh))`, clamped to
+  `[3, 9]`): the default now prints 6 decimals, and an assignment that passes
+  the threshold is never shown as zero. Thresholds of `1e-3` or larger are
+  unchanged (still 3 decimals), and the `.prob` file format is otherwise
+  identical. See [#71](https://github.com/COMBINE-lab/oarfish/issues/71).
+
 ## 0.10.2 - 2026-07-16
 
 Patch release fixing raw-read mapping of ONT direct-RNA data basecalled in RNA
