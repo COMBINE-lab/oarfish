@@ -9,6 +9,39 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > rename the `## Unreleased` heading below to the chosen version, e.g.
 > `## 0.10.0 - 2026-06-06`, so the notes are picked up automatically.
 
+## Unreleased
+
+### Added
+
+- Opt-in `--em-accel none|squarem|daarem` for bulk estimates and bootstraps,
+  with shared convergence semantics and inference diagnostics.
+- `--coverage-model none|logistic|endpoint|hybrid|adaptive|degradation|auto`, including a repaired
+  historical logistic baseline, a regularized joint endpoint model, and a
+  support-gated log-linear combination of both. Adaptive mode learns endpoint
+  shrinkage by cross-validation, smooths neighboring endpoint cells, gates by
+  support and model agreement, and caps per-read coverage Bayes factors.
+- An ONT direct-RNA degradation-aware model that cross-fits a sample-level
+  3'-anchored competing-risk mixture, separates technical termination from
+  length-scaled degradation, and removes only the degradation likelihood ratio
+  from transcript evidence.
+- An `auto` coverage mode that dispatches by sequencing technology and learns
+  continuous degradation and endpoint-evidence weights. A learned null makes
+  ONT direct-RNA samples without degradation evidence reduce exactly to the
+  adaptive model.
+- A competing-risk ONT direct-RNA degradation kernel that separates intact,
+  length-invariant technical truncation, and length-scaled degradation before
+  correcting endpoint evidence.
+- An experimental bounded `--degradation-kernel piecewise2` challenger, with
+  the validated `constant` kernel remaining the default. More complex
+  piecewise3 and beta challengers were evaluated and removed after failing
+  accuracy/runtime gates.
+- Coverage-model and EM wall-clock times plus adaptive-model diagnostics in
+  `.meta_info.json` for reproducible accuracy/cost evaluation.
+- A documented, gated evaluation process for future coverage-model stages.
+- An eight-cell-line LongBench evaluation across ONT cDNA, ONT direct RNA, and
+  PacBio Kinnex, including a selective 250,000-read depth confirmation tier and
+  machine-readable accuracy/runtime results.
+
 ## 0.10.3 - 2026-07-16
 
 Patch release improving the numeric precision of the `--write-assignment-probs`

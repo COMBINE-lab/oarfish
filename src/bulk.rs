@@ -10,15 +10,15 @@ use crate::util::oarfish_types::{
     AlignmentFilters, EMInfo, InMemoryAlignmentStore, InputSourceType, ReadChunkWithNames,
     ReadSource, TranscriptInfo,
 };
+use crate::util::projection::{mapping_to_genomic_alignment, projected_to_records};
 use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::{write_infrep_file, write_out_prob, write_output};
-use crate::util::projection::{mapping_to_genomic_alignment, projected_to_records};
+use crate::{logistic_prob, normalize_read_probs};
+use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use bramble_rs::ProjectionConfig;
 use bramble_rs::ProjectionContext;
 use bramble_rs::g2t::G2TTree;
 use bramble_rs::project_group_with;
-use crate::{logistic_prob, normalize_read_probs};
-use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use crossbeam::channel::Receiver;
 use crossbeam::channel::Sender;
 use crossbeam::channel::bounded;
@@ -31,19 +31,31 @@ use std::io::BufRead;
 use swapvec::{SwapVec, SwapVecConfig};
 use tracing::{info, warn};
 
+struct RunTiming {
+    alignment: std::time::Duration,
+    coverage: std::time::Duration,
+    em: std::time::Duration,
+}
+
 /// Produce a [serde_json::Value] that encodes the relevant arguments and
 /// parameters of the run that we wish to record to file. Ultimately, this
 /// will be written to the corresponding `meta_info.json` file for this run.
 fn get_json_info(
     args: &Args,
     emi: &EMInfo,
+    em_result: &em::EMResult,
     seqcol_digest: &NamedDigestVec,
-    aln_time: std::time::Duration,
+    timing: &RunTiming,
+    coverage_diagnostics: &serde_json::Value,
 ) -> serde_json::Value {
-    let prob = if args.model_coverage {
-        "logistic_coverage"
-    } else {
-        "no_coverage"
+    let prob = match args.coverage_model {
+        crate::prog_opts::CoverageModel::None => "no_coverage",
+        crate::prog_opts::CoverageModel::Logistic => "logistic_coverage",
+        crate::prog_opts::CoverageModel::Endpoint => "endpoint_coverage",
+        crate::prog_opts::CoverageModel::Hybrid => "hybrid_coverage",
+        crate::prog_opts::CoverageModel::Adaptive => "adaptive_coverage",
+        crate::prog_opts::CoverageModel::Degradation => "degradation_aware_coverage",
+        crate::prog_opts::CoverageModel::Auto => "automatic_technology_coverage",
     };
 
     let source = if args.alignments.is_some() {
@@ -57,10 +69,26 @@ fn get_json_info(
         "alignment_source" : source,
         "alignment_time" : {
             "comment" : "Time to parse (in alignment mode) or generate (in raw read mode) alignments, as well as apply filters, and compute conditional probabilities.",
-            "human_time" : humantime::format_duration(aln_time).to_string(),
-            "seconds" : aln_time.as_secs_f64()
+            "human_time" : humantime::format_duration(timing.alignment).to_string(),
+            "seconds" : timing.alignment.as_secs_f64()
+        },
+        "coverage_model_time": {
+            "human_time": humantime::format_duration(timing.coverage).to_string(),
+            "seconds": timing.coverage.as_secs_f64()
+        },
+        "em_time": {
+            "human_time": humantime::format_duration(timing.em).to_string(),
+            "seconds": timing.em.as_secs_f64()
         },
         "bin_width" : args.bin_width,
+        "logistic_weight": args.logistic_weight,
+        "endpoint_weight": args.endpoint_weight,
+        "endpoint_support_scale": args.endpoint_support_scale,
+        "coverage_folds": args.coverage_folds,
+        "degradation_kernel": args.degradation_kernel,
+        "coverage_max_bayes_factor": args.coverage_max_bayes_factor,
+        "sequencing_technology": args.seq_tech,
+        "coverage_diagnostics": coverage_diagnostics,
         "filter_options" : &emi.eq_map.filter_opts,
         "discard_table" : &emi.eq_map.discard_table,
         "alignments": &args.alignments,
@@ -70,6 +98,9 @@ fn get_json_info(
         "quiet": &args.quiet,
         "em_max_iter": &args.max_em_iter,
         "em_convergence_thresh": &args.convergence_thresh,
+        "em_accel": &args.em_accel,
+        "em_evaluations": em_result.evaluations,
+        "em_converged": em_result.converged,
         "threads": &args.threads,
         "filter_group": &args.filter_group,
         "write_assignment_probs": &emi.eq_map.filter_opts.write_assignment_probs_type,
@@ -100,12 +131,113 @@ fn perform_inference_and_write_output(
         None
     };
 
-    if store.filter_opts.model_coverage {
+    let coverage_start = std::time::Instant::now();
+    let mut coverage_diagnostics = json!({});
+    if args.coverage_model == crate::prog_opts::CoverageModel::Logistic {
         //obtaining the Cumulative Distribution Function (CDF) for each transcript
         logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
         //Normalize the probabilities for the records of each read
         normalize_read_probs(store, txps, &args.bin_width);
+    } else if args.coverage_model == crate::prog_opts::CoverageModel::Endpoint {
+        crate::util::endpoint_probability::apply_endpoint_probabilities(store, txps);
+        // Endpoint training does not need the legacy per-transcript coverage
+        // bins, so this switch is deliberately enabled only after parsing.  It
+        // tells the EM to consume the probabilities populated above.
+        store.filter_opts.model_coverage = true;
+    } else if args.coverage_model == crate::prog_opts::CoverageModel::Hybrid {
+        logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
+        normalize_read_probs(store, txps, &args.bin_width);
+        let logistic = store.coverage_probabilities.clone();
+        let endpoint = crate::util::endpoint_probability::endpoint_probabilities(
+            store,
+            txps,
+            args.endpoint_support_scale,
+        );
+        info!(
+            training_reads = endpoint.training_reads,
+            logistic_weight = args.logistic_weight,
+            endpoint_weight = args.endpoint_weight,
+            endpoint_support_scale = args.endpoint_support_scale,
+            "combining logistic and endpoint coverage models"
+        );
+        crate::util::hybrid_probability::apply_hybrid_probabilities(
+            store,
+            &logistic,
+            endpoint,
+            args.logistic_weight,
+            args.endpoint_weight,
+        );
+    } else if args.coverage_model == crate::prog_opts::CoverageModel::Adaptive
+        || (args.coverage_model == crate::prog_opts::CoverageModel::Auto
+            && !matches!(
+                args.seq_tech,
+                Some(crate::prog_opts::SequencingTech::OntDRNA)
+            ))
+    {
+        logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
+        normalize_read_probs(store, txps, &args.bin_width);
+        let logistic = store.coverage_probabilities.clone();
+        let endpoint = crate::util::endpoint_probability::adaptive_endpoint_probabilities(
+            store,
+            txps,
+            args.coverage_folds,
+            args.endpoint_support_scale,
+        );
+        let diagnostics = crate::util::hybrid_probability::apply_adaptive_probabilities(
+            store,
+            &logistic,
+            endpoint,
+            args.logistic_weight,
+            args.endpoint_weight,
+            args.coverage_max_bayes_factor,
+        );
+        info!(?diagnostics, "applied adaptive coverage model");
+        coverage_diagnostics = if args.coverage_model == crate::prog_opts::CoverageModel::Auto {
+            json!({
+                "technology_kernel": "cross_fitted_adaptive_endpoint",
+                "adaptive": diagnostics,
+            })
+        } else {
+            serde_json::to_value(diagnostics)?
+        };
+    } else if args.coverage_model == crate::prog_opts::CoverageModel::Degradation
+        || (args.coverage_model == crate::prog_opts::CoverageModel::Auto
+            && matches!(
+                args.seq_tech,
+                Some(crate::prog_opts::SequencingTech::OntDRNA)
+            ))
+    {
+        logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
+        normalize_read_probs(store, txps, &args.bin_width);
+        let logistic = store.coverage_probabilities.clone();
+        let (endpoint, degradation_diagnostics) =
+            crate::util::degradation_probability::degradation_adjusted_endpoint_probabilities(
+                store,
+                txps,
+                args.coverage_folds,
+                args.endpoint_support_scale,
+                args.degradation_kernel,
+            );
+        let adaptive_diagnostics = crate::util::hybrid_probability::apply_adaptive_probabilities(
+            store,
+            &logistic,
+            endpoint,
+            args.logistic_weight,
+            args.endpoint_weight,
+            args.coverage_max_bayes_factor,
+        );
+        info!(
+            ?degradation_diagnostics,
+            ?adaptive_diagnostics,
+            "applied degradation-aware coverage model"
+        );
+        coverage_diagnostics = json!({
+            "technology_kernel": "ont_drna_competing_risks",
+            "degradation": degradation_diagnostics,
+            "adaptive": adaptive_diagnostics,
+        });
     }
+    let coverage_time = coverage_start.elapsed();
 
     info!(
         "Total number of alignment records : {}",
@@ -133,6 +265,7 @@ fn perform_inference_and_write_output(
         txp_info: txps,
         max_iter: args.max_em_iter,
         convergence_thresh: args.convergence_thresh,
+        accel: args.em_accel,
         init_abundances,
         kde_model: kde_opt,
     };
@@ -152,24 +285,38 @@ fn perform_inference_and_write_output(
         */
     }
 
-    let counts = if args.threads > 4 {
+    let em_start = std::time::Instant::now();
+    let em_result = if args.threads > 4 {
         em::em_par(&emi, args.threads)
     } else {
         em::em(&emi, args.threads)
     };
+    let em_time = em_start.elapsed();
+    let counts = &em_result.counts;
 
     let aux_txp_counts = crate::util::aux_counts::get_aux_counts(store, txps)?;
 
     // prepare the JSON object we'll write
     // to meta_info.json
-    let json_info = get_json_info(args, &emi, &seqcol_digest, aln_time);
+    let json_info = get_json_info(
+        args,
+        &emi,
+        &em_result,
+        &seqcol_digest,
+        &RunTiming {
+            alignment: aln_time,
+            coverage: coverage_time,
+            em: em_time,
+        },
+        &coverage_diagnostics,
+    );
 
     // write the output
     write_output(
         args.output.as_ref().expect("present"),
         json_info,
         header,
-        &counts,
+        counts,
         &aux_txp_counts,
     )?;
 
@@ -199,7 +346,7 @@ fn perform_inference_and_write_output(
         write_out_prob(
             args.output.as_ref().expect("present"),
             &emi,
-            &counts,
+            counts,
             name_vec,
             txps_name,
             args.display_thresh,
@@ -479,7 +626,10 @@ pub fn quantify_genome_raw_reads(
                                 let map_res_opt =
                                     crate::util::mapper::map_read(&loc_aligner, name, seq);
                                 let Ok(mappings) = map_res_opt else {
-                                    warn!("Error encountered mapping read: {}", map_res_opt.unwrap_err());
+                                    warn!(
+                                        "Error encountered mapping read: {}",
+                                        map_res_opt.unwrap_err()
+                                    );
                                     continue;
                                 };
 
@@ -500,8 +650,7 @@ pub fn quantify_genome_raw_reads(
                                 if galns.is_empty() {
                                     continue;
                                 }
-                                n_genome_mapped
-                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                n_genome_mapped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 // attach the read sequence to the first alignment when
                                 // soft-clip rescue is enabled (bramble shares one seq
                                 // across the read group). bramble expects the seq in
@@ -665,7 +814,11 @@ pub fn quantify_genome_raw_reads(
                 "reads aligned to genome: {}; of those, projected to >=1 transcript: {} ({:.2}%); projection-dropped: {}",
                 n_gm.to_formatted_string(&Locale::en),
                 n_pr.to_formatted_string(&Locale::en),
-                if n_gm > 0 { 100.0 * (n_pr as f64) / (n_gm as f64) } else { 0.0 },
+                if n_gm > 0 {
+                    100.0 * (n_pr as f64) / (n_gm as f64)
+                } else {
+                    0.0
+                },
                 (n_gm - n_pr).to_formatted_string(&Locale::en),
             );
             let aln_time = aln_start.elapsed()?;

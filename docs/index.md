@@ -117,18 +117,72 @@ indexing:
 
 coverage model:
       --model-coverage             apply the coverage model
+      --coverage-model <MODEL>     bulk coverage evidence: none, logistic, endpoint, hybrid, adaptive, degradation, auto [default: none]
   -k, --growth-rate <GROWTH_RATE>  logistic `k` [default: 2]
   -b, --bin-width <BIN_WIDTH>      coverage bin width [default: 100]
+      --coverage-folds <N>         cross-validation folds in adaptive mode [default: 5]
+      --coverage-max-bayes-factor <BF>
+                                   maximum per-read coverage odds in adaptive mode [default: 4]
+      --degradation-kernel <KERNEL>
+                                   ONT dRNA kernel: constant or experimental piecewise2
 
 output read-txps probabilities:
       --write-assignment-probs[=<WRITE_ASSIGNMENT_PROBS>]  write per-read assignment probs (uncompressed|compressed)
       --display-thresh <DISPLAY_THRESH>  min posterior prob to write to .prob, or 'none' [default: 0.000001]
 
 EM:
+      --em-accel <EM_ACCEL>                  bulk EM acceleration: none, squarem, daarem [default: none]
       --max-em-iter <MAX_EM_ITER>            max EM iterations [default: 1000]
       --convergence-thresh <CONVERGENCE_THRESH>  EM convergence threshold [default: 0.001]
   -q, --short-quant <SHORT_QUANT>            short-read quantification (if provided)
 ```
+
+`--model-coverage` remains an alias for `--coverage-model logistic`. The
+`endpoint` model learns joint transcript-relative 5′ and 3′ alignment gaps from
+single-candidate reads. See [the staged evaluation protocol](evaluation.md)
+and [current coverage-model results](coverage-evaluation-2026-07-19.md).
+The selected hybrid weight sweep is documented in
+[hybrid coverage evaluation](hybrid-evaluation-2026-07-19.md).
+
+`--coverage-model hybrid` combines logistic and endpoint likelihoods in log
+space. Its defaults are `--logistic-weight 1.0`, `--endpoint-weight 0.5`, and
+`--endpoint-support-scale 25`; sparse endpoint cells are automatically shrunk
+toward the logistic-only result. These parameters are experimental and apply
+only to bulk quantification.
+
+`--coverage-model adaptive` adds safeguards intended for transfer across
+samples: deterministic cross-fitting, locally smoothed endpoint counts,
+held-out selection of the endpoint prior strength, a reliability gate based on
+support and logistic/endpoint agreement, and a per-read Bayes-factor cap. The
+model records the selected prior, mean reliability, cap count, coverage time,
+and EM time in `.meta_info.json`. It remains experimental and opt-in; see the
+[adaptive coverage evaluation](adaptive-coverage-evaluation-2026-07-19.md).
+The frozen-parameter degradation and PacBio checks are recorded in the
+[coverage outer-validation report](coverage-outer-validation-2026-07-19.md).
+The subsequent 24-library, eight-cell-line evaluation and depth confirmation
+are recorded in the
+[LongBench coverage evaluation](longbench-coverage-evaluation-2026-07-19.md).
+The follow-on correction-weight and technical-truncation experiments are in the
+[competing-risk degradation evaluation](competing-risk-degradation-evaluation-2026-07-20.md).
+The bounded beta and piecewise alternatives are evaluated in the
+[degradation-kernel challenger study](degradation-kernel-challengers-2026-07-20.md).
+
+`--coverage-model degradation --seq-tech ont-drna` removes a cross-fitted,
+sample-wide 3'-anchored degradation process before applying adaptive endpoint
+evidence. It learns intact, length-invariant technical-truncation, and
+length-scaled degradation fractions plus a degradation hazard from
+single-candidate reads and records them in `.meta_info.json`. The current
+kernel is specific to ONT direct RNA; cDNA and PacBio should continue to use
+`adaptive` until their protocol-specific kernels have been validated. See the
+[degradation-model evaluation](degradation-model-evaluation-2026-07-19.md).
+
+`--coverage-model auto --seq-tech <TECH>` is the preferred experimental entry
+point when coverage correction is desired. For ONT direct RNA it learns whether
+degradation correction is supported, its strength, and the per-read posterior;
+when unsupported it reduces exactly to adaptive. ONT cDNA and PacBio currently
+dispatch to the cross-fitted adaptive endpoint kernel. BAM inputs require
+`--seq-tech` in auto mode because the protocol cannot be inferred safely from
+alignment records.
 
 > The block above is abridged for readability; run `oarfish --help` for the exact, complete option text for your installed version.
 

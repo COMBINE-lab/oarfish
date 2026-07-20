@@ -1,6 +1,6 @@
 use crate::util::oarfish_types::TranscriptInfo;
 use rayon::prelude::*;
-use tracing::{info, instrument, warn};
+use tracing::{info, instrument};
 
 /// implements a scaled (by `a`) logistic function
 /// that is clamped (>= 1e-8, <= 0.99999)
@@ -48,8 +48,10 @@ pub fn logistic_prob(
         let temp_prob: Vec<f64> = if *bin_width != 0 {
             assert!(!t.coverage_bins.is_empty());
             let min_cov = t.total_weight / 100.;
-            t.coverage_bins.iter_mut().for_each(|elem| *elem += min_cov);
-            let (bin_counts, bin_lengths) = t.get_normalized_counts_and_lengths();
+            let (mut bin_counts, bin_lengths) = t.get_normalized_counts_and_lengths();
+            bin_counts
+                .iter_mut()
+                .for_each(|elem| *elem += min_cov as f32);
             logstic_function(growth_rate, &bin_counts, &bin_lengths)
         } else {
             std::unimplemented!("coverage model with 0 bin width is not currently implemented");

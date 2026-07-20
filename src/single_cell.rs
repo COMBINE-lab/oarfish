@@ -143,11 +143,12 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                             txp_info: &txps,
                             max_iter: args.max_em_iter,
                             convergence_thresh: args.convergence_thresh,
+                            accel: crate::prog_opts::EmAccel::None,
                             init_abundances: None,
                             kde_model: None,
                         };
                         // run the EM for this cell
-                        let counts = em::em(&emi, 1);
+                        let counts = em::em(&emi, 1).counts;
                         // clear out the vectors where we will store
                         // the count information for this cell
                         col_ids.clear();

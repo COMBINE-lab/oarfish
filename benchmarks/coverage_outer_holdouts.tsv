@@ -1,0 +1,17 @@
+dataset	sample	technology	condition	reads	truth_or_comparator	role
+PRJEB53210	ERR9829520	ONT-dRNA	TS10_RIN_9.8	first-50000	matched-trajectory	outer-holdout
+PRJEB53210	ERR9829522	ONT-dRNA	TS10_RIN_9.6	first-50000	matched-trajectory	outer-holdout
+PRJEB53210	ERR9829524	ONT-dRNA	TS10_RIN_9.3	first-50000	matched-trajectory	outer-holdout
+PRJEB53210	ERR9829529	ONT-dRNA	TS10_RIN_8.4	first-50000	matched-trajectory	outer-holdout
+PRJEB53210	ERR9829531	ONT-dRNA	TS10_RIN_7.7	first-50000	matched-trajectory	outer-holdout
+PRJEB53210	ERR9829521	ONT-dRNA	TS11_RIN_9.7	first-50000	matched-trajectory	outer-holdout
+PRJEB53210	ERR9829523	ONT-dRNA	TS11_RIN_9.6	first-50000	matched-trajectory	outer-holdout
+PRJEB53210	ERR9829525	ONT-dRNA	TS11_RIN_9.3	first-50000	matched-trajectory	outer-holdout
+PRJEB53210	ERR9829526	ONT-dRNA	TS11_RIN_8.9	first-50000	matched-trajectory	outer-holdout
+PRJEB53210	ERR9829527	ONT-dRNA	TS11_RIN_8.8	first-50000	matched-trajectory	outer-holdout
+PRJEB53210	ERR9829528	ONT-dRNA	TS11_RIN_8.7	first-50000	matched-trajectory	outer-holdout
+PRJEB53210	ERR9829519	ONT-dRNA	TS12_RIN_9.9	first-50000	matched-trajectory	outer-holdout
+PRJEB53210	ERR9829530	ONT-dRNA	TS12_RIN_8.2	first-50000	matched-trajectory	outer-holdout
+PRJEB53210	ERR9829532	ONT-dRNA	TS12_RIN_7.3	first-50000	matched-trajectory	outer-holdout
+PRJEB53210	ERR9829533	ONT-dRNA	TS12_RIN_7.2	first-50000	matched-trajectory	outer-holdout
+LongBench	H69_bulk_PB	PacBio-Kinnex	H69	first-50000	matched-Illumina-quant	outer-holdout

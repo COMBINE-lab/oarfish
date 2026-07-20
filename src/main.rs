@@ -22,6 +22,7 @@ mod alignment_parser;
 mod bootstrap;
 mod bulk;
 mod em;
+mod em_accel;
 mod prog_opts;
 mod single_cell;
 mod util;
@@ -263,7 +264,9 @@ fn run_genome_reads(args: &mut Args, filter_opts: AlignmentFilters) -> anyhow::R
         let mut bed = args.output.clone().expect("output prefix required");
         let fname = format!(
             "{}.annot_junctions.bed",
-            bed.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()
+            bed.file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_default()
         );
         bed.set_file_name(fname);
         let n = projection::write_annotation_junction_bed(&transcripts, &bed)?;
@@ -332,6 +335,62 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let mut args = Args::parse();
+
+    if args.model_coverage && !args.single_cell {
+        args.coverage_model = crate::prog_opts::CoverageModel::Logistic;
+    } else if matches!(
+        args.coverage_model,
+        crate::prog_opts::CoverageModel::Logistic
+            | crate::prog_opts::CoverageModel::Hybrid
+            | crate::prog_opts::CoverageModel::Adaptive
+            | crate::prog_opts::CoverageModel::Degradation
+            | crate::prog_opts::CoverageModel::Auto
+    ) {
+        // Only the historical model needs per-transcript coverage bins.  The
+        // endpoint model learns directly from retained alignment coordinates.
+        args.model_coverage = true;
+    }
+    if matches!(
+        args.coverage_model,
+        crate::prog_opts::CoverageModel::Hybrid
+            | crate::prog_opts::CoverageModel::Adaptive
+            | crate::prog_opts::CoverageModel::Degradation
+            | crate::prog_opts::CoverageModel::Auto
+    ) && args.logistic_weight == 0.0
+        && args.endpoint_weight == 0.0
+    {
+        anyhow::bail!(
+            "hybrid/adaptive/degradation coverage requires a nonzero logistic or endpoint weight"
+        );
+    }
+    if args.coverage_model == crate::prog_opts::CoverageModel::Degradation
+        && args.seq_tech != Some(crate::prog_opts::SequencingTech::OntDRNA)
+    {
+        anyhow::bail!("--coverage-model degradation currently requires --seq-tech ont-drna");
+    }
+    if args.coverage_model == crate::prog_opts::CoverageModel::Auto && args.seq_tech.is_none() {
+        anyhow::bail!("--coverage-model auto requires --seq-tech so it can select a technology kernel");
+    }
+    if args.degradation_kernel != crate::prog_opts::DegradationKernel::Constant
+        && (!matches!(
+            args.coverage_model,
+            crate::prog_opts::CoverageModel::Degradation
+                | crate::prog_opts::CoverageModel::Auto
+        ) || args.seq_tech != Some(crate::prog_opts::SequencingTech::OntDRNA))
+    {
+        anyhow::bail!(
+            "non-constant --degradation-kernel values require ONT direct-RNA auto/degradation coverage"
+        );
+    }
+    if args.single_cell && args.coverage_model != crate::prog_opts::CoverageModel::None {
+        anyhow::bail!(
+            "--coverage-model is currently supported only for bulk quantification; use the legacy --model-coverage single-cell path"
+        );
+    }
+
+    if args.single_cell && args.em_accel != crate::prog_opts::EmAccel::None {
+        anyhow::bail!("--em-accel is currently supported only for bulk quantification");
+    }
 
     // change the logging filter if the user specified quiet or
     // verbose.

@@ -5,7 +5,7 @@ use tracing::{error, info, instrument};
 pub fn normalize_read_probs(
     store: &mut InMemoryAlignmentStore,
     txp_info: &[TranscriptInfo],
-    bin_width: &u32,
+    _bin_width: &u32,
 ) {
     let mut normalize_probs_temp: Vec<f64> = vec![];
     let mut normalized_coverage_prob: Vec<f64> = vec![];
@@ -21,10 +21,12 @@ pub fn normalize_read_probs(
             let end_aln: f64 = a.end as f64;
             let tlen: f64 = txp_info[target_id].len.get() as f64;
             let coverage_probability: &Vec<f64> = &txp_info[target_id].coverage_prob;
-            let bin_length: f64 = *bin_width as f64; //txp_info[target_id].len.get() as f32;
+            let bin_length = tlen / coverage_probability.len() as f64;
+            let start_aln = (start_aln - 1.0).max(0.0);
+            let end_aln = end_aln.min(tlen);
             let start_bin: usize = (start_aln / bin_length) as usize;
-            let end_bin: usize =
-                ((end_aln / bin_length) as usize).min(coverage_probability.len() - 1);
+            let end_bin: usize = (((end_aln - f64::EPSILON).max(0.0) / bin_length) as usize)
+                .min(coverage_probability.len() - 1);
 
             let bin_end = |i| -> f64 { ((bin_length * (i as f64)) + bin_length).min(tlen) };
 
@@ -34,7 +36,7 @@ pub fn normalize_read_probs(
                 let w = (end_aln - start_aln) / bin_length;
                 (w, w * coverage_probability[start_bin])
             } else {
-                (start_bin..end_bin).fold((0f64, 0f64), |acc, i| {
+                (start_bin..=end_bin).fold((0f64, 0f64), |acc, i| {
                     let w = if i == start_bin {
                         (bin_end(start_bin) - start_aln) / bin_length
                     } else if i == end_bin {

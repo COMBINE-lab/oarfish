@@ -418,6 +418,8 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     // have converged within this threshold of relative
     // change between two subsequent iterations.
     pub convergence_thresh: f64,
+    /// Optional fixed-point acceleration scheme.
+    pub accel: crate::prog_opts::EmAccel,
     // An optional vector of abundances from which
     // to initalize the EM, otherwise, a default
     // uniform initalization is used.
@@ -472,7 +474,7 @@ impl TranscriptInfo {
         let num_intervals = self.coverage_bins.len();
         let num_intervals_f = num_intervals as f64;
         let tlen_f = self.lenf;
-        let bin_width = (tlen_f / num_intervals_f).round() as f32;
+        let bin_width = (tlen_f / num_intervals_f) as f32;
 
         let cov_f32 = self.coverage_bins.iter().map(|f| *f as f32).collect();
         let mut widths_f32 = Vec::<f32>::with_capacity(num_intervals);
@@ -494,44 +496,29 @@ impl TranscriptInfo {
 
     #[inline(always)]
     pub fn add_interval(&mut self, start: u32, stop: u32, weight: f64) {
-        const ONE_PLUS_EPSILON: f64 = 1.0_f64 + f64::EPSILON;
         let num_intervals = self.coverage_bins.len();
+        if num_intervals == 0 || !weight.is_finite() || weight <= 0.0 {
+            return;
+        }
         let num_intervals_f = num_intervals as f64;
         let tlen_f = self.lenf;
-        let bin_width = (tlen_f / num_intervals_f).round();
-        let start = start.min(stop);
-        let stop = start.max(stop);
-        let start_bin = (((start as f64) / tlen_f) * num_intervals_f).floor() as usize;
-        let end_bin = (((stop as f64) / tlen_f) * num_intervals_f).floor() as usize;
-
-        let get_overlap = |s1: u32, e1: u32, s2: u32, e2: u32| -> u32 {
-            if s1 <= e2 {
-                e1.min(e2) - s1.max(s2)
-            } else {
-                0_u32
-            }
-        };
-
-        for (bidx, bin) in self.coverage_bins[start_bin..end_bin]
-            .iter_mut()
-            .enumerate()
-        {
-            let bidxf = (start_bin + bidx) as f64;
-            let curr_bin_start = (bidxf * bin_width) as u32;
-            let curr_bin_end = ((bidxf + 1.0) * bin_width).min(tlen_f) as u32;
-
-            let olap = get_overlap(start, stop, curr_bin_start, curr_bin_end);
-            let olfrac = (olap as f64) / ((curr_bin_end - curr_bin_start) as f64);
-            *bin += olfrac;
-            if olfrac > ONE_PLUS_EPSILON {
-                error!("first_bin = {start_bin}, last_bin = {end_bin}");
-                error!(
-                    "bin = {}, olfrac = {}, olap = {}, curr_bin_start = {}, curr_bin_end = {}, start = {start}, stop = {stop}",
-                    *bin, olfrac, olap, curr_bin_start, curr_bin_end
-                );
-                panic!(
-                    "coverage computation error; please report this error at https://github.com/COMBINE-lab/oarfish."
-                )
+        let bin_width = tlen_f / num_intervals_f;
+        // noodles positions are one-based inclusive; coverage uses zero-based
+        // half-open coordinates.
+        let (lo, hi) = (start.min(stop), start.max(stop));
+        let start = lo.saturating_sub(1) as f64;
+        let stop = hi.max(1).min(self.len.get() as u32) as f64;
+        if stop <= start {
+            return;
+        }
+        let first = (start / bin_width).floor() as usize;
+        let last = ((stop - f64::EPSILON) / bin_width).floor() as usize;
+        for bidx in first..=last.min(num_intervals - 1) {
+            let bin_start = bidx as f64 * bin_width;
+            let bin_end = ((bidx + 1) as f64 * bin_width).min(tlen_f);
+            let overlap = stop.min(bin_end) - start.max(bin_start);
+            if overlap > 0.0 {
+                self.coverage_bins[bidx] += weight * overlap / (bin_end - bin_start);
             }
         }
         self.total_weight += weight;
@@ -931,8 +918,12 @@ impl fmt::Display for DiscardTable {
             self.discard_supp
         )
         .expect("couldn't format discard table.");
-        writeln!(f, "discarded because read had no mapping {}", self.no_mapping)
-            .expect("couldn't format discard table.");
+        writeln!(
+            f,
+            "discarded because read had no mapping {}",
+            self.no_mapping
+        )
+        .expect("couldn't format discard table.");
         writeln!(
             f,
             "discarded because read had no valid alignment {}",
@@ -1301,6 +1292,7 @@ impl AlignmentFilters {
 mod tests {
     use crate::util::oarfish_types::AlnInfo;
     use crate::util::oarfish_types::ReadChunkWithNames;
+    use crate::util::oarfish_types::TranscriptInfo;
     use bio_types::strand::Strand;
 
     #[test]
@@ -1326,5 +1318,15 @@ mod tests {
         let seqs: Vec<Vec<u8>> = rg.iter().map(|(_, s)| s.to_vec()).collect();
         assert_eq!(seqs[0], b"ACGTacgtNn", "U/u should become T/t");
         assert_eq!(seqs[1], b"ACGTacgtNn", "DNA bases unchanged");
+    }
+
+    #[test]
+    fn weighted_coverage_includes_terminal_bin() {
+        let mut txp =
+            TranscriptInfo::with_len_and_bin_width(std::num::NonZeroUsize::new(100).unwrap(), 25);
+        txp.add_interval(76, 100, 0.25);
+        assert_eq!(txp.coverage_bins[..3], [0.0, 0.0, 0.0]);
+        assert!((txp.coverage_bins[3] - 0.25).abs() < 1e-12);
+        assert!((txp.total_weight - 0.25).abs() < 1e-12);
     }
 }
