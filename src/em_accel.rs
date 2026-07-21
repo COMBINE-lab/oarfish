@@ -293,7 +293,6 @@ pub(crate) fn daarem(
             proposal[i] = (xnew[i] - xg) + (fnew[i] - fg);
         }
 
-        let old = xnew.clone();
         let use_proposal = feasible(&proposal);
         if use_proposal {
             f(&proposal, &mut mapped);
@@ -325,7 +324,13 @@ pub(crate) fn daarem(
                 residual_norm = norm(&fnew);
             }
         }
-        let d = distance(&old, &xnew);
+        // A damped Anderson step can be arbitrarily small even while xnew is
+        // far from the fixed point.  Convergence must therefore be measured
+        // from the current fixed-point residual, not from the accepted step.
+        for i in 0..n {
+            proposal[i] = xnew[i] + fnew[i];
+        }
+        let d = distance(&xnew, &proposal);
         if *evals >= min_eval && d.is_finite() && d < tolerance {
             x.copy_from_slice(&xnew);
             return true;

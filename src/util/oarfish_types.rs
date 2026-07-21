@@ -539,7 +539,7 @@ pub struct InMemoryAlignmentStore<'h> {
     pub as_probabilities: Vec<f32>,
     pub coverage_probabilities: Vec<f64>,
     // holds the boundaries between records for different reads
-    boundaries: Vec<usize>,
+    pub(crate) boundaries: Vec<usize>,
     pub discard_table: DiscardTable,
     pub num_unique_alignments: usize,
 }

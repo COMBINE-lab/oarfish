@@ -2,7 +2,7 @@
 
 use crate::prog_opts::DegradationKernel;
 use crate::util::endpoint_probability::{
-    adaptive_endpoint_probabilities, endpoint_gaps, AdaptiveEndpointProbabilities,
+    AdaptiveEndpointProbabilities, adaptive_endpoint_probabilities, endpoint_gaps,
 };
 use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
 use serde::Serialize;
@@ -299,9 +299,10 @@ pub(crate) fn degradation_adjusted_endpoint_probabilities(
     folds: usize,
     support_scale: f64,
     kernel: DegradationKernel,
+    ablation: crate::prog_opts::CoverageAblation,
 ) -> (AdaptiveEndpointProbabilities, DegradationDiagnostics) {
     let folds = folds.max(2);
-    let mut endpoint = adaptive_endpoint_probabilities(store, txps, folds, support_scale);
+    let mut endpoint = adaptive_endpoint_probabilities(store, txps, folds, support_scale, ablation);
     let mut by_fold = vec![Vec::new(); folds];
     for (read_index, (alignments, _, _)) in store.iter().enumerate() {
         if let [alignment] = alignments {
@@ -356,12 +357,9 @@ pub(crate) fn degradation_adjusted_endpoint_probabilities(
             local.fill(1.0 / local.len() as f64);
         }
         let read_degradation = read_posterior_sum / read_posterior_count.max(1) as f64;
-        endpoint.support_gates[offset..end]
-            .iter_mut()
-            .for_each(|gate| {
-                *gate *=
-                    1.0 - params.correction_weight * read_degradation * degradation_strength(params)
-            });
+        endpoint.support_gates[read_index] *= (1.0
+            - params.correction_weight * read_degradation * degradation_strength(params))
+            as f32;
         offset = end;
     }
 
@@ -477,9 +475,11 @@ mod tests {
 
     #[test]
     fn piecewise_challenger_embeds_constant_hazard() {
-        assert!(shape_candidates(DegradationKernel::Piecewise2)
-            .iter()
-            .any(|shape| matches!(shape, DegradationShape::Constant)));
+        assert!(
+            shape_candidates(DegradationKernel::Piecewise2)
+                .iter()
+                .any(|shape| matches!(shape, DegradationShape::Constant))
+        );
     }
 
     fn simulated_observations(shape: DegradationShape) -> Vec<(usize, usize)> {

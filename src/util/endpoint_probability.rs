@@ -21,17 +21,21 @@ struct EndpointModel {
 
 pub(crate) struct EndpointProbabilities {
     pub probabilities: Vec<f64>,
-    /// Per-alignment copies of a per-read empirical-support gate.
-    pub support_gates: Vec<f64>,
+    /// One gate per read, rather than one duplicated copy per alignment.
+    pub support_gates: Vec<f32>,
     pub training_reads: usize,
 }
 
 pub(crate) struct AdaptiveEndpointProbabilities {
     pub probabilities: Vec<f64>,
-    pub support_gates: Vec<f64>,
+    /// One gate per read, rather than one duplicated copy per alignment.
+    pub support_gates: Vec<f32>,
     pub training_reads: usize,
     pub selected_prior_mass: f64,
     pub folds: usize,
+    /// One gate per read; empty unless uncertainty gating is requested.
+    pub uncertainty_gates: Vec<f32>,
+    pub ambiguous_training_reads: usize,
 }
 
 impl EndpointModel {
@@ -113,7 +117,7 @@ pub(crate) fn endpoint_probabilities(
     }
 
     let mut probabilities = Vec::with_capacity(store.total_len());
-    let mut support_gates = Vec::with_capacity(store.total_len());
+    let mut support_gates = Vec::with_capacity(store.len());
     for (alns, _, _) in store.iter() {
         let mut local: Vec<f64> = alns
             .iter()
@@ -135,7 +139,7 @@ pub(crate) fn endpoint_probabilities(
                 / alns.len() as f64
         };
         let gate = mean_support / (mean_support + support_scale);
-        support_gates.extend(std::iter::repeat_n(gate, local.len()));
+        support_gates.push(gate as f32);
         probabilities.extend(local);
     }
     EndpointProbabilities {
@@ -184,6 +188,7 @@ pub(crate) fn adaptive_endpoint_probabilities(
     txps: &[TranscriptInfo],
     folds: usize,
     support_scale: f64,
+    ablation: crate::prog_opts::CoverageAblation,
 ) -> AdaptiveEndpointProbabilities {
     const PRIOR_GRID: [f64; 7] = [10.0, 30.0, 100.0, 300.0, 1_000.0, 3_000.0, 10_000.0];
     let folds = folds.max(2);
@@ -191,7 +196,13 @@ pub(crate) fn adaptive_endpoint_probabilities(
     let mut fold_counts = vec![[[0.0; CELLS]; STRATA]; folds];
     let mut total_counts = [[0.0; CELLS]; STRATA];
     let mut observations = Vec::new();
-    for (read_index, (alignments, _, _)) in store.iter().enumerate() {
+    let use_eq_classes = matches!(
+        ablation,
+        crate::prog_opts::CoverageAblation::EqClassTraining
+            | crate::prog_opts::CoverageAblation::AllCandidates
+    );
+    let mut ambiguous_training_reads = 0usize;
+    for (read_index, (alignments, score_probs, _)) in store.iter().enumerate() {
         if let [alignment] = alignments {
             let len = txps[alignment.ref_id as usize].len.get();
             let stratum = template.stratum(len);
@@ -200,6 +211,20 @@ pub(crate) fn adaptive_endpoint_probabilities(
             fold_counts[fold][stratum][cell] += 1.0;
             total_counts[stratum][cell] += 1.0;
             observations.push((fold, stratum, cell));
+        } else if use_eq_classes && !alignments.is_empty() {
+            let total: f64 = score_probs.iter().map(|value| *value as f64).sum();
+            if total > 0.0 {
+                ambiguous_training_reads += 1;
+                let fold = read_index % folds;
+                for (alignment, score) in alignments.iter().zip(score_probs) {
+                    let len = txps[alignment.ref_id as usize].len.get();
+                    let stratum = template.stratum(len);
+                    let cell = EndpointModel::cell(alignment, len);
+                    let weight = *score as f64 / total;
+                    fold_counts[fold][stratum][cell] += weight;
+                    total_counts[stratum][cell] += weight;
+                }
+            }
         }
     }
 
@@ -232,8 +257,25 @@ pub(crate) fn adaptive_endpoint_probabilities(
         })
         .unwrap_or(PRIOR_MASS);
 
+    // Held-out observations are needed only for selecting the prior. Releasing
+    // them before allocating per-alignment output avoids overlapping two large
+    // buffers on deep libraries.
+    let training_reads = observations.len();
+    drop(observations);
+    drop(fold_counts);
+
     let mut probabilities = Vec::with_capacity(store.total_len());
-    let mut support_gates = Vec::with_capacity(store.total_len());
+    let mut support_gates = Vec::with_capacity(store.len());
+    let use_uncertainty = matches!(
+        ablation,
+        crate::prog_opts::CoverageAblation::UncertaintyGate
+            | crate::prog_opts::CoverageAblation::AllCandidates
+    );
+    let mut uncertainty_gates = if use_uncertainty {
+        Vec::with_capacity(store.len())
+    } else {
+        Vec::new()
+    };
     for (read_index, (alignments, _, _)) in store.iter().enumerate() {
         let fold = read_index % folds;
         let (counts, totals) = &fitted[fold];
@@ -249,6 +291,30 @@ pub(crate) fn adaptive_endpoint_probabilities(
             );
             support += counts[stratum][cell];
         }
+        let uncertainty_gate = if use_uncertainty {
+            let mut fold_disagreement = 0.0;
+            for alignment in alignments {
+                let len = txps[alignment.ref_id as usize].len.get();
+                let stratum = template.stratum(len);
+                let cell = EndpointModel::cell(alignment, len);
+                let mut sum = 0.0;
+                let mut sum_sq = 0.0;
+                for (fold_counts, fold_totals) in &fitted {
+                    let value = (fold_counts[stratum][cell] + selected_prior_mass / CELLS as f64)
+                        / (fold_totals[stratum] + selected_prior_mass);
+                    sum += value;
+                    sum_sq += value * value;
+                }
+                let mean = sum / fitted.len() as f64;
+                if mean > 0.0 {
+                    fold_disagreement +=
+                        (sum_sq / fitted.len() as f64 - mean * mean).max(0.0) / mean.powi(2);
+                }
+            }
+            1.0 / (1.0 + fold_disagreement / alignments.len().max(1) as f64)
+        } else {
+            1.0
+        };
         let sum: f64 = local.iter().sum();
         if sum > 0.0 && sum.is_finite() {
             local.iter_mut().for_each(|value| *value /= sum);
@@ -257,16 +323,21 @@ pub(crate) fn adaptive_endpoint_probabilities(
         }
         let mean_support = support / alignments.len().max(1) as f64;
         let gate = mean_support / (mean_support + support_scale);
-        support_gates.extend(std::iter::repeat_n(gate, local.len()));
+        support_gates.push(gate as f32);
+        if use_uncertainty {
+            uncertainty_gates.push(uncertainty_gate as f32);
+        }
         probabilities.extend(local);
     }
 
     AdaptiveEndpointProbabilities {
         probabilities,
         support_gates,
-        training_reads: observations.len(),
+        training_reads,
         selected_prior_mass,
         folds,
+        uncertainty_gates,
+        ambiguous_training_reads,
     }
 }
 

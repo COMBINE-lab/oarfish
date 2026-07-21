@@ -1,6 +1,6 @@
+use crate::prog_opts::ProjProbSource;
 use crate::util::constants::EMPTY_READ_NAME;
 use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
-use crate::prog_opts::ProjProbSource;
 use crate::util::projection::projected_to_records;
 use bramble_rs::g2t::G2TTree;
 use bramble_rs::{GenomicAlignment, ProjectionConfig, ProjectionContext, project_group_with};
@@ -132,7 +132,10 @@ pub fn read_and_verify_genome_header<R: io::BufRead>(
     }
 
     let progs: Vec<_> = header.programs().roots().map(|(prog, _)| prog).collect();
-    info!("genome BAM @PG program(s): {:?}; proceeding with projection.", progs);
+    info!(
+        "genome BAM @PG program(s): {:?}; proceeding with projection.",
+        progs
+    );
     Ok(header)
 }
 
@@ -648,7 +651,15 @@ pub fn parse_genome_alignments<R: io::BufRead>(
         } else {
             if !prev_read.is_empty()
                 && project_and_add_group(
-                    store, txps, g2t, proj_config, beta, prob_source, &mut pctx, &prev_read, &records_for_read,
+                    store,
+                    txps,
+                    g2t,
+                    proj_config,
+                    beta,
+                    prob_source,
+                    &mut pctx,
+                    &prev_read,
+                    &records_for_read,
                 )
             {
                 add_read_name(&records_for_read);
@@ -661,9 +672,7 @@ pub fn parse_genome_alignments<R: io::BufRead>(
             prev_read = rstring;
             if rg_num < check_order_thresh {
                 if !read_name_map.insert(prev_read.clone()) {
-                    error!(
-                        "It appears that the input genome BAM file is not name-collated."
-                    );
+                    error!("It appears that the input genome BAM file is not name-collated.");
                     anyhow::bail!(
                         "You appear to have provided a coordinate-sorted genome BAM, but genome-projection\n\
                          mode requires a BAM collated by read name. Alignment records for read {} were\n\
@@ -681,7 +690,15 @@ pub fn parse_genome_alignments<R: io::BufRead>(
 
     if !records_for_read.is_empty()
         && project_and_add_group(
-            store, txps, g2t, proj_config, beta, prob_source, &mut pctx, &prev_read, &records_for_read,
+            store,
+            txps,
+            g2t,
+            proj_config,
+            beta,
+            prob_source,
+            &mut pctx,
+            &prev_read,
+            &records_for_read,
         )
     {
         add_read_name(&records_for_read);

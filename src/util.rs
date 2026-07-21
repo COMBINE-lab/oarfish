@@ -13,6 +13,7 @@ pub mod logistic_probability;
 pub mod mapper;
 pub mod normalize_probability;
 pub mod oarfish_types;
+pub mod pacbio_endpoint_probability;
 pub mod parquet_utils;
 pub mod projection;
 pub mod read_function;

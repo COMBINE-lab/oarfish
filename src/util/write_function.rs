@@ -339,6 +339,69 @@ pub fn write_out_prob(
     Ok(())
 }
 
+/// Write raw candidate-relative signals for coverage-model development.
+///
+/// The candidate arrays preserve equivalence classes while deterministic
+/// sampling bounds output volume. Probabilities are the alignment-score and
+/// final coverage terms before abundance is applied by the EM.
+pub fn write_coverage_signals(
+    output: &PathBuf,
+    emi: &EMInfo,
+    names_vec: SwapVec<String>,
+    txps_name: &[String],
+    sample_rate: usize,
+) -> anyhow::Result<()> {
+    if let Some(parent) = output.parent() {
+        if parent != Path::new("") {
+            create_dir_all(parent)?;
+        }
+    }
+    let path = output.with_additional_extension(".coverage_signals.tsv");
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)?;
+    let mut writer = BufWriter::with_capacity(1024 * 1024, file);
+    writeln!(
+        writer,
+        "read\tread_index\teq_size\ttranscripts\tlengths\tstarts\tends\tstrands\tscore_probs\tcoverage_probs"
+    )?;
+    let rate = sample_rate.max(1);
+    for (read_index, ((alns, score, coverage), name)) in
+        emi.eq_map.iter().zip(names_vec.into_iter()).enumerate()
+    {
+        if read_index % rate != 0 {
+            continue;
+        }
+        let read = name.expect("could not extract read name");
+        let join = |values: Vec<String>| values.join(",");
+        writeln!(
+            writer,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            read.trim_end_matches('\0'),
+            read_index,
+            alns.len(),
+            join(
+                alns.iter()
+                    .map(|a| txps_name[a.ref_id as usize].clone())
+                    .collect()
+            ),
+            join(
+                alns.iter()
+                    .map(|a| emi.txp_info[a.ref_id as usize].len.get().to_string())
+                    .collect()
+            ),
+            join(alns.iter().map(|a| a.start.to_string()).collect()),
+            join(alns.iter().map(|a| a.end.to_string()).collect()),
+            join(alns.iter().map(|a| format!("{:?}", a.strand)).collect()),
+            join(score.iter().map(|p| format!("{p:.8}")).collect()),
+            join(coverage.iter().map(|p| format!("{p:.12}")).collect()),
+        )?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::prob_display_decimals;

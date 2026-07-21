@@ -118,7 +118,9 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
                 .logistic_growth_rate(args.growth_rate)
-                .write_assignment_probs(args.write_assignment_probs.is_some())
+                .write_assignment_probs(
+                    args.write_assignment_probs.is_some() || args.write_coverage_signals,
+                )
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
                 .build())
@@ -154,7 +156,9 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .which_strand(bio_types::strand::Strand::Forward)
                 .model_coverage(args.model_coverage)
                 .logistic_growth_rate(args.growth_rate)
-                .write_assignment_probs(args.write_assignment_probs.is_some())
+                .write_assignment_probs(
+                    args.write_assignment_probs.is_some() || args.write_coverage_signals,
+                )
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
                 .build())
@@ -170,7 +174,9 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .which_strand(args.strand_filter)
                 .model_coverage(args.model_coverage)
                 .logistic_growth_rate(args.growth_rate)
-                .write_assignment_probs(args.write_assignment_probs.is_some())
+                .write_assignment_probs(
+                    args.write_assignment_probs.is_some() || args.write_coverage_signals,
+                )
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
                 .build())
@@ -369,13 +375,25 @@ fn main() -> anyhow::Result<()> {
         anyhow::bail!("--coverage-model degradation currently requires --seq-tech ont-drna");
     }
     if args.coverage_model == crate::prog_opts::CoverageModel::Auto && args.seq_tech.is_none() {
-        anyhow::bail!("--coverage-model auto requires --seq-tech so it can select a technology kernel");
+        anyhow::bail!(
+            "--coverage-model auto requires --seq-tech so it can select a technology kernel"
+        );
+    }
+    if args.coverage_ablation == crate::prog_opts::CoverageAblation::PacbioPhysicalEndpoint
+        && !matches!(
+            args.seq_tech,
+            Some(crate::prog_opts::SequencingTech::PacBio)
+                | Some(crate::prog_opts::SequencingTech::PacBioHifi)
+        )
+    {
+        anyhow::bail!(
+            "--coverage-ablation pacbio-physical-endpoint requires PacBio sequencing technology"
+        );
     }
     if args.degradation_kernel != crate::prog_opts::DegradationKernel::Constant
         && (!matches!(
             args.coverage_model,
-            crate::prog_opts::CoverageModel::Degradation
-                | crate::prog_opts::CoverageModel::Auto
+            crate::prog_opts::CoverageModel::Degradation | crate::prog_opts::CoverageModel::Auto
         ) || args.seq_tech != Some(crate::prog_opts::SequencingTech::OntDRNA))
     {
         anyhow::bail!(

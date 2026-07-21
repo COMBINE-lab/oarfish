@@ -12,7 +12,9 @@ use crate::util::oarfish_types::{
 };
 use crate::util::projection::{mapping_to_genomic_alignment, projected_to_records};
 use crate::util::read_function::read_short_quant_vec;
-use crate::util::write_function::{write_infrep_file, write_out_prob, write_output};
+use crate::util::write_function::{
+    write_coverage_signals, write_infrep_file, write_out_prob, write_output,
+};
 use crate::{logistic_prob, normalize_read_probs};
 use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use bramble_rs::ProjectionConfig;
@@ -87,6 +89,9 @@ fn get_json_info(
         "coverage_folds": args.coverage_folds,
         "degradation_kernel": args.degradation_kernel,
         "coverage_max_bayes_factor": args.coverage_max_bayes_factor,
+        "coverage_ablation": args.coverage_ablation,
+        "coverage_warmup_iterations": args.coverage_warmup_iterations,
+        "coverage_abundance_midpoint_per_million": args.coverage_abundance_midpoint_per_million,
         "sequencing_technology": args.seq_tech,
         "coverage_diagnostics": coverage_diagnostics,
         "filter_options" : &emi.eq_map.filter_opts,
@@ -104,6 +109,8 @@ fn get_json_info(
         "threads": &args.threads,
         "filter_group": &args.filter_group,
         "write_assignment_probs": &emi.eq_map.filter_opts.write_assignment_probs_type,
+        "write_coverage_signals": args.write_coverage_signals,
+        "coverage_signal_sample_rate": args.coverage_signal_sample_rate,
         "short_quant": &args.short_quant,
         "num_bootstraps": &args.num_bootstraps,
         "digest": seqcol_digest.to_json()
@@ -132,6 +139,9 @@ fn perform_inference_and_write_output(
     };
 
     let coverage_start = std::time::Instant::now();
+    let mut warmup_abundances = None;
+    let mut physical_creation_guard = None;
+    let mut physical_warmup_diagnostics = None;
     let mut coverage_diagnostics = json!({});
     if args.coverage_model == crate::prog_opts::CoverageModel::Logistic {
         //obtaining the Cumulative Distribution Function (CDF) for each transcript
@@ -147,7 +157,6 @@ fn perform_inference_and_write_output(
     } else if args.coverage_model == crate::prog_opts::CoverageModel::Hybrid {
         logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
         normalize_read_probs(store, txps, &args.bin_width);
-        let logistic = store.coverage_probabilities.clone();
         let endpoint = crate::util::endpoint_probability::endpoint_probabilities(
             store,
             txps,
@@ -162,7 +171,6 @@ fn perform_inference_and_write_output(
         );
         crate::util::hybrid_probability::apply_hybrid_probabilities(
             store,
-            &logistic,
             endpoint,
             args.logistic_weight,
             args.endpoint_weight,
@@ -174,28 +182,115 @@ fn perform_inference_and_write_output(
                 Some(crate::prog_opts::SequencingTech::OntDRNA)
             ))
     {
+        let effective_ablation = if args.coverage_model == crate::prog_opts::CoverageModel::Auto
+            && matches!(
+                args.seq_tech,
+                Some(crate::prog_opts::SequencingTech::PacBio)
+                    | Some(crate::prog_opts::SequencingTech::PacBioHifi)
+            )
+            && matches!(
+                args.coverage_ablation,
+                crate::prog_opts::CoverageAblation::Full
+                    | crate::prog_opts::CoverageAblation::AbundanceBlend
+            ) {
+            crate::prog_opts::CoverageAblation::NoEndpoint
+        } else {
+            args.coverage_ablation
+        };
         logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
         normalize_read_probs(store, txps, &args.bin_width);
-        let logistic = store.coverage_probabilities.clone();
-        let endpoint = crate::util::endpoint_probability::adaptive_endpoint_probabilities(
-            store,
-            txps,
-            args.coverage_folds,
-            args.endpoint_support_scale,
-        );
+        let (endpoint, physical_diagnostics) = if effective_ablation
+            == crate::prog_opts::CoverageAblation::PacbioPhysicalEndpoint
+            && matches!(
+                args.seq_tech,
+                Some(crate::prog_opts::SequencingTech::PacBio)
+                    | Some(crate::prog_opts::SequencingTech::PacBioHifi)
+            ) {
+            let warmup_start = std::time::Instant::now();
+            let logistic_probabilities = store.coverage_probabilities.clone();
+            let baseline_endpoint =
+                crate::util::endpoint_probability::adaptive_endpoint_probabilities(
+                    store,
+                    txps,
+                    args.coverage_folds,
+                    args.endpoint_support_scale,
+                    crate::prog_opts::CoverageAblation::NoEndpoint,
+                );
+            crate::util::hybrid_probability::apply_adaptive_probabilities(
+                store,
+                baseline_endpoint,
+                args.logistic_weight,
+                args.endpoint_weight,
+                args.coverage_max_bayes_factor,
+                crate::prog_opts::CoverageAblation::NoEndpoint,
+            );
+            let warmup_info = EMInfo {
+                eq_map: store,
+                txp_info: txps,
+                max_iter: args.max_em_iter,
+                convergence_thresh: args.convergence_thresh,
+                // The guarded PacBio anchor commonly reaches the evaluation
+                // limit. Ordinary EM has the cheapest evaluation and matches
+                // the accelerated solutions in this regime.
+                accel: crate::prog_opts::EmAccel::None,
+                init_abundances: None,
+                kde_model: None,
+            };
+            let warmup_result = if args.threads > 1 && store.len() >= 100_000 {
+                em::em_par(&warmup_info, args.threads)
+            } else {
+                em::em(&warmup_info, args.threads)
+            };
+            physical_warmup_diagnostics = Some(json!({
+                "kernel": "pacbio_auto_no_endpoint_baseline",
+                "evaluations": warmup_result.evaluations,
+                "converged": warmup_result.converged,
+                "seconds": warmup_start.elapsed().as_secs_f64(),
+            }));
+            warmup_abundances = Some(warmup_result.counts);
+            store.coverage_probabilities = logistic_probabilities;
+            let (endpoint, diagnostics, protected) =
+                crate::util::pacbio_endpoint_probability::physical_endpoint_probabilities(
+                    store, txps,
+                );
+            physical_creation_guard = Some(protected);
+            (endpoint, Some(diagnostics))
+        } else {
+            (
+                crate::util::endpoint_probability::adaptive_endpoint_probabilities(
+                    store,
+                    txps,
+                    args.coverage_folds,
+                    args.endpoint_support_scale,
+                    effective_ablation,
+                ),
+                None,
+            )
+        };
         let diagnostics = crate::util::hybrid_probability::apply_adaptive_probabilities(
             store,
-            &logistic,
             endpoint,
             args.logistic_weight,
             args.endpoint_weight,
             args.coverage_max_bayes_factor,
+            effective_ablation,
         );
         info!(?diagnostics, "applied adaptive coverage model");
         coverage_diagnostics = if args.coverage_model == crate::prog_opts::CoverageModel::Auto {
+            let technology_kernel = if matches!(
+                args.seq_tech,
+                Some(crate::prog_opts::SequencingTech::PacBio)
+                    | Some(crate::prog_opts::SequencingTech::PacBioHifi)
+            ) {
+                "pacbio_adaptive_logistic"
+            } else {
+                "cross_fitted_adaptive_endpoint"
+            };
             json!({
-                "technology_kernel": "cross_fitted_adaptive_endpoint",
+                "technology_kernel": technology_kernel,
+                "effective_ablation": effective_ablation,
                 "adaptive": diagnostics,
+                "physical_endpoint": physical_diagnostics,
             })
         } else {
             serde_json::to_value(diagnostics)?
@@ -209,7 +304,6 @@ fn perform_inference_and_write_output(
     {
         logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
         normalize_read_probs(store, txps, &args.bin_width);
-        let logistic = store.coverage_probabilities.clone();
         let (endpoint, degradation_diagnostics) =
             crate::util::degradation_probability::degradation_adjusted_endpoint_probabilities(
                 store,
@@ -217,14 +311,15 @@ fn perform_inference_and_write_output(
                 args.coverage_folds,
                 args.endpoint_support_scale,
                 args.degradation_kernel,
+                args.coverage_ablation,
             );
         let adaptive_diagnostics = crate::util::hybrid_probability::apply_adaptive_probabilities(
             store,
-            &logistic,
             endpoint,
             args.logistic_weight,
             args.endpoint_weight,
             args.coverage_max_bayes_factor,
+            args.coverage_ablation,
         );
         info!(
             ?degradation_diagnostics,
@@ -236,6 +331,42 @@ fn perform_inference_and_write_output(
             "degradation": degradation_diagnostics,
             "adaptive": adaptive_diagnostics,
         });
+    }
+    if matches!(
+        args.coverage_ablation,
+        crate::prog_opts::CoverageAblation::AbundanceBlend
+    ) {
+        let warmup_start = std::time::Instant::now();
+        let previous_model_coverage = store.filter_opts.model_coverage;
+        store.filter_opts.model_coverage = false;
+        let warmup_info = EMInfo {
+            eq_map: store,
+            txp_info: txps,
+            max_iter: args.coverage_warmup_iterations.max(2),
+            convergence_thresh: args.convergence_thresh,
+            // SQUAREM is both faster and substantially less path-dependent
+            // than DAAREM for the coverage-free warm start on highly
+            // non-identifiable equivalence classes.
+            accel: crate::prog_opts::EmAccel::Squarem,
+            init_abundances: None,
+            kde_model: None,
+        };
+        let warmup_result = if args.threads > 4 {
+            em::em_par(&warmup_info, args.threads)
+        } else {
+            em::em(&warmup_info, args.threads)
+        };
+        store.filter_opts.model_coverage = previous_model_coverage;
+        let warmup_seconds = warmup_start.elapsed().as_secs_f64();
+        coverage_diagnostics["abundance_warmup"] = json!({
+            "evaluations": warmup_result.evaluations,
+            "converged": warmup_result.converged,
+            "seconds": warmup_seconds,
+        });
+        warmup_abundances = Some(warmup_result.counts);
+    }
+    if let Some(diagnostics) = physical_warmup_diagnostics {
+        coverage_diagnostics["abundance_warmup"] = diagnostics;
     }
     let coverage_time = coverage_start.elapsed();
 
@@ -254,9 +385,26 @@ fn perform_inference_and_write_output(
 
     // if we are seeding the quantification estimates with short read
     // abundances, then read those in here.
-    let init_abundances = args.short_quant.as_ref().map(|sr_path| {
-        read_short_quant_vec(sr_path, txps_name).unwrap_or_else(|e| panic!("{}", e))
-    });
+    let init_abundances = args
+        .short_quant
+        .as_ref()
+        .map(|sr_path| read_short_quant_vec(sr_path, txps_name).unwrap_or_else(|e| panic!("{}", e)))
+        .or_else(|| {
+            if physical_creation_guard.is_none() {
+                warmup_abundances.clone()
+            } else {
+                None
+            }
+        });
+    let blend_reference = if matches!(
+        args.coverage_ablation,
+        crate::prog_opts::CoverageAblation::AbundanceBlend
+    ) || physical_creation_guard.is_some()
+    {
+        warmup_abundances
+    } else {
+        None
+    };
 
     // wrap up all of the relevant information we need for estimation
     // in an EMInfo struct and then call the EM algorithm.
@@ -286,12 +434,64 @@ fn perform_inference_and_write_output(
     }
 
     let em_start = std::time::Instant::now();
-    let em_result = if args.threads > 4 {
+    let use_parallel_em = args.threads > 4
+        || (physical_creation_guard.is_some() && args.threads > 1 && store.len() >= 100_000);
+    let mut em_result = if use_parallel_em {
         em::em_par(&emi, args.threads)
     } else {
         em::em(&emi, args.threads)
     };
     let em_time = em_start.elapsed();
+    if let Some(reference) = blend_reference {
+        if let Some(protected) = physical_creation_guard {
+            let additive = (store.num_aligned_reads() as f64 * 10.0 / 1_000_000.0).max(1.0);
+            let minimum_extreme_count = store.num_aligned_reads() as f64 * 0.0025;
+            let mut clamped = 0usize;
+            for ((count, &baseline), &is_protected) in
+                em_result.counts.iter_mut().zip(&reference).zip(&protected)
+            {
+                if is_protected {
+                    let maximum = baseline.max(0.0) * 100.0 + additive;
+                    if *count > maximum && *count > minimum_extreme_count {
+                        *count = maximum;
+                        clamped += 1;
+                    }
+                }
+            }
+            coverage_diagnostics["physical_creation_guard"] = json!({
+                "protected_transcripts": protected.iter().filter(|&&value| value).count(),
+                "clamped_transcripts": clamped,
+                "maximum_fold_creation": 100.0,
+                "additive_cpm": 10.0,
+                "minimum_extreme_library_fraction": 0.0025,
+            });
+        } else {
+            let midpoint = (store.num_aligned_reads() as f64
+                * args.coverage_abundance_midpoint_per_million
+                / 1_000_000.0)
+                .max(1.0);
+            let mut gate_sum = 0.0;
+            for (count, &baseline) in em_result.counts.iter_mut().zip(&reference) {
+                let ratio = baseline.max(0.0) / midpoint;
+                let ratio4 = ratio * ratio * ratio * ratio;
+                let gate = 0.25 + 0.75 * ratio4 / (1.0 + ratio4);
+                *count = baseline + gate * (*count - baseline);
+                gate_sum += gate;
+            }
+            coverage_diagnostics["abundance_blend"] = json!({
+                "midpoint_count": midpoint,
+                "mean_gate": gate_sum / em_result.counts.len().max(1) as f64,
+            });
+        }
+        let total: f64 = em_result.counts.iter().sum();
+        if total > 0.0 {
+            let scale = store.num_aligned_reads() as f64 / total;
+            em_result
+                .counts
+                .iter_mut()
+                .for_each(|count| *count *= scale);
+        }
+    }
     let counts = &em_result.counts;
 
     let aux_txp_counts = crate::util::aux_counts::get_aux_counts(store, txps)?;
@@ -340,7 +540,17 @@ fn perform_inference_and_write_output(
         write_infrep_file(args.output.as_ref().expect("present"), bs_fields, chunk)?;
     }
 
-    if args.write_assignment_probs.is_some() {
+    if args.write_coverage_signals {
+        let name_vec =
+            name_vec.expect("cannot write coverage signals without a valid vector of read names");
+        write_coverage_signals(
+            args.output.as_ref().expect("present"),
+            &emi,
+            name_vec,
+            txps_name,
+            args.coverage_signal_sample_rate,
+        )?;
+    } else if args.write_assignment_probs.is_some() {
         let name_vec = name_vec
             .expect("cannot write assignment probabilities without valid vector of read names");
         write_out_prob(

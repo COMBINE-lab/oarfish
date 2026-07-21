@@ -141,6 +141,8 @@ EM:
 `endpoint` model learns joint transcript-relative 5′ and 3′ alignment gaps from
 single-candidate reads. See [the staged evaluation protocol](evaluation.md)
 and [current coverage-model results](coverage-evaluation-2026-07-19.md).
+The default-versus-abundance-blend decision is documented in the
+[expanded truth-bearing benchmark](coverage-default-benchmark-expansion-2026-07-20.md).
 The selected hybrid weight sweep is documented in
 [hybrid coverage evaluation](hybrid-evaluation-2026-07-19.md).
 
@@ -162,6 +164,10 @@ The frozen-parameter degradation and PacBio checks are recorded in the
 The subsequent 24-library, eight-cell-line evaluation and depth confirmation
 are recorded in the
 [LongBench coverage evaluation](longbench-coverage-evaluation-2026-07-19.md).
+
+The annotation-free component and candidate-model assessment, including
+accuracy, runtime, and peak-memory ablations, is recorded in the
+[coverage-component ablation](coverage-component-ablation-2026-07-20.md).
 The follow-on correction-weight and technical-truncation experiments are in the
 [competing-risk degradation evaluation](competing-risk-degradation-evaluation-2026-07-20.md).
 The bounded beta and piecewise alternatives are evaluated in the
@@ -176,13 +182,15 @@ kernel is specific to ONT direct RNA; cDNA and PacBio should continue to use
 `adaptive` until their protocol-specific kernels have been validated. See the
 [degradation-model evaluation](degradation-model-evaluation-2026-07-19.md).
 
-`--coverage-model auto --seq-tech <TECH>` is the preferred experimental entry
-point when coverage correction is desired. For ONT direct RNA it learns whether
-degradation correction is supported, its strength, and the per-read posterior;
-when unsupported it reduces exactly to adaptive. ONT cDNA and PacBio currently
-dispatch to the cross-fitted adaptive endpoint kernel. BAM inputs require
-`--seq-tech` in auto mode because the protocol cannot be inferred safely from
-alignment records.
+`--coverage-model auto --seq-tech <TECH>` is the recommended entry point for
+bulk coverage correction. For ONT direct RNA it learns whether degradation
+correction is supported, its strength, and the per-read posterior; when
+unsupported it reduces to adaptive coverage evidence. ONT cDNA uses the
+adaptive logistic-plus-endpoint kernel. PacBio uses adaptive logistic evidence
+without endpoint correction, which was safer across the PacBio panel. BAM
+inputs require `--seq-tech` in auto mode because the protocol cannot be
+inferred safely from alignment records. The CLI default remains `none`, so
+workflows should request `auto` explicitly.
 
 > The block above is abridged for readability; run `oarfish --help` for the exact, complete option text for your installed version.
 
@@ -194,7 +202,8 @@ Assume you have ONT cDNA reads in `sample1_reads.fq.gz` and a *transcriptome* re
 
 ```bash
 $ minimap2 -t 16 --eqx -N 100 -ax map-ont transcripts.fa sample1_reads.fq.gz | samtools view -@4 -b -o alignments.bam
-$ oarfish -j 16 -a alignments.bam -o sample1 --filter-group no-filters --model-coverage
+$ oarfish -j 16 -a alignments.bam -o sample1 --filter-group no-filters \
+    --seq-tech ont-cdna --coverage-model auto
 ```
 
 ### Read-mode example (oarfish maps to the transcriptome)
@@ -202,16 +211,20 @@ $ oarfish -j 16 -a alignments.bam -o sample1 --filter-group no-filters --model-c
 Here `oarfish` maps the reads to the transcriptome for you (no external aligner needed):
 
 ```bash
-$ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
+$ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa \
+    --seq-tech ont-cdna -o sample1 --filter-group no-filters --coverage-model auto
 ```
 
 If you will quantify more than one sample against the same reference, save the index that the above command builds and reuse it:
 
 ```bash
 # build + quantify, writing the index out
-$ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa --index-out transcripts.oar --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
+$ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa \
+    --index-out transcripts.oar --seq-tech ont-cdna -o sample1 \
+    --filter-group no-filters --coverage-model auto
 # subsequent samples reuse the index
-$ oarfish -j 16 --reads sample2_reads.fq.gz --index transcripts.oar --seq-tech ont-cdna -o sample2 --filter-group no-filters --model-coverage
+$ oarfish -j 16 --reads sample2_reads.fq.gz --index transcripts.oar \
+    --seq-tech ont-cdna -o sample2 --filter-group no-filters --coverage-model auto
 ```
 
 ### Genome read-projection example (reads → genome → transcripts)

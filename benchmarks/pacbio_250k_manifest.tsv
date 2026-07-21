@@ -1,0 +1,4 @@
+sample	bam	technology	truth	truth_type
+H69-pb-250k	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/longbench/bam/H69-pb-first250k.name.bam	pac-bio	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/longbench/illumina/H69.tsv.gz	illumina
+H146-pb-250k	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/longbench/bam/H146-pb-first250k.name.bam	pac-bio	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/longbench/illumina/H146.tsv.gz	illumina
+H526-pb-250k	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/longbench/bam/H526-pb-first250k.name.bam	pac-bio	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/longbench/illumina/H526.tsv.gz	illumina

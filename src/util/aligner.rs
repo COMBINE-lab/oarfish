@@ -33,7 +33,9 @@ pub(crate) type HeaderReaderAlignerDigest = (
 /// Map an oarfish read-mode sequencing tech onto a rammap transcriptome preset.
 fn rammap_txome_preset(seq_tech: &Option<SequencingTech>) -> anyhow::Result<rammap::api::Preset> {
     match seq_tech {
-        Some(SequencingTech::OntCDNA) | Some(SequencingTech::OntDRNA) => Ok(rammap::api::Preset::MapOnt),
+        Some(SequencingTech::OntCDNA) | Some(SequencingTech::OntDRNA) => {
+            Ok(rammap::api::Preset::MapOnt)
+        }
         Some(SequencingTech::PacBio) => Ok(rammap::api::Preset::MapPb),
         Some(SequencingTech::PacBioHifi) => Ok(rammap::api::Preset::MapHifi),
         None => anyhow::bail!("sequencing tech must be provided in read mode, but it was not!"),
@@ -56,7 +58,9 @@ fn rammap_set_index_threads(n: usize) {
 /// Build a SAM header from a built rammap index, emitting one `@SQ` record per
 /// reference sequence in `target_id` order (so a mapping's `target_id` equals
 /// its header reference id).
-fn rammap_make_header(aligner: &rammap::api::Aligner) -> anyhow::Result<noodles_sam::header::Header> {
+fn rammap_make_header(
+    aligner: &rammap::api::Aligner,
+) -> anyhow::Result<noodles_sam::header::Header> {
     let mut header = noodles_sam::header::Header::builder();
     for ts in aligner.index().seqs.iter() {
         header = header.add_reference_sequence(
@@ -240,7 +244,9 @@ pub(crate) fn get_genome_aligner_from_args(
     let preset = match args.seq_tech {
         Some(SequencingTech::PacBioHifi) => rammap::api::Preset::SpliceHq,
         Some(_) => rammap::api::Preset::Splice,
-        None => anyhow::bail!("--seq-tech is required in genome read mode, but it was not provided!"),
+        None => {
+            anyhow::bail!("--seq-tech is required in genome read mode, but it was not provided!")
+        }
     };
 
     let genome_str = genome
@@ -252,7 +258,10 @@ pub(crate) fn get_genome_aligner_from_args(
     let mut aligner = if is_fasta(&genome).unwrap_or(false) {
         rammap::api::Aligner::from_fasta(genome_str, preset)?
     } else {
-        info!("loading prebuilt rammap genome index from {}", genome.display());
+        info!(
+            "loading prebuilt rammap genome index from {}",
+            genome.display()
+        );
         rammap::api::Aligner::from_index(genome_str, preset)?
     };
     aligner.options_mut().filtering.best_n = args.best_n as i32;
@@ -267,7 +276,12 @@ pub(crate) fn get_genome_aligner_from_args(
         info!("loaded splice junctions into the genome index from {}", bs);
     }
 
-    let refnames: Vec<String> = aligner.index().seqs.iter().map(|t| t.name.clone()).collect();
+    let refnames: Vec<String> = aligner
+        .index()
+        .seqs
+        .iter()
+        .map(|t| t.name.clone())
+        .collect();
     info!(
         "genome index contains {} reference sequences",
         refnames.len().to_formatted_string(&Locale::en)

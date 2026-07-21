@@ -14,6 +14,9 @@ pub(crate) struct AdaptiveCoverageDiagnostics {
     pub mean_reliability: f64,
     pub capped_reads: usize,
     pub scored_reads: usize,
+    pub mean_quality_gate: f64,
+    pub mean_uncertainty_gate: f64,
+    pub ambiguous_training_reads: usize,
 }
 
 fn combine_read(
@@ -49,29 +52,25 @@ fn combine_read(
 
 pub(crate) fn apply_hybrid_probabilities(
     store: &mut InMemoryAlignmentStore,
-    logistic: &[f64],
     endpoint: EndpointProbabilities,
     logistic_weight: f64,
     endpoint_weight: f64,
 ) {
-    assert_eq!(logistic.len(), store.total_len());
     assert_eq!(endpoint.probabilities.len(), store.total_len());
-    assert_eq!(endpoint.support_gates.len(), store.total_len());
-    let mut combined = Vec::with_capacity(store.total_len());
-    let mut offset = 0usize;
-    for (alignments, _, _) in store.iter() {
-        let end = offset + alignments.len();
-        let gate = endpoint.support_gates.get(offset).copied().unwrap_or(0.0);
-        combined.extend(combine_read(
-            &logistic[offset..end],
-            &endpoint.probabilities[offset..end],
+    assert_eq!(endpoint.support_gates.len(), store.len());
+    for read_index in 0..store.len() {
+        let start = store.boundaries[read_index];
+        let end = store.boundaries[read_index + 1];
+        let gate = endpoint.support_gates[read_index] as f64;
+        let combined = combine_read(
+            &store.coverage_probabilities[start..end],
+            &endpoint.probabilities[start..end],
             gate,
             logistic_weight,
             endpoint_weight,
-        ));
-        offset = end;
+        );
+        store.coverage_probabilities[start..end].copy_from_slice(&combined);
     }
-    store.coverage_probabilities = combined;
 }
 
 fn jensen_shannon(left: &[f64], right: &[f64]) -> f64 {
@@ -109,47 +108,93 @@ fn cap_bayes_factor(probabilities: &mut [f64], maximum_bayes_factor: f64) -> boo
     true
 }
 
+fn alignment_quality_gate(score_probabilities: &[f32]) -> f64 {
+    if score_probabilities.len() < 2 {
+        return 1.0;
+    }
+    let score_sum: f64 = score_probabilities.iter().map(|p| *p as f64).sum();
+    if score_sum <= 0.0 {
+        return 1.0;
+    }
+    let best = score_probabilities.iter().copied().fold(0.0_f32, f32::max) as f64;
+    let chance = 1.0 / score_probabilities.len() as f64;
+    ((best / score_sum - chance) / (1.0 - chance)).clamp(0.0, 1.0)
+}
+
 pub(crate) fn apply_adaptive_probabilities(
     store: &mut InMemoryAlignmentStore,
-    logistic: &[f64],
     endpoint: AdaptiveEndpointProbabilities,
     logistic_weight: f64,
     endpoint_weight: f64,
     maximum_bayes_factor: f64,
+    ablation: crate::prog_opts::CoverageAblation,
 ) -> AdaptiveCoverageDiagnostics {
-    assert_eq!(logistic.len(), store.total_len());
     assert_eq!(endpoint.probabilities.len(), store.total_len());
-    let mut combined = Vec::with_capacity(store.total_len());
-    let mut offset = 0usize;
+    assert_eq!(endpoint.support_gates.len(), store.len());
     let mut reliability_sum = 0.0;
     let mut capped_reads = 0usize;
     let mut scored_reads = 0usize;
-    for (alignments, _, _) in store.iter() {
-        let end = offset + alignments.len();
-        let logistic_read = &logistic[offset..end];
-        let endpoint_read = &endpoint.probabilities[offset..end];
-        let support = endpoint.support_gates.get(offset).copied().unwrap_or(0.0);
+    let mut quality_sum = 0.0;
+    let mut uncertainty_sum = 0.0;
+    for read_index in 0..store.len() {
+        let start = store.boundaries[read_index];
+        let end = store.boundaries[read_index + 1];
+        let logistic_read = &store.coverage_probabilities[start..end];
+        let endpoint_read = &endpoint.probabilities[start..end];
+        let score_probs = &store.as_probabilities[start..end];
+        let mut support = endpoint.support_gates[read_index] as f64;
         let disagreement = jensen_shannon(logistic_read, endpoint_read);
-        let agreement = (1.0 - disagreement / std::f64::consts::LN_2).clamp(0.0, 1.0);
-        let reliability = support * agreement;
-        let mut local = combine_read(
-            logistic_read,
-            endpoint_read,
-            1.0,
-            logistic_weight,
-            endpoint_weight,
+        let mut agreement = (1.0 - disagreement / std::f64::consts::LN_2).clamp(0.0, 1.0);
+        if ablation == crate::prog_opts::CoverageAblation::NoSupportGate {
+            support = 1.0;
+        }
+        if ablation == crate::prog_opts::CoverageAblation::NoAgreementGate {
+            agreement = 1.0;
+        }
+        let quality = alignment_quality_gate(score_probs);
+        let uncertainty = endpoint
+            .uncertainty_gates
+            .get(read_index)
+            .copied()
+            .unwrap_or(1.0) as f64;
+        let use_quality = matches!(
+            ablation,
+            crate::prog_opts::CoverageAblation::QualityGate
+                | crate::prog_opts::CoverageAblation::AllCandidates
         );
+        let use_uncertainty = matches!(
+            ablation,
+            crate::prog_opts::CoverageAblation::UncertaintyGate
+                | crate::prog_opts::CoverageAblation::AllCandidates
+        );
+        let reliability = support
+            * agreement
+            * if use_quality { quality } else { 1.0 }
+            * if use_uncertainty { uncertainty } else { 1.0 };
+        let lw = if ablation == crate::prog_opts::CoverageAblation::NoLogistic {
+            0.0
+        } else {
+            logistic_weight
+        };
+        let ew = if ablation == crate::prog_opts::CoverageAblation::NoEndpoint {
+            0.0
+        } else {
+            endpoint_weight
+        };
+        let mut local = combine_read(logistic_read, endpoint_read, 1.0, lw, ew);
         let uniform = 1.0 / local.len().max(1) as f64;
         local
             .iter_mut()
             .for_each(|value| *value = (1.0 - reliability) * uniform + reliability * *value);
-        capped_reads += usize::from(cap_bayes_factor(&mut local, maximum_bayes_factor));
+        if ablation != crate::prog_opts::CoverageAblation::NoBayesCap {
+            capped_reads += usize::from(cap_bayes_factor(&mut local, maximum_bayes_factor));
+        }
         reliability_sum += reliability;
         scored_reads += 1;
-        combined.extend(local);
-        offset = end;
+        quality_sum += quality;
+        uncertainty_sum += uncertainty;
+        store.coverage_probabilities[start..end].copy_from_slice(&local);
     }
-    store.coverage_probabilities = combined;
     AdaptiveCoverageDiagnostics {
         training_reads: endpoint.training_reads,
         folds: endpoint.folds,
@@ -157,6 +202,9 @@ pub(crate) fn apply_adaptive_probabilities(
         mean_reliability: reliability_sum / scored_reads.max(1) as f64,
         capped_reads,
         scored_reads,
+        mean_quality_gate: quality_sum / scored_reads.max(1) as f64,
+        mean_uncertainty_gate: uncertainty_sum / scored_reads.max(1) as f64,
+        ambiguous_training_reads: endpoint.ambiguous_training_reads,
     }
 }
 
@@ -190,5 +238,12 @@ mod tests {
     fn disagreement_is_zero_only_for_matching_distributions() {
         assert!(jensen_shannon(&[0.8, 0.2], &[0.8, 0.2]).abs() < 1e-12);
         assert!(jensen_shannon(&[0.99, 0.01], &[0.01, 0.99]) > 0.5);
+    }
+
+    #[test]
+    fn alignment_quality_gate_distinguishes_ties_from_separated_hits() {
+        assert!(alignment_quality_gate(&[1.0, 1.0]).abs() < f64::EPSILON);
+        assert!(alignment_quality_gate(&[1.0, 0.01]) > 0.98);
+        assert_eq!(alignment_quality_gate(&[1.0]), 1.0);
     }
 }

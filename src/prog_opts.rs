@@ -1,4 +1,4 @@
-use clap::{builder::ArgPredicate, Parser};
+use clap::{Parser, builder::ArgPredicate};
 use serde::Serialize;
 use std::fmt;
 use std::path::PathBuf;
@@ -56,6 +56,27 @@ pub enum DegradationKernel {
     Piecewise2,
 }
 
+/// Experimental switches used to measure individual adaptive-coverage terms.
+/// These are intentionally not selected by `auto` until the ablation study
+/// demonstrates an accuracy benefit outside the fitting samples.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
+pub enum CoverageAblation {
+    #[default]
+    Full,
+    NoLogistic,
+    NoEndpoint,
+    NoSupportGate,
+    NoAgreementGate,
+    NoBayesCap,
+    QualityGate,
+    UncertaintyGate,
+    EqClassTraining,
+    /// PacBio-specific intact/truncated/broken physical endpoint mixture.
+    PacbioPhysicalEndpoint,
+    AbundanceBlend,
+    AllCandidates,
+}
+
 fn parse_unit_f64(arg: &str) -> anyhow::Result<f64> {
     let value: f64 = arg
         .parse()
@@ -96,6 +117,12 @@ fn parse_folds(arg: &str) -> anyhow::Result<usize> {
     } else {
         anyhow::bail!("value must be between 2 and 20, but got {}", value)
     }
+}
+
+fn parse_positive_usize(arg: &str) -> anyhow::Result<usize> {
+    let value: usize = arg.parse()?;
+    anyhow::ensure!(value > 0, "value must be positive");
+    Ok(value)
 }
 
 fn parse_strand(arg: &str) -> anyhow::Result<bio_types::strand::Strand> {
@@ -615,6 +642,18 @@ pub struct Args {
     #[arg(long, help_heading = "coverage model", default_value_t = 4.0, value_parser = parse_bayes_factor)]
     pub coverage_max_bayes_factor: f64,
 
+    /// experimental adaptive-coverage ablation or candidate enhancement
+    #[arg(long, help_heading = "coverage model", value_enum, default_value_t = CoverageAblation::Full)]
+    pub coverage_ablation: CoverageAblation,
+
+    /// coverage-free EM evaluations used by abundance-warmup experiments
+    #[arg(long, help_heading = "coverage model", default_value_t = 100)]
+    pub coverage_warmup_iterations: u32,
+
+    /// preliminary counts per million giving half-strength abundance gating
+    #[arg(long, help_heading = "coverage model", default_value_t = 37.0, value_parser = parse_pos_f64)]
+    pub coverage_abundance_midpoint_per_million: f64,
+
     /// if using the coverage model, use this as the value of `k` in the logistic equation
     #[arg(
         short = 'k',
@@ -638,6 +677,26 @@ pub struct Args {
         value_parser = parse_assign_prob_out_value
     )]
     pub write_assignment_probs: Option<ReadAssignmentProbOut>,
+
+    /// Write a sampled, alignment-level coverage diagnostic table. This is an
+    /// analysis facility; it does not alter inference. One out of every
+    /// `--coverage-signal-sample-rate` retained reads is written.
+    #[arg(
+        long,
+        help_heading = "coverage model",
+        conflicts_with_all = ["single_cell", "write_assignment_probs"]
+    )]
+    pub write_coverage_signals: bool,
+
+    /// Deterministic read-index sampling rate for `--write-coverage-signals`.
+    #[arg(
+        long,
+        help_heading = "coverage model",
+        default_value_t = 10,
+        value_parser = parse_positive_usize,
+        requires = "write_coverage_signals"
+    )]
+    pub coverage_signal_sample_rate: usize,
 
     /// minimum posterior probability threshold for a read-transcript assignment to be written
     /// to the .prob file. Accepts a float value between 0.0 and 1.0, or the sentinel value
@@ -811,48 +870,56 @@ mod tests {
         .expect("valid automatic technology options");
         assert_eq!(automatic.coverage_model, CoverageModel::Auto);
         assert_eq!(automatic.seq_tech, Some(super::SequencingTech::PacBioHifi));
-        assert!(Args::try_parse_from([
-            "oarfish",
-            "-a",
-            "reads.bam",
-            "-o",
-            "out",
-            "--coverage-folds",
-            "1"
-        ])
-        .is_err());
-        assert!(Args::try_parse_from([
-            "oarfish",
-            "-a",
-            "reads.bam",
-            "-o",
-            "out",
-            "--coverage-max-bayes-factor",
-            "0.9",
-        ])
-        .is_err());
-        assert!(Args::try_parse_from([
-            "oarfish",
-            "-a",
-            "reads.bam",
-            "-o",
-            "out",
-            "--logistic-weight",
-            "1.1",
-        ])
-        .is_err());
+        assert!(
+            Args::try_parse_from([
+                "oarfish",
+                "-a",
+                "reads.bam",
+                "-o",
+                "out",
+                "--coverage-folds",
+                "1"
+            ])
+            .is_err()
+        );
+        assert!(
+            Args::try_parse_from([
+                "oarfish",
+                "-a",
+                "reads.bam",
+                "-o",
+                "out",
+                "--coverage-max-bayes-factor",
+                "0.9",
+            ])
+            .is_err()
+        );
+        assert!(
+            Args::try_parse_from([
+                "oarfish",
+                "-a",
+                "reads.bam",
+                "-o",
+                "out",
+                "--logistic-weight",
+                "1.1",
+            ])
+            .is_err()
+        );
 
-        assert!(Args::try_parse_from([
-            "oarfish",
-            "-a",
-            "reads.bam",
-            "-o",
-            "out",
-            "--model-coverage",
-            "--coverage-model",
-            "endpoint",
-        ])
-        .is_err());
+        assert!(
+            Args::try_parse_from([
+                "oarfish",
+                "-a",
+                "reads.bam",
+                "-o",
+                "out",
+                "--model-coverage",
+                "--coverage-model",
+                "endpoint",
+            ])
+            .is_err()
+        );
     }
 
     #[test]
