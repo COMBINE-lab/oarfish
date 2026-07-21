@@ -186,8 +186,10 @@ kernel is specific to ONT direct RNA; cDNA and PacBio should continue to use
 bulk coverage correction. For ONT direct RNA it learns whether degradation
 correction is supported, its strength, and the per-read posterior; when
 unsupported it reduces to adaptive coverage evidence. ONT cDNA uses the
-adaptive logistic-plus-endpoint kernel. PacBio uses adaptive logistic evidence
-without endpoint correction, which was safer across the PacBio panel. BAM
+adaptive logistic-plus-endpoint kernel. PacBio uses a learned physical
+intact/truncated/broken endpoint mixture combined with adaptive logistic
+evidence. A coverage-free abundance anchor prevents extreme coverage-only
+creation of endpoint-unidentifiable nested isoforms. BAM
 inputs require `--seq-tech` in auto mode because the protocol cannot be
 inferred safely from alignment records. The CLI default remains `none`, so
 workflows should request `auto` explicitly.

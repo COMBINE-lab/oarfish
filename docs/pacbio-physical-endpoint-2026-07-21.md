@@ -350,19 +350,31 @@ Bootstrap replicates retain their sampling-specific iterator and are not yet
 packed; they are already parallelized across replicates. Raw serial results are
 under `oarfish-evaluation-data/serial-packed-h69-pb-50k-20260721`.
 
+### Promotion to the PacBio auto default
+
+After the nested-isoform guard and packed-EM validation, PacBio and PacBio HiFi
+now select the guarded physical endpoint kernel when users request
+`--coverage-model auto` with the default `full` configuration. The three-sample
+250k confirmation reproduces the explicit physical-model estimates and guard
+decisions: H69 and H526 each clamp the same one extreme nested transcript, H146
+clamps none, and accuracy metrics match the validated opt-in runs. Four-thread
+wall times are 4.98, 4.91, and 5.29 seconds respectively. ONT cDNA and dRNA
+smoke tests retain their prior adaptive and competing-risks kernels. Outputs
+are under `oarfish-evaluation-data/pacbio-physical-auto-default-250k-20260721`
+and `coverage-auto-default-nonpacbio-smoke-20260721`.
+
 ## Decision
 
-Retain the physical model as an experimental PacBio-only option. It is the
-first endpoint candidate to improve Kinnex D and E simultaneously, improves all
-four mean LongBench 50k metrics, and improves every usable metric in two
-additional PacBio datasets. The evidence now generalizes across human
-simulation, real human LongBench libraries, Kinnex SIRV mixtures, and an
-independent public SIRV FLNC library. Do not make it the default yet: the mixed
-250k calibration results (especially H69) show that rare sample-level
-overcorrection remains possible. The next refinement should regularize mixture
-parameters across samples, learn or gate the endpoint weight, and investigate
-whether the 3 nt tolerance boundary is genuinely supported or compensating for
-alignment-coordinate behavior.
+The guarded physical model is now the PacBio kernel selected by
+`--coverage-model auto`. It is the first endpoint candidate to improve Kinnex D
+and E simultaneously, improves all four mean LongBench 50k metrics, and
+improves every usable metric in two additional PacBio datasets. The evidence
+generalizes across human simulation, real human LongBench libraries, Kinnex
+SIRV mixtures, and an independent public SIRV FLNC library. The original
+default blocker was rare coverage-only creation of endpoint-unidentifiable
+nested isoforms, dominated by `MALAT1-256`; the abundance-anchor guard removes
+that failure while preserving the gains. Explicit ablation selections remain
+available for controlled comparisons.
 
 Raw outputs are under `oarfish-evaluation-data/kinnex-wtc11/pacbio-physical-endpoint-20260721`,
 `pacbio-physical-longbench-20260721`, and

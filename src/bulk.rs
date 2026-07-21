@@ -188,12 +188,9 @@ fn perform_inference_and_write_output(
                 Some(crate::prog_opts::SequencingTech::PacBio)
                     | Some(crate::prog_opts::SequencingTech::PacBioHifi)
             )
-            && matches!(
-                args.coverage_ablation,
-                crate::prog_opts::CoverageAblation::Full
-                    | crate::prog_opts::CoverageAblation::AbundanceBlend
-            ) {
-            crate::prog_opts::CoverageAblation::NoEndpoint
+            && args.coverage_ablation == crate::prog_opts::CoverageAblation::Full
+        {
+            crate::prog_opts::CoverageAblation::PacbioPhysicalEndpoint
         } else {
             args.coverage_ablation
         };
@@ -282,7 +279,12 @@ fn perform_inference_and_write_output(
                 Some(crate::prog_opts::SequencingTech::PacBio)
                     | Some(crate::prog_opts::SequencingTech::PacBioHifi)
             ) {
-                "pacbio_adaptive_logistic"
+                if effective_ablation == crate::prog_opts::CoverageAblation::PacbioPhysicalEndpoint
+                {
+                    "pacbio_guarded_physical_endpoint"
+                } else {
+                    "pacbio_adaptive_logistic"
+                }
             } else {
                 "cross_fitted_adaptive_endpoint"
             };
