@@ -401,14 +401,12 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> EMResult {
     // Pack invariant alignment, coverage and density terms once. They are
     // otherwise recomputed twice per alignment on every EM iteration.
     let (eq_iterates, weights) = prepare_equivalence_classes(em_info, false);
-    let mut curr_counts = vec![0.0; em_info.txp_info.len()];
     // Reuse private dense accumulators across all fixed-point evaluations.
     // Capping the shard count avoids excessive memory use on high-core hosts.
     let shard_count = nthreads.clamp(1, 64);
     let mut shards = vec![vec![0.0; em_info.txp_info.len()]; shard_count];
     let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
-        m_step_par(&eq_iterates, &weights, src, &mut curr_counts, &mut shards);
-        dst.copy_from_slice(&curr_counts);
+        m_step_par(&eq_iterates, &weights, src, dst, &mut shards);
     };
     pool.install(|| run_driver(em_info, &mut fixed_point, true))
 }

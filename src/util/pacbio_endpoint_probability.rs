@@ -167,10 +167,11 @@ pub(crate) fn physical_endpoint_probabilities(
         if mark_unidentifiable_short_candidates(alignments, txps, &mut protected) {
             endpoint_unidentifiable_reads += 1;
         }
-        let mut local: Vec<_> = alignments
-            .iter()
-            .map(|alignment| model.likelihood(alignment, txps[alignment.ref_id as usize].len.get()))
-            .collect();
+        let start = probabilities.len();
+        probabilities.extend(alignments.iter().map(|alignment| {
+            model.likelihood(alignment, txps[alignment.ref_id as usize].len.get())
+        }));
+        let local = &mut probabilities[start..];
         let total = local.iter().sum::<f64>();
         if total > 0.0 && total.is_finite() {
             local.iter_mut().for_each(|value| *value /= total);
@@ -178,7 +179,6 @@ pub(crate) fn physical_endpoint_probabilities(
             let uniform = 1.0 / local.len() as f64;
             local.fill(uniform);
         }
-        probabilities.extend(local);
         support_gates.push(support as f32);
     }
     let diagnostics = PhysicalEndpointDiagnostics {

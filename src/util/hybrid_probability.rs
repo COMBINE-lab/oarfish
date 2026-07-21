@@ -19,6 +19,37 @@ pub(crate) struct AdaptiveCoverageDiagnostics {
     pub ambiguous_training_reads: usize,
 }
 
+fn combine_read_into(
+    logistic: &[f64],
+    endpoint: &[f64],
+    support_gate: f64,
+    logistic_weight: f64,
+    endpoint_weight: f64,
+    output: &mut Vec<f64>,
+) {
+    if logistic.is_empty() {
+        output.clear();
+        return;
+    }
+    output.clear();
+    output.extend(logistic.iter().zip(endpoint).map(|(&lp, &ep)| {
+        logistic_weight * lp.max(PROBABILITY_FLOOR).ln()
+            + endpoint_weight * support_gate.clamp(0.0, 1.0) * ep.max(PROBABILITY_FLOOR).ln()
+    }));
+    let maximum = output.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    output
+        .iter_mut()
+        .for_each(|value| *value = (*value - maximum).exp());
+    let sum: f64 = output.iter().sum();
+    if sum.is_finite() && sum > 0.0 {
+        output.iter_mut().for_each(|value| *value /= sum);
+    } else {
+        let uniform = 1.0 / output.len() as f64;
+        output.fill(uniform);
+    }
+}
+
+#[cfg(test)]
 fn combine_read(
     logistic: &[f64],
     endpoint: &[f64],
@@ -26,28 +57,16 @@ fn combine_read(
     logistic_weight: f64,
     endpoint_weight: f64,
 ) -> Vec<f64> {
-    if logistic.is_empty() {
-        return Vec::new();
-    }
-    let mut logs: Vec<f64> = logistic
-        .iter()
-        .zip(endpoint)
-        .map(|(&lp, &ep)| {
-            logistic_weight * lp.max(PROBABILITY_FLOOR).ln()
-                + endpoint_weight * support_gate.clamp(0.0, 1.0) * ep.max(PROBABILITY_FLOOR).ln()
-        })
-        .collect();
-    let maximum = logs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    logs.iter_mut()
-        .for_each(|value| *value = (*value - maximum).exp());
-    let sum: f64 = logs.iter().sum();
-    if sum.is_finite() && sum > 0.0 {
-        logs.iter_mut().for_each(|value| *value /= sum);
-    } else {
-        let uniform = 1.0 / logs.len() as f64;
-        logs.fill(uniform);
-    }
-    logs
+    let mut output = Vec::with_capacity(logistic.len());
+    combine_read_into(
+        logistic,
+        endpoint,
+        support_gate,
+        logistic_weight,
+        endpoint_weight,
+        &mut output,
+    );
+    output
 }
 
 pub(crate) fn apply_hybrid_probabilities(
@@ -58,16 +77,18 @@ pub(crate) fn apply_hybrid_probabilities(
 ) {
     assert_eq!(endpoint.probabilities.len(), store.total_len());
     assert_eq!(endpoint.support_gates.len(), store.len());
+    let mut combined = Vec::new();
     for read_index in 0..store.len() {
         let start = store.boundaries[read_index];
         let end = store.boundaries[read_index + 1];
         let gate = endpoint.support_gates[read_index] as f64;
-        let combined = combine_read(
+        combine_read_into(
             &store.coverage_probabilities[start..end],
             &endpoint.probabilities[start..end],
             gate,
             logistic_weight,
             endpoint_weight,
+            &mut combined,
         );
         store.coverage_probabilities[start..end].copy_from_slice(&combined);
     }
@@ -136,6 +157,7 @@ pub(crate) fn apply_adaptive_probabilities(
     let mut scored_reads = 0usize;
     let mut quality_sum = 0.0;
     let mut uncertainty_sum = 0.0;
+    let mut local = Vec::new();
     for read_index in 0..store.len() {
         let start = store.boundaries[read_index];
         let end = store.boundaries[read_index + 1];
@@ -181,7 +203,7 @@ pub(crate) fn apply_adaptive_probabilities(
         } else {
             endpoint_weight
         };
-        let mut local = combine_read(logistic_read, endpoint_read, 1.0, lw, ew);
+        combine_read_into(logistic_read, endpoint_read, 1.0, lw, ew, &mut local);
         let uniform = 1.0 / local.len().max(1) as f64;
         local
             .iter_mut()

@@ -397,6 +397,10 @@ The `--output` option passed to `oarfish` corresponds to a path prefix (this pre
   * `P.ambig_info.tsv` - a tab separated file listing, for each transcript (in the same order in which they appear in `P.quant`) the number of uniquely mapped, ambiguously mapped, and total reads.  The quantification estimate for each transcript, in general, should reside between the number of uniquely aligned reads and the total number of reads (i.e. these provide, respectively lower and upper bounds for the number of reads assigned to each transcript).  Note that the total in this file is the total number of reads that align to this transcript with a sufficiently high alignment score --- it is _not_, in general, an estimate of the number of reads originating from this transcript as many of those reads can be multimapping and, in fact, potentially better described by other transcripts.
   * `P.prob[.lz4]` - a file encoding the assignment probability of each read to each transcript to which it had a valid alignment (optionally compressed using [`lz4`](https://github.com/lz4/lz4)). This file is optional and is generated only if `--write-assignment-probs` is passed to `oarfish`.
 
+## Runtime profiling
+
+- [Runtime profile and allocation pass (2026-07-21)](runtime-profile-optimization-2026-07-21.md)
+
 ## References
 
 [^Gleeson]: Josie Gleeson, Adrien Leger, Yair D J Prawer, Tracy A Lane, Paul J Harrison, Wilfried Haerty, Michael B Clark, Accurate expression quantification from nanopore direct RNA sequencing with NanoCount, Nucleic Acids Research, Volume 50, Issue 4, 28 February 2022, Page e19, [https://doi.org/10.1093/nar/gkab1129](https://doi.org/10.1093/nar/gkab1129)

@@ -8,7 +8,7 @@ pub fn normalize_read_probs(
     _bin_width: &u32,
 ) {
     let mut normalize_probs_temp: Vec<f64> = vec![];
-    let mut normalized_coverage_prob: Vec<f64> = vec![];
+    let mut normalized_coverage_prob: Vec<f64> = Vec::with_capacity(store.total_len());
 
     info!("normalizing read probabilities");
     //iterate over all alignments in the bam file
