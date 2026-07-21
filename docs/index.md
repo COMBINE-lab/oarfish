@@ -193,6 +193,9 @@ creation of endpoint-unidentifiable nested isoforms. BAM
 inputs require `--seq-tech` in auto mode because the protocol cannot be
 inferred safely from alignment records. The CLI default remains `none`, so
 workflows should request `auto` explicitly.
+The recent-platform regression policy, rejected accuracy candidates, packed
+bootstrap results, and exact weighted-class optimization are documented in the
+[coverage and inference refinement round](coverage-next-round-2026-07-21.md).
 
 > The block above is abridged for readability; run `oarfish --help` for the exact, complete option text for your installed version.
 

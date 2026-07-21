@@ -1,0 +1,6 @@
+cohort	platform	protocol	truth	role	local_data
+LongBench-8x50k	Revio	Kinnex full-length RNA	matched Illumina transcript abundance	primary outer panel	oarfish-evaluation-data/longbench/bam/*-pb-first50k.name.bam
+LongBench-3x250k	Revio	Kinnex full-length RNA	matched Illumina transcript abundance	depth confirmation	oarfish-evaluation-data/longbench/bam/{H69,H146,H526}-pb-first250k.name.bam
+WTC11-day0-day5	Revio	Kinnex full-length RNA	SIRV E1/E2 concentrations and matched Illumina	primary mixture panel	oarfish-evaluation-data/kinnex-wtc11/extracted
+Independent-human-simulation	PacBio HiFi model	full-length simulated reads	known transcript counts	mechanism control	oarfish-evaluation-data/coverage-broader-20260720/independent-sim
+Public-SIRV-FLNC	PacBio FLNC	full-length cDNA	SIRV E0 concentrations	secondary protocol control	oarfish-evaluation-data/coverage-broader-20260720/pacbio/flnc.bam
