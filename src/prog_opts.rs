@@ -48,6 +48,18 @@ pub enum CensoringModel {
     Auto,
 }
 
+/// Post-inference preservation of low-abundance rank structure.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
+pub enum RankBlend {
+    None,
+    /// Blend low-abundance estimates toward a coverage-free warm-up.
+    Fixed,
+    /// Apply the blend only when the learned censoring scale indicates that
+    /// coverage correction is uncertain enough to benefit from rank protection.
+    #[default]
+    Auto,
+}
+
 /// Coverage evidence included in bulk read-assignment likelihoods.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
 pub enum CoverageModel {
@@ -541,6 +553,14 @@ pub struct Args {
     #[arg(long, value_enum, default_value_t = CensoringModel::Auto, help_heading = "filters")]
     pub censoring_model: CensoringModel,
 
+    /// abundance-dependent rank preservation toward a preliminary coverage-free estimate
+    #[arg(long, value_enum, default_value_t = RankBlend::Auto, help_heading = "coverage model")]
+    pub rank_blend: RankBlend,
+
+    /// minimum fraction of the corrected estimate retained by rank blending
+    #[arg(long, default_value_t = 0.8, value_parser = parse_unit_f64, help_heading = "coverage model")]
+    pub rank_blend_floor: f64,
+
     /// genome mode: per-internal-junction-mismatch discount in (0,1] applied to a
     /// transcript's projection similarity (sharpens isoform discrimination).
     /// 1.0 = off (default).
@@ -685,7 +705,7 @@ pub struct Args {
     pub coverage_warmup_iterations: u32,
 
     /// preliminary counts per million giving half-strength abundance gating
-    #[arg(long, help_heading = "coverage model", default_value_t = 37.0, value_parser = parse_pos_f64)]
+    #[arg(long, help_heading = "coverage model", default_value_t = 300.0, value_parser = parse_pos_f64)]
     pub coverage_abundance_midpoint_per_million: f64,
 
     /// if using the coverage model, use this as the value of `k` in the logistic equation

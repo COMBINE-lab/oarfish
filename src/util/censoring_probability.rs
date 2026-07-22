@@ -44,10 +44,10 @@ fn unexplained_clip(alignment: &AlnInfo, transcript_length: usize) -> u32 {
     alignment.left_clip.min(left_gap) + alignment.right_clip.min(right_gap)
 }
 
-pub(crate) fn apply_censoring_probabilities(
-    store: &mut InMemoryAlignmentStore,
+pub(crate) fn estimate_censor_scale(
+    store: &InMemoryAlignmentStore,
     transcripts: &[TranscriptInfo],
-) -> CensoringDiagnostics {
+) -> f64 {
     let mut training_reads = 0usize;
     let mut training_clip = 0u64;
     for read_index in 0..store.len() {
@@ -61,9 +61,24 @@ pub(crate) fn apply_censoring_probabilities(
             training_reads += 1;
         }
     }
-    let scale = ((training_clip as f64 + PRIOR_OBSERVATIONS * PRIOR_SCALE_NT)
+    ((training_clip as f64 + PRIOR_OBSERVATIONS * PRIOR_SCALE_NT)
         / (training_reads as f64 + PRIOR_OBSERVATIONS))
-        .clamp(25.0, 500.0);
+        .clamp(25.0, 500.0)
+}
+
+pub(crate) fn apply_censoring_probabilities(
+    store: &mut InMemoryAlignmentStore,
+    transcripts: &[TranscriptInfo],
+) -> CensoringDiagnostics {
+    let mut training_reads = 0usize;
+    for read_index in 0..store.len() {
+        let start = store.boundaries[read_index];
+        let end = store.boundaries[read_index + 1];
+        if end - start == 1 {
+            training_reads += 1;
+        }
+    }
+    let scale = estimate_censor_scale(store, transcripts);
     let reliability = training_reads as f64 / (training_reads as f64 + 1_000.0);
     let mut ambiguous_reads = 0;
     let mut informative_reads = 0;

@@ -74,6 +74,9 @@ def main():
     parser.add_argument("--candidate-pruning", choices=("none", "dominance"), default="none")
     parser.add_argument("--dominance-bayes-factor", type=float, default=2.0)
     parser.add_argument("--censoring-model", choices=("none", "adaptive"), default="none")
+    parser.add_argument("--rank-blend", choices=("none", "fixed", "auto"), default="auto")
+    parser.add_argument("--rank-blend-floor", type=float, default=0.8)
+    parser.add_argument("--coverage-abundance-midpoint-per-million", type=float, default=300.0)
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -112,6 +115,10 @@ def main():
                     "--candidate-pruning", args.candidate_pruning,
                     "--dominance-bayes-factor", str(args.dominance_bayes_factor),
                     "--censoring-model", args.censoring_model,
+                    "--rank-blend", args.rank_blend,
+                    "--rank-blend-floor", str(args.rank_blend_floor),
+                    "--coverage-abundance-midpoint-per-million",
+                    str(args.coverage_abundance_midpoint_per_million),
                 ]
                 with prefix.with_suffix(".log").open("w", encoding="utf-8") as log:
                     subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
