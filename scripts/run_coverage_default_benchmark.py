@@ -71,6 +71,9 @@ def main():
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--models", nargs="+", choices=MODELS, default=list(MODELS))
     parser.add_argument("--samples", nargs="+")
+    parser.add_argument("--candidate-pruning", choices=("none", "dominance"), default="none")
+    parser.add_argument("--dominance-bayes-factor", type=float, default=2.0)
+    parser.add_argument("--censoring-model", choices=("none", "adaptive"), default="none")
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -106,6 +109,9 @@ def main():
                     "--output", str(prefix), "--seq-tech", sample["technology"],
                     "--coverage-model", coverage_model, "--coverage-ablation", ablation,
                     "--filter-group", "no-filters", "--threads", str(args.threads),
+                    "--candidate-pruning", args.candidate_pruning,
+                    "--dominance-bayes-factor", str(args.dominance_bayes_factor),
+                    "--censoring-model", args.censoring_model,
                 ]
                 with prefix.with_suffix(".log").open("w", encoding="utf-8") as log:
                     subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)

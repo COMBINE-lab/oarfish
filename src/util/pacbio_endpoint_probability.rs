@@ -218,6 +218,8 @@ mod tests {
             end,
             prob: 0.0,
             strand: Strand::Forward,
+            left_clip: 0,
+            right_clip: 0,
         }
     }
 

@@ -94,6 +94,9 @@ fn get_json_info(
         "coverage_abundance_midpoint_per_million": args.coverage_abundance_midpoint_per_million,
         "sequencing_technology": args.seq_tech,
         "coverage_diagnostics": coverage_diagnostics,
+        "censoring_model": args.censoring_model,
+        "candidate_pruning": args.candidate_pruning,
+        "dominance_bayes_factor": args.dominance_bayes_factor,
         "filter_options" : &emi.eq_map.filter_opts,
         "discard_table" : &emi.eq_map.discard_table,
         "alignments": &args.alignments,
@@ -369,6 +372,28 @@ fn perform_inference_and_write_output(
     }
     if let Some(diagnostics) = physical_warmup_diagnostics {
         coverage_diagnostics["abundance_warmup"] = diagnostics;
+    }
+    let transcriptome_input = args.genome.is_none() && args.genome_alignments.is_none();
+    let automatic_inference =
+        transcriptome_input && args.coverage_model == crate::prog_opts::CoverageModel::Auto;
+    if args.censoring_model == crate::prog_opts::CensoringModel::Adaptive
+        || (args.censoring_model == crate::prog_opts::CensoringModel::Auto && automatic_inference)
+    {
+        let diagnostics =
+            crate::util::censoring_probability::apply_censoring_probabilities(store, txps);
+        info!(?diagnostics, "applied read-level censoring likelihood");
+        coverage_diagnostics["censoring"] = serde_json::to_value(diagnostics)?;
+    }
+    if args.candidate_pruning == crate::prog_opts::CandidatePruning::Dominance
+        || (args.candidate_pruning == crate::prog_opts::CandidatePruning::Auto
+            && automatic_inference)
+    {
+        let diagnostics = crate::util::dominance_pruning::apply_dominance_pruning(
+            store,
+            args.dominance_bayes_factor,
+        );
+        info!(?diagnostics, "applied candidate-dominance pruning");
+        coverage_diagnostics["candidate_pruning"] = serde_json::to_value(diagnostics)?;
     }
     let coverage_time = coverage_start.elapsed();
 

@@ -1,10 +1,12 @@
 pub mod aligner;
 pub mod aux_counts;
 pub mod binomial_probability;
+pub mod censoring_probability;
 pub mod constants;
 pub mod count_function;
 pub mod degradation_probability;
 pub mod digest_utils;
+pub mod dominance_pruning;
 pub mod endpoint_probability;
 pub mod file_utils;
 pub mod hybrid_probability;

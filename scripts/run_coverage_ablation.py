@@ -58,6 +58,11 @@ def main():
                         help="run only these manifest sample names")
     parser.add_argument("--result-name", default="results.tsv")
     parser.add_argument("--endpoint-weight", type=float, default=0.5)
+    parser.add_argument("--score-prob-denom", type=float,
+                        help="override alignment score-to-probability temperature")
+    parser.add_argument("--candidate-pruning", choices=("none", "dominance"), default="none")
+    parser.add_argument("--dominance-bayes-factor", type=float, default=4.0)
+    parser.add_argument("--censoring-model", choices=("none", "adaptive"), default="none")
     parser.add_argument("--em-accel", choices=("none", "squarem", "daarem"),
                         default="squarem")
     args = parser.parse_args()
@@ -90,6 +95,11 @@ def main():
                                ablation_arg, "--filter-group", "no-filters", "--threads",
                                str(args.threads), "--em-accel", args.em_accel,
                                "--endpoint-weight", str(args.endpoint_weight)]
+                    if args.score_prob_denom is not None:
+                        command.extend(["--score-prob-denom", str(args.score_prob_denom)])
+                    command.extend(["--candidate-pruning", args.candidate_pruning,
+                                    "--dominance-bayes-factor", str(args.dominance_bayes_factor),
+                                    "--censoring-model", args.censoring_model])
                     with prefix.with_suffix(".log").open("w") as log:
                         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
                     timing = time_file.read_text()

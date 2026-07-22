@@ -26,6 +26,28 @@ pub enum EmAccel {
     Daarem,
 }
 
+/// Experimental removal of candidates dominated by another alignment.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
+pub enum CandidatePruning {
+    None,
+    /// Prune only when another candidate is no worse on every trusted signal.
+    Dominance,
+    /// Use dominance pruning with transcriptome `--coverage-model auto`.
+    #[default]
+    Auto,
+}
+
+/// Candidate likelihood for alignment-induced terminal censoring.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
+pub enum CensoringModel {
+    None,
+    /// Learn the unexplained terminal-clipping scale from unique reads.
+    Adaptive,
+    /// Use adaptive censoring with transcriptome `--coverage-model auto`.
+    #[default]
+    Auto,
+}
+
 /// Coverage evidence included in bulk read-assignment likelihoods.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
 pub enum CoverageModel {
@@ -506,6 +528,18 @@ pub struct Args {
     /// passing this with `--genome`/`--genome-alignments` is an error.
     #[arg(long, value_parser = parse_pos_f32, help_heading = "filters")]
     pub score_prob_denom: Option<f32>,
+
+    /// conservative candidate pruning applied after coverage modeling
+    #[arg(long, value_enum, default_value_t = CandidatePruning::Auto, help_heading = "filters")]
+    pub candidate_pruning: CandidatePruning,
+
+    /// minimum combined likelihood ratio required for dominance pruning
+    #[arg(long, default_value_t = 2.0, value_parser = parse_bayes_factor, help_heading = "filters")]
+    pub dominance_bayes_factor: f64,
+
+    /// model candidate-specific terminal clipping not explained by transcript ends
+    #[arg(long, value_enum, default_value_t = CensoringModel::Auto, help_heading = "filters")]
+    pub censoring_model: CensoringModel,
 
     /// genome mode: per-internal-junction-mismatch discount in (0,1] applied to a
     /// transcript's projection similarity (sharpens isoform discrimination).

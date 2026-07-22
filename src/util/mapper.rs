@@ -106,6 +106,17 @@ mod backend {
             self.m.is_supplementary
         }
 
+        fn terminal_clips(&self) -> (u32, u32) {
+            let query_start = self.m.query_start as u32;
+            let query_end = self.m.query_end as u32;
+            let query_len = self.query_len as u32;
+            if self.is_reverse_complemented() {
+                (query_len.saturating_sub(query_end), query_start)
+            } else {
+                (query_start, query_len.saturating_sub(query_end))
+            }
+        }
+
         fn name(&self) -> Option<String> {
             None
         }

@@ -197,6 +197,7 @@ pub trait AlnRecordLike {
     fn aln_start(&self) -> u32;
     fn aln_end(&self) -> u32;
     fn is_supp(&self) -> bool;
+    fn terminal_clips(&self) -> (u32, u32);
     #[allow(dead_code)]
     fn name(&self) -> Option<String>;
 }
@@ -322,6 +323,24 @@ impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for
             .is_supplementary()
     }
 
+    fn terminal_clips(&self) -> (u32, u32) {
+        use noodles_sam::alignment::record::cigar::op::Kind;
+        let mut first = None;
+        let mut last = None;
+        for operation in self.cigar().iter().filter_map(Result::ok) {
+            if first.is_none() {
+                first = Some(operation);
+            }
+            last = Some(operation);
+        }
+        let clip = |operation: Option<noodles_sam::alignment::record::cigar::Op>| {
+            operation
+                .filter(|op| matches!(op.kind(), Kind::SoftClip | Kind::HardClip))
+                .map_or(0, |op| op.len() as u32)
+        };
+        (clip(first), clip(last))
+    }
+
     fn name(&self) -> Option<String> {
         self.name().map(|n| n.to_string())
     }
@@ -334,6 +353,9 @@ pub struct AlnInfo {
     pub end: u32,
     pub prob: f64,
     pub strand: Strand,
+    /// Terminal query clipping in reference-left/reference-right orientation.
+    pub left_clip: u32,
+    pub right_clip: u32,
 }
 
 impl AlnInfo {
@@ -345,6 +367,7 @@ impl AlnInfo {
 
 impl AlnInfo {
     fn from_aln_rec_like<T: AlnRecordLike>(aln: &T, aln_header: &Header) -> Self {
+        let (left_clip, right_clip) = aln.terminal_clips();
         Self {
             ref_id: aln.ref_id(aln_header).expect("valid ref_id") as u32,
             start: aln.aln_start(),
@@ -355,6 +378,8 @@ impl AlnInfo {
             } else {
                 Strand::Forward
             },
+            left_clip,
+            right_clip,
         }
     }
 }
@@ -1237,6 +1262,8 @@ impl AlignmentFilters {
                 } else {
                     Strand::Forward
                 },
+                left_clip: 0,
+                right_clip: 0,
             });
         }
 
@@ -1259,6 +1286,8 @@ mod tests {
             end: 100,
             prob: 0.5,
             strand: Strand::Forward,
+            left_clip: 0,
+            right_clip: 0,
         };
         assert_eq!(ainf.alignment_span(), 100);
     }
