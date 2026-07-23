@@ -38,7 +38,7 @@ mod tests {
 }
 
 #[inline]
-fn unexplained_clip(alignment: &AlnInfo, transcript_length: usize) -> u32 {
+pub(crate) fn unexplained_clip(alignment: &AlnInfo, transcript_length: usize) -> u32 {
     let left_gap = alignment.start.saturating_sub(1);
     let right_gap = transcript_length.saturating_sub(alignment.end as usize) as u32;
     alignment.left_clip.min(left_gap) + alignment.right_clip.min(right_gap)

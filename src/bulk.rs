@@ -99,6 +99,7 @@ fn get_json_info(
         "dominance_bayes_factor": args.dominance_bayes_factor,
         "rank_blend": args.rank_blend,
         "rank_blend_floor": args.rank_blend_floor,
+        "alignment_calibration": args.alignment_calibration,
         "filter_options" : &emi.eq_map.filter_opts,
         "discard_table" : &emi.eq_map.discard_table,
         "alignments": &args.alignments,
@@ -148,6 +149,22 @@ fn perform_inference_and_write_output(
     let mut physical_creation_guard = None;
     let mut physical_warmup_diagnostics = None;
     let mut coverage_diagnostics = json!({});
+    let automatic_alignment_calibration = args.genome.is_none()
+        && args.genome_alignments.is_none()
+        && args.coverage_model == crate::prog_opts::CoverageModel::Auto
+        && args.score_prob_denom.is_none();
+    let alignment_calibration_diagnostics = if args.alignment_calibration
+        == crate::prog_opts::AlignmentCalibration::Agreement
+        || (args.alignment_calibration == crate::prog_opts::AlignmentCalibration::Auto
+            && automatic_alignment_calibration)
+    {
+        let diagnostics =
+            crate::util::alignment_calibration::apply_agreement_calibration(store, txps);
+        info!(?diagnostics, "calibrated alignment-score likelihoods");
+        Some(diagnostics)
+    } else {
+        None
+    };
     if args.coverage_model == crate::prog_opts::CoverageModel::Logistic {
         //obtaining the Cumulative Distribution Function (CDF) for each transcript
         logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
@@ -338,6 +355,9 @@ fn perform_inference_and_write_output(
             "degradation": degradation_diagnostics,
             "adaptive": adaptive_diagnostics,
         });
+    }
+    if let Some(diagnostics) = alignment_calibration_diagnostics {
+        coverage_diagnostics["alignment_calibration"] = serde_json::to_value(diagnostics)?;
     }
     let transcriptome_input = args.genome.is_none() && args.genome_alignments.is_none();
     let automatic_inference =

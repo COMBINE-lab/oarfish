@@ -1,4 +1,5 @@
 pub mod aligner;
+pub mod alignment_calibration;
 pub mod aux_counts;
 pub mod binomial_probability;
 pub mod censoring_probability;

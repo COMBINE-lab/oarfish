@@ -402,6 +402,7 @@ The `--output` option passed to `oarfish` corresponds to a path prefix (this pre
 - [Runtime profile and allocation pass (2026-07-21)](runtime-profile-optimization-2026-07-21.md)
 - [Single-sample inference refinement (2026-07-22)](single-sample-inference-refinement-2026-07-22.md)
 - [Rank-preserving adaptive inference (2026-07-22)](rank-preserving-inference-2026-07-22.md)
+- [Single-sample accuracy refinement (2026-07-23)](accuracy-refinement-2026-07-23.md)
 
 ## References
 

@@ -60,6 +60,17 @@ pub enum RankBlend {
     Auto,
 }
 
+/// Optional joint calibration of transcriptome alignment likelihoods.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
+pub enum AlignmentCalibration {
+    None,
+    /// Sharpen score likelihoods only when score, clipping, and span agree.
+    Agreement,
+    /// Use agreement calibration for automatic transcriptome inference.
+    #[default]
+    Auto,
+}
+
 /// Coverage evidence included in bulk read-assignment likelihoods.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
 pub enum CoverageModel {
@@ -540,6 +551,10 @@ pub struct Args {
     /// passing this with `--genome`/`--genome-alignments` is an error.
     #[arg(long, value_parser = parse_pos_f32, help_heading = "filters")]
     pub score_prob_denom: Option<f32>,
+
+    /// calibrate alignment-score evidence using independent read features
+    #[arg(long, value_enum, default_value_t = AlignmentCalibration::Auto, help_heading = "filters")]
+    pub alignment_calibration: AlignmentCalibration,
 
     /// conservative candidate pruning applied after coverage modeling
     #[arg(long, value_enum, default_value_t = CandidatePruning::Auto, help_heading = "filters")]

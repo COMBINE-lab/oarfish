@@ -60,6 +60,9 @@ def main():
     parser.add_argument("--endpoint-weight", type=float, default=0.5)
     parser.add_argument("--score-prob-denom", type=float,
                         help="override alignment score-to-probability temperature")
+    parser.add_argument(
+        "--alignment-calibration", choices=("none", "agreement", "auto"), default="auto"
+    )
     parser.add_argument("--candidate-pruning", choices=("none", "dominance"), default="none")
     parser.add_argument("--dominance-bayes-factor", type=float, default=4.0)
     parser.add_argument("--censoring-model", choices=("none", "adaptive"), default="none")
@@ -107,6 +110,7 @@ def main():
                                     "--rank-blend-floor", str(args.rank_blend_floor),
                                     "--coverage-abundance-midpoint-per-million",
                                     str(args.coverage_abundance_midpoint_per_million)])
+                    command.extend(["--alignment-calibration", args.alignment_calibration])
                     with prefix.with_suffix(".log").open("w") as log:
                         subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
                     timing = time_file.read_text()
