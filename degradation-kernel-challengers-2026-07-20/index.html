@@ -1,0 +1,1372 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../coverage-signal-review-2026-07-21/">
+      
+      
+        <link rel="next" href="../degradation-model-evaluation-2026-07-19/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Degradation-kernel challenger study: 2026-07-20 - Documentation for oarfish</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#degradation-kernel-challenger-study-2026-07-20" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Documentation for oarfish" class="md-header__button md-logo" aria-label="Documentation for oarfish" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Documentation for oarfish
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Degradation-kernel challenger study: 2026-07-20
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Documentation for oarfish" class="md-nav__button md-logo" aria-label="Documentation for oarfish" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Documentation for oarfish
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    oarfish: transcript quantification from long-read RNA-seq data
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../accuracy-refinement-2026-07-23/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Single-sample accuracy refinement (2026-07-23)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adaptive-coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Adaptive coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../competing-risk-degradation-evaluation-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Competing-risk degradation evaluation: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-component-ablation-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-component ablation: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-default-benchmark-expansion-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-default benchmark expansion: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-model evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-next-round-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage and inference refinement round (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-outer-validation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-model outer validation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-profile-refinement-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-profile refinement study (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-signal-review-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-signal review (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Degradation-kernel challenger study: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Degradation-kernel challenger study: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#endpoint-fit-and-stability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoint fit and stability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#longbench" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LongBench
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#degradation-trajectories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Degradation trajectories
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frozen-truth-and-large-sample-runtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frozen truth and large-sample runtime
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#parameter-recovery-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameter-recovery checks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../degradation-model-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Degradation-aware coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation-results-2026-07-18/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluation checkpoint: EM acceleration and endpoint model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inference and coverage evaluation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hybrid-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hybrid coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kinnex-coverage-refinement-and-em-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kinnex coverage refinement and EM optimizer study (2026-07-20)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kinnex-fig2-coverage-benchmark-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kinnex Figure 2 coverage-model benchmark (2026-07-20)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../longbench-coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LongBench coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pacbio-physical-endpoint-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PacBio physical endpoint model (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rank-preserving-inference-2026-07-22/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rank-preserving adaptive inference evaluation (2026-07-22)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime-profile-optimization-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime profile and allocation pass (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../single-sample-inference-refinement-2026-07-22/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Single-sample inference refinement (2026-07-22)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#endpoint-fit-and-stability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Endpoint fit and stability
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#longbench" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        LongBench
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#degradation-trajectories" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Degradation trajectories
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#frozen-truth-and-large-sample-runtime" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Frozen truth and large-sample runtime
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#parameter-recovery-checks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameter-recovery checks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="degradation-kernel-challenger-study-2026-07-20">Degradation-kernel challenger study: 2026-07-20</h1>
+<p>This study tests whether flexible degradation distributions improve on the
+frozen three-component competing-risk model. The incumbent uses a constant
+per-base degradation hazard. Challengers were deliberately bounded:</p>
+<ul>
+<li><code>piecewise2</code>: constant plus two regularized directional shapes;</li>
+<li><code>piecewise3</code>: constant plus four regularized directional/central shapes;</li>
+<li><code>beta</code>: length-dependent mean retained fraction and concentration 2, 5, or 10.</li>
+</ul>
+<p>Piecewise models embed the constant model and penalize squared log-rate
+departures. All models retain the same intact and length-invariant technical
+components, cross-fitting, degradation posterior, evidence gate, reliability
+gate, and Bayes-factor cap. No model was tuned after examining abundance truth.</p>
+<h2 id="endpoint-fit-and-stability">Endpoint fit and stability</h2>
+<p>Across all 15 PRJEB53210 degradation libraries:</p>
+<table>
+<thead>
+<tr>
+<th>Kernel</th>
+<th style="text-align: right;">Held-out log density</th>
+<th style="text-align: right;">Mean hazard fold SD</th>
+<th>Selected shapes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>constant</td>
+<td style="text-align: right;">-2.22634</td>
+<td style="text-align: right;">0</td>
+<td>constant</td>
+</tr>
+<tr>
+<td>piecewise2</td>
+<td style="text-align: right;">-2.21159</td>
+<td style="text-align: right;">0</td>
+<td>0.67, 1.33</td>
+</tr>
+<tr>
+<td>piecewise3</td>
+<td style="text-align: right;">-2.20325</td>
+<td style="text-align: right;">0</td>
+<td>0.67, 1.00, 1.33</td>
+</tr>
+<tr>
+<td>beta</td>
+<td style="text-align: right;"><strong>-2.11577</strong></td>
+<td style="text-align: right;">0.0098</td>
+<td>concentration 2 or 5</td>
+</tr>
+</tbody>
+</table>
+<p>All flexible models fit held-out endpoints better, and piecewise hazards are
+stable across folds. This does not translate monotonically into quantification
+accuracy: beta is the clearest counterexample.</p>
+<h2 id="longbench">LongBench</h2>
+<p>Values are means across eight 50,000-read ONT direct-RNA libraries.</p>
+<table>
+<thead>
+<tr>
+<th>Kernel</th>
+<th style="text-align: right;">CCC</th>
+<th style="text-align: right;">Pearson</th>
+<th style="text-align: right;">RMSE</th>
+<th style="text-align: right;">MARD</th>
+<th style="text-align: right;">Coverage time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>constant</strong></td>
+<td style="text-align: right;"><strong>0.497474</strong></td>
+<td style="text-align: right;"><strong>0.712606</strong></td>
+<td style="text-align: right;"><strong>6257.00</strong></td>
+<td style="text-align: right;"><strong>0.449311</strong></td>
+<td style="text-align: right;"><strong>0.100 s</strong></td>
+</tr>
+<tr>
+<td>piecewise2</td>
+<td style="text-align: right;">0.497413</td>
+<td style="text-align: right;">0.712542</td>
+<td style="text-align: right;">6257.46</td>
+<td style="text-align: right;">0.449320</td>
+<td style="text-align: right;">0.203 s</td>
+</tr>
+<tr>
+<td>piecewise3</td>
+<td style="text-align: right;">0.497388</td>
+<td style="text-align: right;">0.712519</td>
+<td style="text-align: right;">6257.73</td>
+<td style="text-align: right;">0.449321</td>
+<td style="text-align: right;">0.313 s</td>
+</tr>
+<tr>
+<td>beta</td>
+<td style="text-align: right;">0.496288</td>
+<td style="text-align: right;">0.711223</td>
+<td style="text-align: right;">6267.30</td>
+<td style="text-align: right;">0.449427</td>
+<td style="text-align: right;">2.104 s</td>
+</tr>
+</tbody>
+</table>
+<p>Piecewise regressions are very small but consistent in the aggregate. Beta is
+both less accurate and roughly 21 times slower than constant at this depth.</p>
+<p>At 250,000 HCC827 reads, piecewise2 is stable and slightly better than constant:</p>
+<table>
+<thead>
+<tr>
+<th>Kernel</th>
+<th style="text-align: right;">CCC</th>
+<th style="text-align: right;">Pearson</th>
+<th style="text-align: right;">RMSE</th>
+<th style="text-align: right;">Coverage time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>constant</td>
+<td style="text-align: right;">0.562581</td>
+<td style="text-align: right;">0.739437</td>
+<td style="text-align: right;">6869.19</td>
+<td style="text-align: right;">0.426 s</td>
+</tr>
+<tr>
+<td>piecewise2</td>
+<td style="text-align: right;"><strong>0.562617</strong></td>
+<td style="text-align: right;"><strong>0.739453</strong></td>
+<td style="text-align: right;"><strong>6868.54</strong></td>
+<td style="text-align: right;">0.919 s</td>
+</tr>
+</tbody>
+</table>
+<p>The gain is only 0.000035 CCC and does not offset the complete-panel result or
+the twofold runtime cost.</p>
+<h2 id="degradation-trajectories">Degradation trajectories</h2>
+<table>
+<thead>
+<tr>
+<th>Kernel</th>
+<th style="text-align: right;">TS10 Pearson</th>
+<th style="text-align: right;">TS12 7.2 Pearson</th>
+<th style="text-align: right;">TS12 7.3 Pearson</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>constant</td>
+<td style="text-align: right;">0.96500</td>
+<td style="text-align: right;"><strong>0.94876</strong></td>
+<td style="text-align: right;"><strong>0.94013</strong></td>
+</tr>
+<tr>
+<td>piecewise2</td>
+<td style="text-align: right;"><strong>0.96681</strong></td>
+<td style="text-align: right;">0.94833</td>
+<td style="text-align: right;">0.93930</td>
+</tr>
+<tr>
+<td>piecewise3</td>
+<td style="text-align: right;">0.96671</td>
+<td style="text-align: right;">0.94835</td>
+<td style="text-align: right;">0.93930</td>
+</tr>
+<tr>
+<td>beta</td>
+<td style="text-align: right;">0.96439</td>
+<td style="text-align: right;">0.94831</td>
+<td style="text-align: right;">0.93885</td>
+</tr>
+</tbody>
+</table>
+<p>Piecewise hazards improve TS10 but regress both TS12 endpoints. There is no
+uniform robustness winner beyond the incumbent.</p>
+<h2 id="frozen-truth-and-large-sample-runtime">Frozen truth and large-sample runtime</h2>
+<table>
+<thead>
+<tr>
+<th>Kernel</th>
+<th style="text-align: right;">Synthetic CCC</th>
+<th style="text-align: right;">Synthetic RMSE</th>
+<th style="text-align: right;">SIRV CCC</th>
+<th style="text-align: right;">Source CCC</th>
+<th style="text-align: right;">Synthetic coverage time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>constant</strong></td>
+<td style="text-align: right;"><strong>0.996926</strong></td>
+<td style="text-align: right;"><strong>24.092</strong></td>
+<td style="text-align: right;">0.671305</td>
+<td style="text-align: right;"><strong>0.983387</strong></td>
+<td style="text-align: right;"><strong>2.77 s</strong></td>
+</tr>
+<tr>
+<td>piecewise2</td>
+<td style="text-align: right;">0.996907</td>
+<td style="text-align: right;">24.167</td>
+<td style="text-align: right;"><strong>0.671326</strong></td>
+<td style="text-align: right;"><strong>0.983387</strong></td>
+<td style="text-align: right;">7.55 s</td>
+</tr>
+<tr>
+<td>piecewise3</td>
+<td style="text-align: right;">0.996907</td>
+<td style="text-align: right;">24.166</td>
+<td style="text-align: right;">0.671255</td>
+<td style="text-align: right;"><strong>0.983387</strong></td>
+<td style="text-align: right;">12.69 s</td>
+</tr>
+<tr>
+<td>beta</td>
+<td style="text-align: right;">0.994516</td>
+<td style="text-align: right;">32.118</td>
+<td style="text-align: right;">0.640705</td>
+<td style="text-align: right;">0.983387</td>
+<td style="text-align: right;">63.97 s</td>
+</tr>
+</tbody>
+</table>
+<p>The piecewise differences are small, but neither improves the large synthetic
+truth. Beta decisively fails truth and runtime gates despite its much better
+held-out endpoint density.</p>
+<h2 id="parameter-recovery-checks">Parameter-recovery checks</h2>
+<p>Deterministic simulations verify that the regularized piecewise2 challenger
+collapses to constant hazard for constant data and recovers the direction of a
+simulated 0.67/1.33 regional hazard. Thus its negative benchmark result is not
+caused by a nonfunctional implementation.</p>
+<h2 id="decision">Decision</h2>
+<p>Keep <code>constant</code> as the default and validated kernel. Retain only the bounded
+piecewise2 challenger behind the explicitly experimental
+<code>--degradation-kernel constant|piecewise2</code> option. The piecewise3 and beta code
+was removed after evaluation to avoid carrying unjustified complexity. Do not
+automatically select a kernel from endpoint likelihood: the beta experiment
+proved that this would select a worse quantification model. Piecewise2 is the
+only credible future challenger, but its current gains are dataset-specific and
+too small to justify replacement.</p>
+<p>Artifacts are under <code>oarfish-evaluation-data/degradation/kernel-*</code> and
+<code>oarfish-evaluation-data/longbench/kernel-*</code>.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": [], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="../javascripts/mathjax.js"></script>
+      
+        <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

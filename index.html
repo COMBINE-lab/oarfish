@@ -1,0 +1,2061 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+      
+        <link rel="next" href="accuracy-refinement-2026-07-23/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Documentation for oarfish</title>
+      
+    
+    
+      <link rel="stylesheet" href="assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#oarfish-transcript-quantification-from-long-read-rna-seq-data" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="." title="Documentation for oarfish" class="md-header__button md-logo" aria-label="Documentation for oarfish" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Documentation for oarfish
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              oarfish: transcript quantification from long-read RNA-seq data
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="." title="Documentation for oarfish" class="md-nav__button md-logo" aria-label="Documentation for oarfish" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Documentation for oarfish
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    oarfish: transcript quantification from long-read RNA-seq data
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="." class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    oarfish: transcript quantification from long-read RNA-seq data
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#installation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Installation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#precompiled-binaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Precompiled binaries
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#using-cargo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using cargo
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bioconda" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bioconda
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quantification-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quantification modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#basic-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Basic usage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Usage examples
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#alignment-mode-example-transcriptome-bam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alignment-mode example (transcriptome BAM)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#read-mode-example-oarfish-maps-to-the-transcriptome" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-mode example (oarfish maps to the transcriptome)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#genome-read-projection-example-reads-genome-transcripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Genome read-projection example (reads → genome → transcripts)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#genome-alignment-projection-example-project-an-existing-genome-bam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Genome-alignment projection example (project an existing genome BAM)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#input-to-oarfish" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input to oarfish
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Input to oarfish">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read-based-input-transcriptome" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-based input (transcriptome)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Read-based input (transcriptome)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read-based-input-formats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-based input formats
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#alignment-based-input-transcriptome-bam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alignment-based input (transcriptome BAM)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#genome-based-input-projection-onto-transcripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Genome-based input (projection onto transcripts)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Genome-based input (projection onto transcripts)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#soft-clip-rescue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Soft-clip rescue
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#splice-junction-hints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Splice-junction hints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expectations-for-the-genome-based-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expectations for the genome-based modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#choosing-aligner-options-for-bam-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing aligner options (for BAM input)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-mapping-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The mapping backend
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-notes-on-oarfish-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Other notes on oarfish parameters
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Other notes on oarfish parameters">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read-level-assignment-probabilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-level assignment probabilities
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes-about-single-cell-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes about single-cell mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inferential-replicates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inferential Replicates
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#runtime-profiling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime profiling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        References
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="accuracy-refinement-2026-07-23/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Single-sample accuracy refinement (2026-07-23)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="adaptive-coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Adaptive coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="competing-risk-degradation-evaluation-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Competing-risk degradation evaluation: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="coverage-component-ablation-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-component ablation: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="coverage-default-benchmark-expansion-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-default benchmark expansion: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-model evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="coverage-next-round-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage and inference refinement round (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="coverage-outer-validation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-model outer validation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="coverage-profile-refinement-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-profile refinement study (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="coverage-signal-review-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-signal review (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="degradation-kernel-challengers-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Degradation-kernel challenger study: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="degradation-model-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Degradation-aware coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="evaluation-results-2026-07-18/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluation checkpoint: EM acceleration and endpoint model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inference and coverage evaluation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="hybrid-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hybrid coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="kinnex-coverage-refinement-and-em-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kinnex coverage refinement and EM optimizer study (2026-07-20)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="kinnex-fig2-coverage-benchmark-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kinnex Figure 2 coverage-model benchmark (2026-07-20)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="longbench-coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LongBench coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="pacbio-physical-endpoint-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PacBio physical endpoint model (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="rank-preserving-inference-2026-07-22/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rank-preserving adaptive inference evaluation (2026-07-22)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="runtime-profile-optimization-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime profile and allocation pass (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="single-sample-inference-refinement-2026-07-22/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Single-sample inference refinement (2026-07-22)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#installation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Installation
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Installation">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#precompiled-binaries" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Precompiled binaries
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#using-cargo" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using cargo
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bioconda" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bioconda
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#quantification-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Quantification modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#basic-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Basic usage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#usage-examples" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Usage examples
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Usage examples">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#alignment-mode-example-transcriptome-bam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alignment-mode example (transcriptome BAM)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#read-mode-example-oarfish-maps-to-the-transcriptome" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-mode example (oarfish maps to the transcriptome)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#genome-read-projection-example-reads-genome-transcripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Genome read-projection example (reads → genome → transcripts)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#genome-alignment-projection-example-project-an-existing-genome-bam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Genome-alignment projection example (project an existing genome BAM)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#input-to-oarfish" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input to oarfish
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Input to oarfish">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read-based-input-transcriptome" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-based input (transcriptome)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Read-based input (transcriptome)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read-based-input-formats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-based input formats
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#alignment-based-input-transcriptome-bam" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alignment-based input (transcriptome BAM)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#genome-based-input-projection-onto-transcripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Genome-based input (projection onto transcripts)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Genome-based input (projection onto transcripts)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#soft-clip-rescue" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Soft-clip rescue
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#splice-junction-hints" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Splice-junction hints
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expectations-for-the-genome-based-modes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expectations for the genome-based modes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#choosing-aligner-options-for-bam-input" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing aligner options (for BAM input)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-mapping-backend" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The mapping backend
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#other-notes-on-oarfish-parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Other notes on oarfish parameters
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Other notes on oarfish parameters">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#read-level-assignment-probabilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Read-level assignment probabilities
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes-about-single-cell-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes about single-cell mode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#inferential-replicates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inferential Replicates
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Output
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#runtime-profiling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Runtime profiling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        References
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="oarfish-transcript-quantification-from-long-read-rna-seq-data">oarfish: transcript quantification from long-read RNA-seq data</h1>
+<p><code>oarfish</code> is a program, written in Rust (https://www.rust-lang.org/), for quantifying transcript-level expression from long-read (i.e. Oxford nanopore cDNA and direct RNA and PacBio) sequencing technologies. It handles multi-mapping reads through the use of probabilistic allocation via an expectation-maximization (EM) algorithm.</p>
+<p><code>oarfish</code> can consume your data in several ways: pre-computed alignments to the <em>transcriptome</em> (a BAM file), raw reads that it maps to the transcriptome for you, or — added more recently — <em>genome</em>-based input, where reads are spliced-aligned to the genome (or a spliced genome BAM is provided) and the resulting genomic alignments are projected onto the annotated transcripts before quantification. See <a href="#quantification-modes">Quantification modes</a> for an overview.</p>
+<p>It optionally employs many filters to help discard alignments that may reduce quantification accuracy. Currently, the set of filters applied in <code>oarfish</code> are directly derived from the <a href="https://github.com/a-slide/NanoCount"><code>NanoCount</code></a><sup id="fnref:Gleeson"><a class="footnote-ref" href="#fn:Gleeson">1</a></sup> tool; both the filters that exist, and the way their values are set (with the exception of the <code>--three-prime-clip</code> filter, which is not set by default in <code>oarfish</code> but is in <code>NanoCount</code>).</p>
+<p>Additionally, <code>oarfish</code> provides options to make use of coverage profiles derived from the aligned reads to improve quantification accuracy. The use of this coverage model is enabled with the <code>--model-coverage</code> flag. You can read more about <code>oarfish</code><sup id="fnref:preprint"><a class="footnote-ref" href="#fn:preprint">2</a></sup> in the <a href="https://www.biorxiv.org/content/10.1101/2024.02.28.582591v1">preprint</a>. Please cite the preprint if you use <code>oarfish</code> in your work or analysis.</p>
+<p>Also, please note that <code>oarfish</code> is scientific software in active development. Therefore, please check the <a href="https://github.com/COMBINE-lab/oarfish/releases">GitHub Release</a> page to make sure that you are using the latest version</p>
+<h2 id="installation">Installation</h2>
+<p><code>oarfish</code> can be installed in a variety of ways.</p>
+<h3 id="precompiled-binaries">Precompiled binaries</h3>
+<p>Binaries are available via <a href="https://github.com/COMBINE-lab/oarfish/releases">GitHub Releases</a>.</p>
+<p>You can quickly install the latest release using the following helper script:</p>
+<pre><code class="language-sh">curl --proto '=https' --tlsv1.2 -LsSf https://github.com/COMBINE-lab/oarfish/releases/latest/download/oarfish-installer.sh | sh
+</code></pre>
+<h3 id="using-cargo">Using <code>cargo</code></h3>
+<p>If you have <code>cargo</code> installed, you can install <code>oarfish</code> directly from the source code:</p>
+<pre><code class="language-sh">cargo install oarfish
+</code></pre>
+<p>You can find the crate on <a href="https://crates.io/crates/oarfish">crates.io</a>.</p>
+<h3 id="bioconda">Bioconda</h3>
+<p><code>oarfish</code> is available via <a href="https://anaconda.org/bioconda/oarfish">Bioconda</a>:</p>
+<pre><code class="language-sh">conda install -c bioconda oarfish
+</code></pre>
+<h2 id="quantification-modes">Quantification modes</h2>
+<p><code>oarfish</code> supports four ways of providing input for <strong>bulk</strong> quantification. All of them feed the same EM-based quantification core; they differ only in how alignments to the transcriptome are obtained. The mode is selected implicitly by which input flag you pass. (Single-cell quantification, <code>--single-cell</code>, is separate and accepts <strong>only</strong> a transcriptome BAM — see <a href="#notes-about-single-cell-mode">Notes about single-cell mode</a>.)</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Selected by</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Alignment</strong> (transcriptome BAM)</td>
+<td><code>--alignments</code></td>
+<td>Quantify pre-computed alignments of reads to the <strong>transcriptome</strong> (a name-sorted BAM, e.g. from <code>minimap2</code>/<code>pbmm2</code>).</td>
+</tr>
+<tr>
+<td><strong>Read</strong> (transcriptome mapping)</td>
+<td><code>--reads</code> + <code>--annotated</code>/<code>--index</code></td>
+<td>Map raw reads to the <strong>transcriptome</strong> internally (with the built-in <a href="#the-mapping-backend">rammap</a> mapper), then quantify.</td>
+</tr>
+<tr>
+<td><strong>Genome read-projection</strong></td>
+<td><code>--reads</code> + <code>--genome</code> + <code>--annotation</code></td>
+<td>Spliced-align raw reads to the <strong>genome</strong>, project each read's genomic alignments onto the annotated transcripts (via <a href="https://github.com/COMBINE-lab/bramble">bramble</a>), then quantify.</td>
+</tr>
+<tr>
+<td><strong>Genome-alignment projection</strong></td>
+<td><code>--genome-alignments</code> + <code>--annotation</code></td>
+<td>Project an existing <strong>spliced genome BAM</strong> (e.g. from <code>minimap2 -ax splice</code>) onto the annotated transcripts, then quantify.</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p><strong>Which should I use?</strong> The transcriptome read/alignment modes are the most mature and are the right default when you have (or can build) a transcriptome reference. The genome-based modes are useful when you want to align against the genome — for example to keep one genomic alignment pass for multiple downstream analyses, to start from genome BAMs you already have, or to capture reads that fall outside annotated transcript boundaries (recovered via soft-clip <a href="#soft-clip-rescue">rescue</a>). On our benchmarks, genome read-projection quantification closely matches direct transcriptome quantification when rescue is enabled (see <a href="#expectations-for-the-genome-based-modes">expectations</a>).</p>
+</blockquote>
+<h2 id="basic-usage">Basic usage</h2>
+<p>The usage can be provided by passing <code>-h</code> at the command line.</p>
+<pre><code>A fast, accurate and versatile tool for long-read transcript quantification.
+
+Usage: oarfish [OPTIONS] &lt;--alignments &lt;ALIGNMENTS&gt;|--reads &lt;READS&gt;|--only-index|--genome-alignments &lt;GENOME_ALIGNMENTS&gt;&gt;
+
+Options:
+      --quiet              be quiet (only warnings and errors)
+      --verbose            be verbose (all non-developer logging)
+  -o, --output &lt;OUTPUT&gt;    location where output quantification file should be written
+      --single-cell        input is a single-cell BAM with the `CB:z` tag on all records
+  -j, --threads &lt;THREADS&gt;  number of cores oarfish will use [default: 3]
+      --num-bootstraps &lt;NUM_BOOTSTRAPS&gt;
+                           number of bootstrap replicates for uncertainty [default: 0]
+  -h, --help               Print help
+  -V, --version            Print version
+
+alignment mode:
+  -a, --alignments &lt;ALIGNMENTS&gt;  path to a transcriptome-aligned BAM to quantify
+
+raw read mode:
+      --reads &lt;READS&gt;          input reads: FASTA/Q (optionally gzipped) or uBAM; format inferred from suffix
+      --annotated &lt;ANNOTATED&gt;  transcriptome FASTA (e.g. GENCODE) to map against
+      --novel &lt;NOVEL&gt;          additional novel/assembled transcripts (indexed together, tracked separately)
+      --index &lt;INDEX&gt;          an existing index (oarfish-created preferred, or a compatible prebuilt index)
+      --seq-tech &lt;SEQ_TECH&gt;    [possible values: ont-cdna, ont-drna, pac-bio, pac-bio-hifi]
+      --best-n &lt;BEST_N&gt;        max secondary mappings to consider [default: 100]
+      --dp-cache-cap-mb &lt;DP_CACHE_CAP_MB&gt;
+                               cap (MB) on the per-thread DP scratch buffer the mapper retains; bounds peak
+                               RSS. Unset = default 128 MB / `RAMMAP_DP_CACHE_CAP_MB` env var; `0` = unbounded
+
+genome mode:
+      --genome-alignments &lt;GENOME_ALIGNMENTS&gt;
+                               a spliced, genome-aligned BAM (name-collated) to project onto `--annotation`
+      --genome &lt;GENOME&gt;        a genome FASTA or prebuilt genome index; with `--reads`, spliced-align then project
+      --annotation &lt;ANNOTATION&gt;
+                               transcript annotation (GTF/GFF); required in genome mode (projection target)
+      --genome-fasta &lt;GENOME_FASTA&gt;
+                               genome FASTA for soft-clip rescue (auto-taken from `--genome` when it is a FASTA)
+      --no-rescue              disable bramble soft-clip rescue during projection (on by default)
+      --junctions &lt;JUNCTIONS&gt;  optional BED12 of splice junctions to hint alignment (else derived from `--annotation`)
+
+filters:
+      --score-prob-denom &lt;SCORE_PROB_DENOM&gt;
+                               denominator D in exp((score-best)/D) weighting (default 5). Transcriptome mode only
+      --filter-group &lt;FILTER_GROUP&gt;     [possible values: no-filters, nanocount-filters]
+  -t, --three-prime-clip &lt;THREE_PRIME_CLIP&gt;     max 3' end distance [default: *4294967295]
+  -f, --five-prime-clip &lt;FIVE_PRIME_CLIP&gt;       max 5' end distance [default: *4294967295]
+  -s, --score-threshold &lt;SCORE_THRESHOLD&gt;       min fraction of best score for a secondary aln [default: *0.95]
+  -m, --min-aligned-fraction &lt;MIN_ALIGNED_FRACTION&gt;  min mapped fraction of a query [default: *0.5]
+  -l, --min-aligned-len &lt;MIN_ALIGNED_LEN&gt;       min aligned nucleotides [default: *50]
+  -d, --strand-filter &lt;STRAND_FILTER&gt;           allowed strand (fw/+, rc/-, both/.) [default: .]
+
+indexing:
+      --only-index             only build the index, do not quantify
+      --index-out &lt;INDEX_OUT&gt;  path where the index will be written (if provided)
+
+coverage model:
+      --model-coverage             apply the coverage model
+      --coverage-model &lt;MODEL&gt;     bulk coverage evidence: none, logistic, endpoint, hybrid, adaptive, degradation, auto [default: none]
+  -k, --growth-rate &lt;GROWTH_RATE&gt;  logistic `k` [default: 2]
+  -b, --bin-width &lt;BIN_WIDTH&gt;      coverage bin width [default: 100]
+      --coverage-folds &lt;N&gt;         cross-validation folds in adaptive mode [default: 5]
+      --coverage-max-bayes-factor &lt;BF&gt;
+                                   maximum per-read coverage odds in adaptive mode [default: 4]
+      --degradation-kernel &lt;KERNEL&gt;
+                                   ONT dRNA kernel: constant or experimental piecewise2
+
+output read-txps probabilities:
+      --write-assignment-probs[=&lt;WRITE_ASSIGNMENT_PROBS&gt;]  write per-read assignment probs (uncompressed|compressed)
+      --display-thresh &lt;DISPLAY_THRESH&gt;  min posterior prob to write to .prob, or 'none' [default: 0.000001]
+
+EM:
+      --em-accel &lt;EM_ACCEL&gt;                  bulk EM acceleration: none, squarem, daarem [default: none]
+      --max-em-iter &lt;MAX_EM_ITER&gt;            max EM iterations [default: 1000]
+      --convergence-thresh &lt;CONVERGENCE_THRESH&gt;  EM convergence threshold [default: 0.001]
+  -q, --short-quant &lt;SHORT_QUANT&gt;            short-read quantification (if provided)
+</code></pre>
+<p><code>--model-coverage</code> remains an alias for <code>--coverage-model logistic</code>. The
+<code>endpoint</code> model learns joint transcript-relative 5′ and 3′ alignment gaps from
+single-candidate reads. See <a href="evaluation/">the staged evaluation protocol</a>
+and <a href="coverage-evaluation-2026-07-19/">current coverage-model results</a>.
+The default-versus-abundance-blend decision is documented in the
+<a href="coverage-default-benchmark-expansion-2026-07-20/">expanded truth-bearing benchmark</a>.
+The selected hybrid weight sweep is documented in
+<a href="hybrid-evaluation-2026-07-19/">hybrid coverage evaluation</a>.</p>
+<p><code>--coverage-model hybrid</code> combines logistic and endpoint likelihoods in log
+space. Its defaults are <code>--logistic-weight 1.0</code>, <code>--endpoint-weight 0.5</code>, and
+<code>--endpoint-support-scale 25</code>; sparse endpoint cells are automatically shrunk
+toward the logistic-only result. These parameters are experimental and apply
+only to bulk quantification.</p>
+<p><code>--coverage-model adaptive</code> adds safeguards intended for transfer across
+samples: deterministic cross-fitting, locally smoothed endpoint counts,
+held-out selection of the endpoint prior strength, a reliability gate based on
+support and logistic/endpoint agreement, and a per-read Bayes-factor cap. The
+model records the selected prior, mean reliability, cap count, coverage time,
+and EM time in <code>.meta_info.json</code>. It remains experimental and opt-in; see the
+<a href="adaptive-coverage-evaluation-2026-07-19/">adaptive coverage evaluation</a>.
+The frozen-parameter degradation and PacBio checks are recorded in the
+<a href="coverage-outer-validation-2026-07-19/">coverage outer-validation report</a>.
+The subsequent 24-library, eight-cell-line evaluation and depth confirmation
+are recorded in the
+<a href="longbench-coverage-evaluation-2026-07-19/">LongBench coverage evaluation</a>.</p>
+<p>The annotation-free component and candidate-model assessment, including
+accuracy, runtime, and peak-memory ablations, is recorded in the
+<a href="coverage-component-ablation-2026-07-20/">coverage-component ablation</a>.
+The follow-on correction-weight and technical-truncation experiments are in the
+<a href="competing-risk-degradation-evaluation-2026-07-20/">competing-risk degradation evaluation</a>.
+The bounded beta and piecewise alternatives are evaluated in the
+<a href="degradation-kernel-challengers-2026-07-20/">degradation-kernel challenger study</a>.</p>
+<p><code>--coverage-model degradation --seq-tech ont-drna</code> removes a cross-fitted,
+sample-wide 3'-anchored degradation process before applying adaptive endpoint
+evidence. It learns intact, length-invariant technical-truncation, and
+length-scaled degradation fractions plus a degradation hazard from
+single-candidate reads and records them in <code>.meta_info.json</code>. The current
+kernel is specific to ONT direct RNA; cDNA and PacBio should continue to use
+<code>adaptive</code> until their protocol-specific kernels have been validated. See the
+<a href="degradation-model-evaluation-2026-07-19/">degradation-model evaluation</a>.</p>
+<p><code>--coverage-model auto --seq-tech &lt;TECH&gt;</code> is the recommended entry point for
+bulk coverage correction. For ONT direct RNA it learns whether degradation
+correction is supported, its strength, and the per-read posterior; when
+unsupported it reduces to adaptive coverage evidence. ONT cDNA uses the
+adaptive logistic-plus-endpoint kernel. PacBio uses a learned physical
+intact/truncated/broken endpoint mixture combined with adaptive logistic
+evidence. A coverage-free abundance anchor prevents extreme coverage-only
+creation of endpoint-unidentifiable nested isoforms. BAM
+inputs require <code>--seq-tech</code> in auto mode because the protocol cannot be
+inferred safely from alignment records. The CLI default remains <code>none</code>, so
+workflows should request <code>auto</code> explicitly.
+The recent-platform regression policy, rejected accuracy candidates, packed
+bootstrap results, and exact weighted-class optimization are documented in the
+<a href="coverage-next-round-2026-07-21/">coverage and inference refinement round</a>.</p>
+<blockquote>
+<p>The block above is abridged for readability; run <code>oarfish --help</code> for the exact, complete option text for your installed version.</p>
+</blockquote>
+<h2 id="usage-examples">Usage examples</h2>
+<h3 id="alignment-mode-example-transcriptome-bam">Alignment-mode example (transcriptome BAM)</h3>
+<p>Assume you have ONT cDNA reads in <code>sample1_reads.fq.gz</code> and a <em>transcriptome</em> reference <code>transcripts.fa</code>, and you have <a href="https://github.com/lh3/minimap2">minimap2</a> and <a href="http://www.htslib.org/">samtools</a> installed:</p>
+<pre><code class="language-bash">$ minimap2 -t 16 --eqx -N 100 -ax map-ont transcripts.fa sample1_reads.fq.gz | samtools view -@4 -b -o alignments.bam
+$ oarfish -j 16 -a alignments.bam -o sample1 --filter-group no-filters \
+    --seq-tech ont-cdna --coverage-model auto
+</code></pre>
+<h3 id="read-mode-example-oarfish-maps-to-the-transcriptome">Read-mode example (oarfish maps to the transcriptome)</h3>
+<p>Here <code>oarfish</code> maps the reads to the transcriptome for you (no external aligner needed):</p>
+<pre><code class="language-bash">$ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa \
+    --seq-tech ont-cdna -o sample1 --filter-group no-filters --coverage-model auto
+</code></pre>
+<p>If you will quantify more than one sample against the same reference, save the index that the above command builds and reuse it:</p>
+<pre><code class="language-bash"># build + quantify, writing the index out
+$ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa \
+    --index-out transcripts.oar --seq-tech ont-cdna -o sample1 \
+    --filter-group no-filters --coverage-model auto
+# subsequent samples reuse the index
+$ oarfish -j 16 --reads sample2_reads.fq.gz --index transcripts.oar \
+    --seq-tech ont-cdna -o sample2 --filter-group no-filters --coverage-model auto
+</code></pre>
+<h3 id="genome-read-projection-example-reads-genome-transcripts">Genome read-projection example (reads → genome → transcripts)</h3>
+<p>Spliced-align the reads to the genome and project onto the annotated transcripts. You need a genome FASTA (or a prebuilt genome index) and a transcript annotation (GTF/GFF):</p>
+<pre><code class="language-bash">$ oarfish -j 16 --reads sample1_reads.fq.gz --genome genome.fa --annotation annotation.gtf \
+    --seq-tech pac-bio-hifi -o sample1 --filter-group no-filters
+</code></pre>
+<p>Soft-clip rescue is on by default and, when <code>--genome</code> is a FASTA, the rescue reference sequence is taken from it automatically. Add <code>--no-rescue</code> to disable rescue, or <code>--junctions models.bed12</code> to supply your own splice-junction hints instead of deriving them from the annotation.</p>
+<h3 id="genome-alignment-projection-example-project-an-existing-genome-bam">Genome-alignment projection example (project an existing genome BAM)</h3>
+<p>If you already have a spliced genome BAM (e.g. produced with <code>minimap2 -ax splice</code>), project it onto the transcripts directly — no reads or genome FASTA required for the projection itself, though a genome FASTA is needed if you want soft-clip rescue:</p>
+<pre><code class="language-bash"># BAM must be collated by read name
+$ minimap2 -t 16 --eqx -ax splice genome.fa sample1_reads.fq.gz | samtools collate -@4 -O -u - | samtools view -b -o genome.bam
+$ oarfish -j 16 --genome-alignments genome.bam --annotation annotation.gtf --genome-fasta genome.fa \
+    -o sample1 --filter-group no-filters
+</code></pre>
+<p>All of these commands produce the output files described <a href="#output">below</a>.</p>
+<h2 id="input-to-oarfish">Input to <code>oarfish</code></h2>
+<h3 id="read-based-input-transcriptome">Read-based input (transcriptome)</h3>
+<p>The read-based transcriptome mode takes reference transcript sequences (<code>--annotated</code> and/or <code>--novel</code>, <code>FASTA</code> files) plus a set of reads (<code>--reads</code>) and a <code>--seq-tech</code>. <code>oarfish</code> maps the reads to the transcriptome internally with its built-in <a href="#the-mapping-backend">rammap</a> mapper and quantifies the result.</p>
+<p>The <code>--annotated</code> and <code>--novel</code> flags distinguish the <em>provenance</em> of the underlying transcripts; their provenance is tracked separately in the output. It is recommended that you provide transcripts from known reference annotations (e.g. GENCODE) via <code>--annotated</code>, and transcripts assembled from your samples via <code>--novel</code>. <strong>Importantly</strong>, how transcripts are split between <code>--annotated</code> and <code>--novel</code> has no effect on the final quantification (they are joined and indexed together); only the per-source sequence signature in the output differs.</p>
+<p>Alternatively you can provide a pre-built index via <code>--index</code> (an index built from a previous <code>oarfish</code> run is preferred, since it preserves the <code>--annotated</code>/<code>--novel</code> provenance tracking). The maximum multimapping rate is controlled by <code>--best-n</code> (default 100).</p>
+<h4 id="read-based-input-formats">Read-based input formats</h4>
+<p><code>oarfish</code> accepts <code>FASTA</code>, <code>FASTQ</code>, or unaligned <code>BAM</code> (<code>uBAM</code>) reads. When you pass reads via <code>--reads</code>, the type is inferred from the file suffix: one of <code>.fa</code>, <code>.fasta</code>, <code>.fq</code>, <code>.fastq</code> (and their upper-case and <code>.gz</code> variants) is treated as (possibly compressed) <code>FASTA</code>/<code>FASTQ</code>; <code>.bam</code>/<code>.ubam</code> (any case) is treated as <code>uBAM</code>. If the format cannot be inferred from the suffix (e.g. with process substitution), it is parsed as (possibly compressed) <code>FASTA</code>/<code>FASTQ</code>.</p>
+<h3 id="alignment-based-input-transcriptome-bam">Alignment-based input (transcriptome BAM)</h3>
+<p>In alignment-based mode (<code>--alignments</code>), <code>oarfish</code> processes pre-computed alignments of the reads to the <em>transcriptome</em>. The input is a <code>BAM</code> file, name-sorted (the default order produced by <code>minimap2</code> is fine), with reads aligned against the transcriptome. <code>oarfish</code> relies on the <code>AS</code> tag in each record to obtain the alignment score used in probabilistic read assignment. See <a href="#choosing-aligner-options-for-bam-input">Choosing aligner options</a> for recommended aligner flags.</p>
+<h3 id="genome-based-input-projection-onto-transcripts">Genome-based input (projection onto transcripts)</h3>
+<p>The two genome-based modes both end by <em>projecting</em> genomic alignments onto the transcripts defined by <code>--annotation</code> (a GTF/GFF), using <a href="https://github.com/COMBINE-lab/bramble">bramble</a>, and then quantifying those projected transcriptome alignments. <code>--annotation</code> is <strong>required</strong> in genome mode.</p>
+<ul>
+<li>
+<p><strong>Genome read-projection</strong> (<code>--reads</code> + <code>--genome</code>): <code>oarfish</code> builds (or loads) a spliced genome index from <code>--genome</code> and spliced-aligns the reads to the genome, then projects. <code>--genome</code> may be a genome <code>FASTA</code> or a prebuilt genome index. The spliced-alignment preset is chosen from <code>--seq-tech</code> (<code>pac-bio-hifi</code> uses a high-quality splice preset; other technologies use the general splice preset).</p>
+</li>
+<li>
+<p><strong>Genome-alignment projection</strong> (<code>--genome-alignments</code>): <code>oarfish</code> projects an existing spliced genome <code>BAM</code>. The BAM must be <strong>collated by read name</strong> (e.g. <code>samtools collate</code>). This lets you reuse alignments produced by <code>minimap2</code>, <code>pbmm2</code>, STAR, etc.</p>
+</li>
+</ul>
+<h4 id="soft-clip-rescue">Soft-clip rescue</h4>
+<p>Projection can lose discriminating sequence at read ends that were soft-clipped during genomic alignment. <strong>Rescue is ON by default in genome mode</strong>: bramble re-aligns soft-clipped read ends against the transcript's neighboring exons to recover that signal, which improves isoform-level accuracy at negligible cost. Rescue needs the genome reference sequence:</p>
+<ul>
+<li>In genome read-projection mode, when <code>--genome</code> is a FASTA the sequence is taken from it automatically.</li>
+<li>In genome-alignment (BAM) mode, or to override the source, supply <code>--genome-fasta</code>.</li>
+<li>Use <code>--no-rescue</code> to disable rescue entirely.</li>
+</ul>
+<h4 id="splice-junction-hints">Splice-junction hints</h4>
+<p>In genome read-projection mode, splice junctions are derived automatically from <code>--annotation</code> to guide spliced alignment. You may instead supply your own junctions/transcript models as a <code>BED12</code> file via <code>--junctions</code>, in which case that file is used.</p>
+<h4 id="expectations-for-the-genome-based-modes">Expectations for the genome-based modes</h4>
+<p>These modes are newer than the transcriptome modes. On our human PacBio HiFi simulation benchmark:</p>
+<ul>
+<li><strong>Accuracy.</strong> With rescue enabled, genome read-projection quantification closely tracks direct transcriptome quantification (essentially the same mapped-read counts and per-transcript estimates). Disabling rescue (<code>--no-rescue</code>) measurably lowers isoform-level accuracy, so leave it on unless you have a reason not to.</li>
+<li><strong>Resources.</strong> Genome mode is heavier than transcriptome mode: it builds/holds a spliced genome index (tens of GB for a mammalian genome) and runs projection per read. On the 80k-read human benchmark at 48 threads, peak RSS was ~24–25 GB and wall time under a minute (excluding any one-time index build). Peak memory scales with thread count; see <a href="#the-mapping-backend"><code>--dp-cache-cap-mb</code></a> and <code>-j</code> if you need to bound it.</li>
+<li><strong>Filters.</strong> For genome projection we typically run with <code>--filter-group no-filters</code>; the NanoCount-style transcriptome filters are tuned for direct transcriptome alignments.</li>
+<li><strong>Probability weighting.</strong> In genome mode, a read's projected alignments are weighted by bramble exonic-coverage similarity, so the transcriptome-only <code>--score-prob-denom</code> option is rejected (it is an error to pass it with <code>--genome</code>/<code>--genome-alignments</code>).</li>
+</ul>
+<h3 id="choosing-aligner-options-for-bam-input">Choosing aligner options (for BAM input)</h3>
+<p>When you provide your own BAM (<code>--alignments</code> or <code>--genome-alignments</code>), it is important that the alignments are generated in a way compatible with quantification. Primarily, the aligner should report as many optimal and near-optimal alignments as exist, so <code>oarfish</code> can see all of them and allocate reads accordingly. We recommend the following <code>minimap2</code> options:</p>
+<ul>
+<li>For transcriptome alignment (<code>--alignments</code>): ONT data (dRNA or cDNA) — <code>--eqx -N 100 -ax map-ont</code>; PacBio data — <code>--eqx -N 100 -ax map-pb</code> (or <code>-ax map-hifi</code> for very high-quality PacBio HiFi).</li>
+<li>For genome alignment (<code>--genome-alignments</code>): use a spliced preset, e.g. <code>--eqx -ax splice</code> (or <code>-ax splice:hq</code> for PacBio HiFi), and collate the BAM by read name.</li>
+</ul>
+<p><strong>Note</strong>: a larger <code>-N</code> (e.g. the <a href="https://www.biorxiv.org/content/10.1101/2024.04.13.589356v1.full">TranSigner manuscript</a> recommends <code>-N 181</code>) should not diminish accuracy, but will make alignment slower and the BAM larger.</p>
+<h2 id="the-mapping-backend">The mapping backend</h2>
+<p>For raw-read input (<code>--reads</code>), <code>oarfish</code> no longer shells out to <code>minimap2</code>; mapping is performed in-process by <a href="https://github.com/jwanglab/rammap">rammap</a>, a pure-Rust long-read mapper. This removes the external alignment step and the <code>minimap2</code>/<code>htslib</code> build dependencies. Externally produced BAMs (<code>--alignments</code>, <code>--genome-alignments</code>) are of course still fully supported — those can come from <code>minimap2</code>, <code>pbmm2</code>, STAR, or any compatible aligner.</p>
+<p>The <code>--seq-tech</code> value selects the mapping preset:</p>
+<table>
+<thead>
+<tr>
+<th><code>--seq-tech</code></th>
+<th>transcriptome preset (<code>--annotated</code>/<code>--index</code>)</th>
+<th>genome preset (<code>--genome</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ont-cdna</code></td>
+<td><code>map-ont</code></td>
+<td><code>splice</code></td>
+</tr>
+<tr>
+<td><code>ont-drna</code></td>
+<td><code>map-ont</code></td>
+<td><code>splice</code></td>
+</tr>
+<tr>
+<td><code>pac-bio</code></td>
+<td><code>map-pb</code></td>
+<td><code>splice</code></td>
+</tr>
+<tr>
+<td><code>pac-bio-hifi</code></td>
+<td><code>map-hifi</code></td>
+<td><code>splice:hq</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Bounding peak memory.</strong> The mapper retains a per-thread DP alignment-scratch buffer between reads to avoid reallocation. Rare reads with large unaligned gaps can produce very large buffers, and at high thread counts the retained per-thread high-water marks can dominate peak RSS. <code>oarfish</code> caps that buffer at 128 MB by default (frees larger one-off buffers instead of pinning them), which on our genome benchmark cut peak RSS by ~20% with bit-identical output. Tune it with <code>--dp-cache-cap-mb &lt;MB&gt;</code> (or the <code>RAMMAP_DP_CACHE_CAP_MB</code> environment variable); pass <code>0</code> to disable the cap and restore the previous unbounded behavior.</p>
+<h2 id="other-notes-on-oarfish-parameters">Other notes on <code>oarfish</code> parameters</h2>
+<p>The parameters above should be explained by their relevant help option, but the <code>-d</code>/<code>--strand-filter</code> is worth noting explicitly. By default, alignments to both strands of a transcript will be considered valid.  You can use this option to allow only alignments in the specified orientation; for example <code>-d fw</code> will allow only alignments in the forward orientation and <code>-d rc</code> will allow only alignments in the reverse-complement orientation and <code>-d both</code> (the default) will allow both.  The <code>-d</code> filter, if explicitly provided, overrides the orientation filter in any provided "filter group" so e.g. passing <code>--filter-group no-filters -d fw</code> will disable other filters, but will still only admit alignments in the forward orientation.</p>
+<p><strong>In general</strong>, if you apply a <code>filter-group</code>, the group options will be applied first and then any explicitly provided options given will override the corresponding option in the <code>filter-group</code>.</p>
+<h3 id="read-level-assignment-probabilities">Read-level assignment probabilities</h3>
+<p><code>oarfish</code> has the ability to output read-level assignment probabilities.  That is, for each input read, what is the probability, conditioned on the final estimate of transcript abundances, that the read was sequenced from each transcript to which it aligned. By default, this information is not recorded (as it's not required, or commonly used, for most standard analyses). To enable this output, you should pass the <code>--write-assignment-probs</code> option to <code>oarfish</code>.  Optionally, you may also pass <code>--write-assignment-probs=compressed</code> to write the output to a compressed (<a href="https://github.com/lz4/lz4">lz4</a>) stream --- the default
+output is to an uncompressed text file.</p>
+<p>The format of the read assignment probabilities is as follows --- where all fields below on a single line are <code>\t</code> delimited:</p>
+<pre><code>&lt;m&gt; &lt;n&gt;
+&lt;tname_1&gt;
+&lt;tname_2&gt;
+...
+&lt;tname_m&gt;
+&lt;rname_1&gt; &lt;k_1&gt; &lt;tid_11&gt; &lt;tid_21&gt; ... &lt;tid_{k_1}1&gt; &lt;p_11&gt; &lt;p_21&gt; ... &lt;p_{k_1}1&gt;
+...
+&lt;rname_n&gt; &lt;k_1&gt; &lt;tid_1n&gt; &lt;tid_2n&gt; ... &lt;tid_{k_n}n&gt; &lt;p_1n&gt; &lt;p_2n&gt; ... &lt;p_{k_n}n&gt;
+</code></pre>
+<p>Here, <code>&lt;m&gt;</code> is the number of transcripts in the reference, <code>&lt;n&gt;</code> is the number of <em>mapped</em> reads. The following <code>m</code> lines consist of the names of the transcripts in the order they will be referred to in the file. The following <code>n</code> lines after that provide the actual alignment information and assignment probabilities for each read.</p>
+<p>The format of each of these lines is as follows; <code>&lt;rname&gt;</code> is the name of the read, <code>&lt;k&gt;</code> is the number of alignments for which probabilities are reported (if it is determined an alignment is invalid under the model, it may not be reported). Subsequently, there is a list of <code>k</code> integers, and <code>k</code> floating point numbers. Each of the <code>k</code> integers is the index of some transcript in the list of <code>m</code> transcripts given at the start of the file, and the subsequent list of <code>k</code> floating point numbers are the assignment probabilities of this read to each of the transcripts.</p>
+<p>The reported probabilities are renormalized over the alignments that pass <code>--display-thresh</code>, so the <code>k</code> values on a line sum to 1. They are printed with enough decimal places that an assignment passing <code>--display-thresh</code> is never rounded to <code>0</code>: the precision tracks the threshold (the default <code>--display-thresh 1e-6</code> prints 6 decimal places, and thresholds of <code>1e-3</code> or larger keep 3), so lowering the threshold both reports more alignments and prints them at a resolution that can represent them.</p>
+<p>For example:</p>
+<pre><code>5 3
+txpA
+txpB
+txpC
+txpD
+txpE
+readX 2 0 2 0.4 0.6
+readY 3 1 3 4 0.1 0.2 0.7
+readZ 1 4 1.0
+</code></pre>
+<p>This file provides an example with 5 reference transcripts and 3 mapped reads. The first read (readX) maps to transcripts 0 and 2 (so txpA and txpC) with probabilities 0.4 and 0.6 respectively. The next read (readY) maps to 3 transcripts, txpB, txpD and txpE with probabilities 0.1, 0.2, and 0.7 respectively. Finally, the last read (readZ) maps uniquely to transcript txpE with probability 1.</p>
+<p>The compressed output (i.e. what is generated if one passes <code>--write-assignment-probs=compressed</code>) is exactly the same format, except instead of residing in a plain text file, it is written to an lz4 compressed text file.  You can either decompress this file first with an lz4 decompressor, or decompress it on-the-fly as you are parsing the file using the lz4 library in your favorite language.</p>
+<h2 id="notes-about-single-cell-mode">Notes about single-cell mode</h2>
+<p>Starting with version 0.6.1 <code>oarfish</code> incorporates the first single-cell quantification capabilities. Given a <code>bam</code> file, <strong>collated by cell barcode and with already (UMI) deduplicated reads</strong>, this mode, enabled with the <code>--single-cell</code> flag, will allow <code>oarfish</code> to produce a single-cell quantification matrix.</p>
+<blockquote>
+<p><strong>Single-cell mode requires a <em>transcriptome</em>-aligned BAM, supplied with <code>--alignments</code>.</strong> Unlike bulk quantification — which can take a transcriptome BAM (<code>--alignments</code>), raw reads (<code>--reads</code>), a genome FASTA + reads (<code>--genome</code>), or a genome BAM (<code>--genome-alignments</code>) — single-cell mode supports <strong>only</strong> the transcriptome-BAM path. It does not support raw-read mapping or either of the genome (projection) modes. The CLI enforces this: <code>--single-cell</code> requires <code>--alignments</code> and conflicts with <code>--reads</code>, <code>--genome</code>, and <code>--genome-alignments</code>. The input BAM must therefore be reads aligned to the <em>transcriptome</em> (e.g. with minimap2/pbmm2), not to the genome.</p>
+</blockquote>
+<p><strong>Formatting requirements of BAM input in single-cell mode</strong>: All alignment records for the same cell barcode should be adjacent in the <code>bam</code> file, and a count will be obtained for each read record, so UMI de-duplication should have been performed if those are the counts you want. In the future, counting UMIs directly may be supported, and some of these other restrictions may be lifted.</p>
+<h2 id="inferential-replicates">Inferential Replicates</h2>
+<p><code>oarfish</code> has the ability to compute <a href="https://academic.oup.com/nar/article/47/18/e105/5542870"><em>inferential replicates</em></a> of its quantification estimates. This is performed by bootstrap sampling of the original read mappings, and subsequently performing inference under each resampling.  These inferential replicates allow assessing the variance of the point estimate of transcript abundance, and can lead to improved differential analysis at the transcript level, if using a differential testing tool that takes advantage of this information. The generation of inferential replicates is controlled by the <code>--num-bootstraps</code> argument to <code>oarfish</code>.  The default value is <code>0</code>, meaning that no inferential replicates are generated.  If you set this to some value greater than <code>0</code>, the the requested number of inferential replicates will be generated. It is recommended, if generating inferential replicates, to run <code>oarfish</code> with multiple threads, since replicate generation is highly-parallelized. Finally, if replicates are generated, they are written to a <a href="https://parquet.apache.org/"><code>Parquet</code></a>, starting with the specified output stem and ending with <code>infreps.pq</code>.</p>
+<h2 id="output">Output</h2>
+<p>The <code>--output</code> option passed to <code>oarfish</code> corresponds to a path prefix (this prefix can contain the path separator character and if it refers to a directory that does not yeat exist, that directory will be created). Based on this path prefix, say <code>P</code>, <code>oarfish</code> will create 2 files:</p>
+<ul>
+<li><code>P.meta_info.json</code> - a JSON format file containing information about relevant parameters with which <code>oarfish</code> was run, and other relevant inforamtion from the processed sample apart from the actual transcript quantifications.</li>
+<li><code>P.quant</code> - a tab separated file listing the quantified targets, as well as information about their length and other metadata. The <code>num_reads</code> column provides the estimate of the number of reads originating from each target.</li>
+<li><code>P.infreps.pq</code> - a <a href="https://parquet.apache.org/"><code>Parquet</code></a> table where each row is a transcript and each column is an inferential replicate, containing the estimated counts for each transcript under each computed inferential replicate.</li>
+<li><code>P.ambig_info.tsv</code> - a tab separated file listing, for each transcript (in the same order in which they appear in <code>P.quant</code>) the number of uniquely mapped, ambiguously mapped, and total reads.  The quantification estimate for each transcript, in general, should reside between the number of uniquely aligned reads and the total number of reads (i.e. these provide, respectively lower and upper bounds for the number of reads assigned to each transcript).  Note that the total in this file is the total number of reads that align to this transcript with a sufficiently high alignment score --- it is <em>not</em>, in general, an estimate of the number of reads originating from this transcript as many of those reads can be multimapping and, in fact, potentially better described by other transcripts.</li>
+<li><code>P.prob[.lz4]</code> - a file encoding the assignment probability of each read to each transcript to which it had a valid alignment (optionally compressed using <a href="https://github.com/lz4/lz4"><code>lz4</code></a>). This file is optional and is generated only if <code>--write-assignment-probs</code> is passed to <code>oarfish</code>.</li>
+</ul>
+<h2 id="runtime-profiling">Runtime profiling</h2>
+<ul>
+<li><a href="runtime-profile-optimization-2026-07-21/">Runtime profile and allocation pass (2026-07-21)</a></li>
+<li><a href="single-sample-inference-refinement-2026-07-22/">Single-sample inference refinement (2026-07-22)</a></li>
+<li><a href="rank-preserving-inference-2026-07-22/">Rank-preserving adaptive inference (2026-07-22)</a></li>
+<li><a href="accuracy-refinement-2026-07-23/">Single-sample accuracy refinement (2026-07-23)</a></li>
+</ul>
+<h2 id="references">References</h2>
+<div class="footnote">
+<hr />
+<ol>
+<li id="fn:Gleeson">
+<p>Josie Gleeson, Adrien Leger, Yair D J Prawer, Tracy A Lane, Paul J Harrison, Wilfried Haerty, Michael B Clark, Accurate expression quantification from nanopore direct RNA sequencing with NanoCount, Nucleic Acids Research, Volume 50, Issue 4, 28 February 2022, Page e19, <a href="https://doi.org/10.1093/nar/gkab1129">https://doi.org/10.1093/nar/gkab1129</a>&#160;<a class="footnote-backref" href="#fnref:Gleeson" title="Jump back to footnote 1 in the text">&#8617;</a></p>
+</li>
+<li id="fn:preprint">
+<p>Zahra Zare Jousheghani, Rob Patro. Oarfish: Enhanced probabilistic modeling leads to improved accuracy in long read transcriptome quantification, bioRxiv 2024.02.28.582591; doi: <a href="https://doi.org/10.1101/2024.02.28.582591">https://doi.org/10.1101/2024.02.28.582591</a>&#160;<a class="footnote-backref" href="#fnref:preprint" title="Jump back to footnote 2 in the text">&#8617;</a></p>
+</li>
+</ol>
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": [], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="javascripts/mathjax.js"></script>
+      
+        <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
