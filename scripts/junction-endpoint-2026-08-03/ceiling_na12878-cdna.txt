@@ -1,0 +1,11 @@
+BAM: 9569577 reads
+multi-candidate reads: 2812561
+misassigned (true source has <50% posterior): 1813676
+
+Of misassigned reads, comparing the TRUE source's alignment to the winner's:
+  TIED score (information-theoretically stuck)   1397244   77.04%
+  true source scores HIGHER (recoverable)         409165   22.56%
+  true source scores LOWER (read is corrupted)      6982    0.38%
+
+  of the TIED cases, junction signal favours truth: 5385 (0.30% of all misassigned)
+  of the HIGHER cases, junction signal favours truth: 118420 (6.53% of all misassigned)

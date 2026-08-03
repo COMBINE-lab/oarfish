@@ -1,0 +1,17 @@
+records scanned: 6000000   alignments used: true=1571636 decoy=4173409   (skipped no-struct: 213459)
+
+3' alignment END within w of an INTERNAL junction of t
+w(nt)  P(hit|true)  P(hit|decoy) LR decoy/true
+0      0.0012       0.0121       9.74x     
+2      0.0062       0.0273       4.40x     
+5      0.0136       0.0419       3.08x     
+10     0.0260       0.0640       2.46x     
+20     0.0505       0.1035       2.05x     
+
+5' alignment START within w of an INTERNAL junction of t
+w(nt)  P(hit|true)  P(hit|decoy) LR decoy/true
+0      0.0040       0.0288       7.17x     
+2      0.0199       0.1058       5.30x     
+5      0.0439       0.1500       3.42x     
+10     0.0842       0.1977       2.35x     
+20     0.1660       0.2783       1.68x     

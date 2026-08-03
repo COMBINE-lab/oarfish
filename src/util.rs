@@ -11,6 +11,7 @@ pub mod dominance_pruning;
 pub mod endpoint_probability;
 pub mod file_utils;
 pub mod hybrid_probability;
+pub mod junction_endpoint; // [junction-endpoint] experimental, opt-in
 pub mod kde_utils;
 pub mod logistic_probability;
 pub mod mapper;

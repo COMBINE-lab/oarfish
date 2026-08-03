@@ -480,6 +480,42 @@ fn perform_inference_and_write_output(
         None
     };
 
+    // ---- [junction-endpoint] experimental, opt-in; delete this block to remove ----
+    // Applied after all coverage modelling and immediately before the EM, so it
+    // composes with whatever coverage model is active and touches nothing else.
+    if let Some(gtf) = args.junction_endpoint_gtf.as_ref() {
+        let lens: Vec<usize> = txps.iter().map(|t| t.len.get()).collect();
+        let jidx =
+            crate::util::junction_endpoint::JunctionIndex::from_gtf(gtf, txps_name, &lens)?;
+        let (hit, total) = crate::util::junction_endpoint::apply(
+            store,
+            &jidx,
+            args.junction_endpoint_window,
+            args.junction_endpoint_lambda,
+        );
+        info!(
+            "junction-endpoint: {} transcripts with internal junctions ({} unmatched, {} length-mismatched); \
+             penalised {}/{} alignments (window {} nt, lambda {})",
+            jidx.n_with_junctions,
+            jidx.n_unmatched,
+            jidx.n_length_mismatch,
+            hit,
+            total,
+            args.junction_endpoint_window,
+            args.junction_endpoint_lambda
+        );
+        coverage_diagnostics["junction_endpoint"] = json!({
+            "window_nt": args.junction_endpoint_window,
+            "lambda": args.junction_endpoint_lambda,
+            "transcripts_with_junctions": jidx.n_with_junctions,
+            "transcripts_unmatched": jidx.n_unmatched,
+            "transcripts_length_mismatch": jidx.n_length_mismatch,
+            "alignments_penalized": hit,
+            "alignments_total": total,
+        });
+    }
+    // ---- end [junction-endpoint] ----
+
     // wrap up all of the relevant information we need for estimation
     // in an EMInfo struct and then call the EM algorithm.
     let emi = EMInfo {

@@ -1,0 +1,17 @@
+records scanned: 12000000 ; transcripts with >=1 alignment: 90735
+
+--- transcripts with >=10 alignments ---
+  truly EXPRESSED: n=21191   mean junc-terminated frac = 0.1201  median 0.0930
+  truly ABSENT   : n=37962   mean junc-terminated frac = 0.1848  median 0.1556
+  ratio of means : 1.54x
+   frac>0.2 : expressed 0.169  absent 0.361   enrichment 2.13x
+   frac>0.4 : expressed 0.029  absent 0.080   enrichment 2.72x
+   frac>0.6 : expressed 0.005  absent 0.014   enrichment 3.07x
+
+--- transcripts with >=50 alignments ---
+  truly EXPRESSED: n=13131   mean junc-terminated frac = 0.1226  median 0.0962
+  truly ABSENT   : n=15011   mean junc-terminated frac = 0.1775  median 0.1475
+  ratio of means : 1.45x
+   frac>0.2 : expressed 0.165  absent 0.323   enrichment 1.96x
+   frac>0.4 : expressed 0.030  absent 0.071   enrichment 2.39x
+   frac>0.6 : expressed 0.005  absent 0.011   enrichment 2.22x

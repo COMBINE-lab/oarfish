@@ -1,0 +1,23 @@
+##### h9-cdna
+multi-candidate reads: 3526720
+misassigned (true source has <50% posterior): 2096794
+
+Of misassigned reads, comparing the TRUE source's alignment to the winner's:
+  TIED score (information-theoretically stuck)   1560428   74.42%
+  true source scores HIGHER (recoverable)         530159   25.28%
+  true source scores LOWER (read is corrupted)      5864    0.28%
+
+  of the TIED cases, junction signal favours truth: 4100 (0.20% of all misassigned)
+  of the HIGHER cases, junction signal favours truth: 187055 (8.92% of all misassigned)
+##### na12878-drna
+multi-candidate reads: 1926321
+misassigned (true source has <50% posterior): 1080645
+
+Of misassigned reads, comparing the TRUE source's alignment to the winner's:
+  TIED score (information-theoretically stuck)    721520   66.77%
+  true source scores HIGHER (recoverable)         355404   32.89%
+  true source scores LOWER (read is corrupted)      3335    0.31%
+
+  of the TIED cases, junction signal favours truth: 1603 (0.15% of all misassigned)
+  of the HIGHER cases, junction signal favours truth: 104473 (9.67% of all misassigned)
+CEIL_DONE

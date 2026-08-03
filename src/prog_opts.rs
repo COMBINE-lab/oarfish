@@ -579,6 +579,23 @@ pub struct Args {
     #[arg(long, value_enum, default_value_t = CensoringModel::Auto, help_heading = "filters")]
     pub censoring_model: CensoringModel,
 
+    // ---- [junction-endpoint] experimental, opt-in; delete this block to remove ----
+    /// EXPERIMENTAL: transcript annotation (GTF) enabling the internal-splice-junction
+    /// endpoint penalty. When set, alignments whose transcript-coordinate boundary
+    /// falls within `--junction-endpoint-window` of an *internal* junction of the
+    /// transcript are down-weighted, since such an endpoint is usually better
+    /// explained by a sibling isoform that terminates there. Off unless provided.
+    #[arg(long, help_heading = "coverage model")]
+    pub junction_endpoint_gtf: Option<PathBuf>,
+
+    /// EXPERIMENTAL: tolerance (nt) for calling an alignment boundary "at" an internal junction
+    #[arg(long, default_value_t = 5, help_heading = "coverage model")]
+    pub junction_endpoint_window: u32,
+
+    /// EXPERIMENTAL: log-penalty applied to junction-terminated alignments
+    #[arg(long, default_value_t = 6.0, help_heading = "coverage model")]
+    pub junction_endpoint_lambda: f64,
+    // ---- end [junction-endpoint] ----
     /// abundance-dependent rank preservation toward a preliminary coverage-free estimate
     #[arg(long, value_enum, default_value_t = RankBlend::None, help_heading = "coverage model")]
     pub rank_blend: RankBlend,
