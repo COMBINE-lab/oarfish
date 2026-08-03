@@ -42,6 +42,35 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   PacBio Kinnex, including a selective 250,000-read depth confirmation tier and
   machine-readable accuracy/runtime results.
 
+### Changed
+
+- `--rank-blend` and `--candidate-pruning` now default to `none`, so
+  `--coverage-model auto` no longer enables abundance rank blending or
+  dominance pruning implicitly. Both remain reachable as `auto`/`fixed`/
+  `dominance` for benchmarking.
+
+  On NanoSim (ONT) and TKSM (PacBio) simulations with exact read-level truth,
+  the previous defaults regressed Spearman by 0.04-0.12 versus the published
+  `--model-coverage` (logistic) model, and inflated MARD up to 2.7x. Attributed
+  by add-one ablation on NanoSim NA12878 1D-cDNA (baseline 0.8846 Spearman):
+  rank blending -0.0967, dominance pruning -0.0282, alignment calibration
+  -0.0004, censoring -0.0019. With both demoted, `auto` returns to parity with
+  the logistic baseline (0.8824 vs 0.8850) at 1.8x the speed, and the adaptive
+  kernel alone matches or beats it on all three ONT datasets tested.
+
+  Two specific defects motivated the demotion. Rank blending mixes 20% of a
+  coverage-free warm-up EM into every estimate, and that warm-up terminates
+  non-converged at the 100-iteration cap; its 37 nt censoring-scale activation
+  gate was calibrated assuming independent simulations fit the 25 nt clamp and
+  would abstain, but NanoSim 1D-cDNA fits 87.85 nt and the gate fires. Dominance
+  pruning hard-zeroes 22-27% of all candidates before the EM at a Bayes factor
+  of 2.0, using alignment span as a trusted signal, which systematically favors
+  longer isoforms.
+
+  See `docs/coverage-auto-defaults-review-2026-08-03.md`. These defaults are
+  provisional pending a re-benchmark of the original selection panel with
+  `logistic` reinstated as a comparator.
+
 ## 0.10.3 - 2026-07-16
 
 Patch release improving the numeric precision of the `--write-assignment-probs`

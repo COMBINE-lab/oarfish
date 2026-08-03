@@ -29,11 +29,16 @@ pub enum EmAccel {
 /// Experimental removal of candidates dominated by another alignment.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
 pub enum CandidatePruning {
+    /// Default. Leave candidate resolution entirely to the EM.
+    #[default]
     None,
     /// Prune only when another candidate is no worse on every trusted signal.
     Dominance,
     /// Use dominance pruning with transcriptome `--coverage-model auto`.
-    #[default]
+    ///
+    /// Not a default: on NanoSim/TKSM simulations this hard-zeroes ~22-27% of
+    /// all candidates before the EM and costs 0.028 Spearman.  Retained for
+    /// benchmarking against the panel that originally selected it.
     Auto,
 }
 
@@ -51,12 +56,18 @@ pub enum CensoringModel {
 /// Post-inference preservation of low-abundance rank structure.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
 pub enum RankBlend {
+    /// Default. Use the corrected EM estimate unchanged.
+    #[default]
     None,
     /// Blend low-abundance estimates toward a coverage-free warm-up.
     Fixed,
     /// Apply the blend only when the learned censoring scale indicates that
     /// coverage correction is uncertain enough to benefit from rank protection.
-    #[default]
+    ///
+    /// Not a default: the 37 nt censoring-scale gate was calibrated on the
+    /// assumption that independent simulations fit the 25 nt clamp and would
+    /// abstain.  NanoSim 1D-cDNA fits 87.85 nt, so the gate fires and costs
+    /// 0.097 Spearman (MARD 2.4x).  Retained for benchmarking.
     Auto,
 }
 
@@ -557,7 +568,7 @@ pub struct Args {
     pub alignment_calibration: AlignmentCalibration,
 
     /// conservative candidate pruning applied after coverage modeling
-    #[arg(long, value_enum, default_value_t = CandidatePruning::Auto, help_heading = "filters")]
+    #[arg(long, value_enum, default_value_t = CandidatePruning::None, help_heading = "filters")]
     pub candidate_pruning: CandidatePruning,
 
     /// minimum combined likelihood ratio required for dominance pruning
@@ -569,7 +580,7 @@ pub struct Args {
     pub censoring_model: CensoringModel,
 
     /// abundance-dependent rank preservation toward a preliminary coverage-free estimate
-    #[arg(long, value_enum, default_value_t = RankBlend::Auto, help_heading = "coverage model")]
+    #[arg(long, value_enum, default_value_t = RankBlend::None, help_heading = "coverage model")]
     pub rank_blend: RankBlend,
 
     /// minimum fraction of the corrected estimate retained by rank blending
@@ -821,7 +832,7 @@ pub struct Args {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, CoverageModel, DegradationKernel, EmAccel};
+    use super::{Args, CandidatePruning, CoverageModel, DegradationKernel, EmAccel, RankBlend};
     use clap::Parser;
 
     #[test]
@@ -939,6 +950,31 @@ mod tests {
         .expect("valid automatic technology options");
         assert_eq!(automatic.coverage_model, CoverageModel::Auto);
         assert_eq!(automatic.seq_tech, Some(super::SequencingTech::PacBioHifi));
+        // `--coverage-model auto` must not silently enable rank blending or
+        // dominance pruning; both regress NanoSim/TKSM simulations and are
+        // opt-in until they are re-benchmarked against `logistic`.
+        assert_eq!(automatic.rank_blend, RankBlend::None);
+        assert_eq!(automatic.candidate_pruning, CandidatePruning::None);
+        // Both remain explicitly reachable so the original selection panel can
+        // still be reproduced.
+        let opted_in = Args::try_parse_from([
+            "oarfish",
+            "-a",
+            "reads.bam",
+            "-o",
+            "out",
+            "--coverage-model",
+            "auto",
+            "--seq-tech",
+            "ont-cdna",
+            "--rank-blend",
+            "auto",
+            "--candidate-pruning",
+            "auto",
+        ])
+        .expect("rank blend and dominance pruning remain opt-in");
+        assert_eq!(opted_in.rank_blend, RankBlend::Auto);
+        assert_eq!(opted_in.candidate_pruning, CandidatePruning::Auto);
         assert!(
             Args::try_parse_from([
                 "oarfish",
