@@ -34,7 +34,7 @@ pub fn read_and_verify_header<R: io::BufRead>(
     // if we have an inner header field (@HD) then check for
     // the sort-order tag ane ensure it is *not* "coordinate".
     if let Some(inner_header) = header.header() {
-        let so = tag::Other::try_from([b'S', b'O'])?;
+        let so = tag::Other::try_from(*b"SO")?;
         let so_type_opt = inner_header.other_fields().get(&so);
 
         // we have an SO flag, ensure it's not "coordinate"
@@ -118,7 +118,7 @@ pub fn read_and_verify_genome_header<R: io::BufRead>(
     );
 
     if let Some(inner_header) = header.header() {
-        let so = tag::Other::try_from([b'S', b'O'])?;
+        let so = tag::Other::try_from(*b"SO")?;
         if let Some(so_type) = inner_header.other_fields().get(&so)
             && so_type == "coordinate"
         {
@@ -148,7 +148,7 @@ pub enum NextAction {
 
 #[inline(always)]
 fn is_same_barcode(rec: &RecordBuf, current_barcode: &[u8]) -> anyhow::Result<bool> {
-    const CB_TAG: [u8; 2] = [b'C', b'B'];
+    const CB_TAG: [u8; 2] = *b"CB";
     let same_barcode = match rec.data().get(&CB_TAG) {
         None => anyhow::bail!("could not get CB tag value"),
         Some(v) => match v {
@@ -405,7 +405,7 @@ pub fn parse_alignments<R: io::BufRead>(
                             "You appear to have provided a coordinate-sorted BAM, but oarfish does not support processing these.\n\
                                     You should provide a BAM file collated by record name (which is the \"natural\" minimap2 order).\n\
                                     Alignment records for the same read {} were observed twice in a non-contiguous block.",
-                            &prev_read
+                            prev_read
                         );
                     }
                     rg_num += 1;
@@ -516,9 +516,9 @@ fn record_buf_to_genomic_alignment(rec: &RecordBuf, query_name: &str) -> Option<
         sequence,
         is_paired: flags.is_segmented(),
         is_first_in_pair: flags.is_first_segment(),
-        xs_strand: char_tag(rec, [b'X', b'S']),
-        ts_strand: char_tag(rec, [b't', b's']),
-        hit_index: int_tag(rec, [b'H', b'I']).unwrap_or(0) as i32,
+        xs_strand: char_tag(rec, *b"XS"),
+        ts_strand: char_tag(rec, *b"ts"),
+        hit_index: int_tag(rec, *b"HI").unwrap_or(0) as i32,
         mate_ref_id: rec.mate_reference_sequence_id().map(|x| x as i32),
         mate_ref_start: rec.mate_alignment_start().map(|p| p.get() as i64),
         mate_is_unmapped: flags.is_mate_unmapped(),
@@ -550,7 +550,7 @@ fn project_and_add_group(
     for r in records_for_read {
         if let Some(ga) = record_buf_to_genomic_alignment(r, query_name) {
             alns.push(ga);
-            src_scores.push(int_tag(r, [b'A', b'S']).unwrap_or(0) as i32);
+            src_scores.push(int_tag(r, *b"AS").unwrap_or(0) as i32);
         }
     }
     if alns.is_empty() {
@@ -677,7 +677,7 @@ pub fn parse_genome_alignments<R: io::BufRead>(
                         "You appear to have provided a coordinate-sorted genome BAM, but genome-projection\n\
                          mode requires a BAM collated by read name. Alignment records for read {} were\n\
                          observed twice in a non-contiguous block. Try `samtools collate`.",
-                        &prev_read
+                        prev_read
                     );
                 }
                 rg_num += 1;
