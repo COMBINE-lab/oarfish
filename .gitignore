@@ -16,3 +16,7 @@ Cargo.lock
 /results
 # local build dir used for benchmarking (custom CARGO_TARGET_DIR)
 /target-demote/
+
+# python bytecode from the analysis scripts
+__pycache__/
+*.pyc
