@@ -26,62 +26,6 @@ pub enum EmAccel {
     Daarem,
 }
 
-/// Experimental removal of candidates dominated by another alignment.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
-pub enum CandidatePruning {
-    /// Default. Leave candidate resolution entirely to the EM.
-    #[default]
-    None,
-    /// Prune only when another candidate is no worse on every trusted signal.
-    Dominance,
-    /// Use dominance pruning with transcriptome `--coverage-model auto`.
-    ///
-    /// Not a default: on NanoSim/TKSM simulations this hard-zeroes ~22-27% of
-    /// all candidates before the EM and costs 0.028 Spearman.  Retained for
-    /// benchmarking against the panel that originally selected it.
-    Auto,
-}
-
-/// Candidate likelihood for alignment-induced terminal censoring.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
-pub enum CensoringModel {
-    None,
-    /// Learn the unexplained terminal-clipping scale from unique reads.
-    Adaptive,
-    /// Use adaptive censoring with transcriptome `--coverage-model auto`.
-    #[default]
-    Auto,
-}
-
-/// Post-inference preservation of low-abundance rank structure.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
-pub enum RankBlend {
-    /// Default. Use the corrected EM estimate unchanged.
-    #[default]
-    None,
-    /// Blend low-abundance estimates toward a coverage-free warm-up.
-    Fixed,
-    /// Apply the blend only when the learned censoring scale indicates that
-    /// coverage correction is uncertain enough to benefit from rank protection.
-    ///
-    /// Not a default: the 37 nt censoring-scale gate was calibrated on the
-    /// assumption that independent simulations fit the 25 nt clamp and would
-    /// abstain.  NanoSim 1D-cDNA fits 87.85 nt, so the gate fires and costs
-    /// 0.097 Spearman (MARD 2.4x).  Retained for benchmarking.
-    Auto,
-}
-
-/// Optional joint calibration of transcriptome alignment likelihoods.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
-pub enum AlignmentCalibration {
-    None,
-    /// Sharpen score likelihoods only when score, clipping, and span agree.
-    Agreement,
-    /// Use agreement calibration for automatic transcriptome inference.
-    #[default]
-    Auto,
-}
-
 /// Coverage evidence included in bulk read-assignment likelihoods.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
 pub enum CoverageModel {
@@ -563,29 +507,11 @@ pub struct Args {
     #[arg(long, value_parser = parse_pos_f32, help_heading = "filters")]
     pub score_prob_denom: Option<f32>,
 
-    /// calibrate alignment-score evidence using independent read features
-    #[arg(long, value_enum, default_value_t = AlignmentCalibration::Auto, help_heading = "filters")]
-    pub alignment_calibration: AlignmentCalibration,
 
-    /// conservative candidate pruning applied after coverage modeling
-    #[arg(long, value_enum, default_value_t = CandidatePruning::None, help_heading = "filters")]
-    pub candidate_pruning: CandidatePruning,
 
-    /// minimum combined likelihood ratio required for dominance pruning
-    #[arg(long, default_value_t = 2.0, value_parser = parse_bayes_factor, help_heading = "filters")]
-    pub dominance_bayes_factor: f64,
 
-    /// model candidate-specific terminal clipping not explained by transcript ends
-    #[arg(long, value_enum, default_value_t = CensoringModel::Auto, help_heading = "filters")]
-    pub censoring_model: CensoringModel,
 
-    /// abundance-dependent rank preservation toward a preliminary coverage-free estimate
-    #[arg(long, value_enum, default_value_t = RankBlend::None, help_heading = "coverage model")]
-    pub rank_blend: RankBlend,
 
-    /// minimum fraction of the corrected estimate retained by rank blending
-    #[arg(long, default_value_t = 0.8, value_parser = parse_unit_f64, help_heading = "coverage model")]
-    pub rank_blend_floor: f64,
 
     /// genome mode: per-internal-junction-mismatch discount in (0,1] applied to a
     /// transcript's projection similarity (sharpens isoform discrimination).
@@ -832,7 +758,7 @@ pub struct Args {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, CandidatePruning, CoverageModel, DegradationKernel, EmAccel, RankBlend};
+    use super::{Args, CoverageModel, DegradationKernel, EmAccel};
     use clap::Parser;
 
     #[test]
@@ -950,31 +876,10 @@ mod tests {
         .expect("valid automatic technology options");
         assert_eq!(automatic.coverage_model, CoverageModel::Auto);
         assert_eq!(automatic.seq_tech, Some(super::SequencingTech::PacBioHifi));
-        // `--coverage-model auto` must not silently enable rank blending or
-        // dominance pruning; both regress NanoSim/TKSM simulations and are
-        // opt-in until they are re-benchmarked against `logistic`.
-        assert_eq!(automatic.rank_blend, RankBlend::None);
-        assert_eq!(automatic.candidate_pruning, CandidatePruning::None);
-        // Both remain explicitly reachable so the original selection panel can
-        // still be reproduced.
-        let opted_in = Args::try_parse_from([
-            "oarfish",
-            "-a",
-            "reads.bam",
-            "-o",
-            "out",
-            "--coverage-model",
-            "auto",
-            "--seq-tech",
-            "ont-cdna",
-            "--rank-blend",
-            "auto",
-            "--candidate-pruning",
-            "auto",
-        ])
-        .expect("rank blend and dominance pruning remain opt-in");
-        assert_eq!(opted_in.rank_blend, RankBlend::Auto);
-        assert_eq!(opted_in.candidate_pruning, CandidatePruning::Auto);
+        // The four experimental coverage extras (rank blending, dominance
+        // pruning, alignment calibration, censoring) were removed; see
+        // archive/coverage-extras-2026-08-03.  `auto` now selects only the
+        // technology kernel.
         assert!(
             Args::try_parse_from([
                 "oarfish",

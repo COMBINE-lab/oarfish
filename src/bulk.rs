@@ -94,12 +94,6 @@ fn get_json_info(
         "coverage_abundance_midpoint_per_million": args.coverage_abundance_midpoint_per_million,
         "sequencing_technology": args.seq_tech,
         "coverage_diagnostics": coverage_diagnostics,
-        "censoring_model": args.censoring_model,
-        "candidate_pruning": args.candidate_pruning,
-        "dominance_bayes_factor": args.dominance_bayes_factor,
-        "rank_blend": args.rank_blend,
-        "rank_blend_floor": args.rank_blend_floor,
-        "alignment_calibration": args.alignment_calibration,
         "filter_options" : &emi.eq_map.filter_opts,
         "discard_table" : &emi.eq_map.discard_table,
         "alignments": &args.alignments,
@@ -149,22 +143,6 @@ fn perform_inference_and_write_output(
     let mut physical_creation_guard = None;
     let mut physical_warmup_diagnostics = None;
     let mut coverage_diagnostics = json!({});
-    let automatic_alignment_calibration = args.genome.is_none()
-        && args.genome_alignments.is_none()
-        && args.coverage_model == crate::prog_opts::CoverageModel::Auto
-        && args.score_prob_denom.is_none();
-    let alignment_calibration_diagnostics = if args.alignment_calibration
-        == crate::prog_opts::AlignmentCalibration::Agreement
-        || (args.alignment_calibration == crate::prog_opts::AlignmentCalibration::Auto
-            && automatic_alignment_calibration)
-    {
-        let diagnostics =
-            crate::util::alignment_calibration::apply_agreement_calibration(store, txps);
-        info!(?diagnostics, "calibrated alignment-score likelihoods");
-        Some(diagnostics)
-    } else {
-        None
-    };
     if args.coverage_model == crate::prog_opts::CoverageModel::Logistic {
         //obtaining the Cumulative Distribution Function (CDF) for each transcript
         logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
@@ -356,38 +334,10 @@ fn perform_inference_and_write_output(
             "adaptive": adaptive_diagnostics,
         });
     }
-    if let Some(diagnostics) = alignment_calibration_diagnostics {
-        coverage_diagnostics["alignment_calibration"] = serde_json::to_value(diagnostics)?;
-    }
-    let transcriptome_input = args.genome.is_none() && args.genome_alignments.is_none();
-    let automatic_inference =
-        transcriptome_input && args.coverage_model == crate::prog_opts::CoverageModel::Auto;
-    const AUTO_RANK_BLEND_MIN_CENSOR_SCALE_NT: f64 = 37.0;
-    const AUTO_RANK_BLEND_MIN_TRANSCRIPTS: usize = 1_000;
-    let rank_blend_scale =
-        if args.rank_blend == crate::prog_opts::RankBlend::Auto && automatic_inference {
-            Some(crate::util::censoring_probability::estimate_censor_scale(
-                store, txps,
-            ))
-        } else {
-            None
-        };
-    let rank_blend_active = args.rank_blend == crate::prog_opts::RankBlend::Fixed
-        || rank_blend_scale.is_some_and(|scale| {
-            scale > AUTO_RANK_BLEND_MIN_CENSOR_SCALE_NT
-                && txps.len() >= AUTO_RANK_BLEND_MIN_TRANSCRIPTS
-        });
-    coverage_diagnostics["rank_blend_selection"] = json!({
-        "requested": args.rank_blend,
-        "active": rank_blend_active,
-        "learned_censor_scale_nt": rank_blend_scale,
-        "minimum_censor_scale_nt": AUTO_RANK_BLEND_MIN_CENSOR_SCALE_NT,
-        "minimum_transcripts": AUTO_RANK_BLEND_MIN_TRANSCRIPTS,
-    });
     if (matches!(
         args.coverage_ablation,
         crate::prog_opts::CoverageAblation::AbundanceBlend
-    ) || rank_blend_active)
+    ))
         && warmup_abundances.is_none()
     {
         let warmup_start = std::time::Instant::now();
@@ -422,25 +372,6 @@ fn perform_inference_and_write_output(
     if let Some(diagnostics) = physical_warmup_diagnostics {
         coverage_diagnostics["abundance_warmup"] = diagnostics;
     }
-    if args.censoring_model == crate::prog_opts::CensoringModel::Adaptive
-        || (args.censoring_model == crate::prog_opts::CensoringModel::Auto && automatic_inference)
-    {
-        let diagnostics =
-            crate::util::censoring_probability::apply_censoring_probabilities(store, txps);
-        info!(?diagnostics, "applied read-level censoring likelihood");
-        coverage_diagnostics["censoring"] = serde_json::to_value(diagnostics)?;
-    }
-    if args.candidate_pruning == crate::prog_opts::CandidatePruning::Dominance
-        || (args.candidate_pruning == crate::prog_opts::CandidatePruning::Auto
-            && automatic_inference)
-    {
-        let diagnostics = crate::util::dominance_pruning::apply_dominance_pruning(
-            store,
-            args.dominance_bayes_factor,
-        );
-        info!(?diagnostics, "applied candidate-dominance pruning");
-        coverage_diagnostics["candidate_pruning"] = serde_json::to_value(diagnostics)?;
-    }
     let coverage_time = coverage_start.elapsed();
 
     info!(
@@ -473,7 +404,6 @@ fn perform_inference_and_write_output(
         args.coverage_ablation,
         crate::prog_opts::CoverageAblation::AbundanceBlend
     ) || physical_creation_guard.is_some()
-        || rank_blend_active
     {
         warmup_abundances
     } else {
@@ -540,12 +470,14 @@ fn perform_inference_and_write_output(
                 "minimum_extreme_library_fraction": 0.0025,
             });
         }
-        if rank_blend_active
-            || matches!(
-                args.coverage_ablation,
-                crate::prog_opts::CoverageAblation::AbundanceBlend
-            )
-        {
+        if matches!(
+            args.coverage_ablation,
+            crate::prog_opts::CoverageAblation::AbundanceBlend
+        ) {
+            // Retained only for the `abundance-blend` ablation used in
+            // benchmarking; the former `--rank-blend-floor` CLI knob was removed
+            // with the rank-blending feature (archive/coverage-extras-2026-08-03).
+            const ABUNDANCE_BLEND_FLOOR: f64 = 0.8;
             let midpoint = (store.num_aligned_reads() as f64
                 * args.coverage_abundance_midpoint_per_million
                 / 1_000_000.0)
@@ -554,15 +486,15 @@ fn perform_inference_and_write_output(
             for (count, &baseline) in em_result.counts.iter_mut().zip(&reference) {
                 let ratio = baseline.max(0.0) / midpoint;
                 let ratio4 = ratio * ratio * ratio * ratio;
-                let gate =
-                    args.rank_blend_floor + (1.0 - args.rank_blend_floor) * ratio4 / (1.0 + ratio4);
+                let gate = ABUNDANCE_BLEND_FLOOR
+                    + (1.0 - ABUNDANCE_BLEND_FLOOR) * ratio4 / (1.0 + ratio4);
                 *count = baseline + gate * (*count - baseline);
                 gate_sum += gate;
             }
             coverage_diagnostics["abundance_blend"] = json!({
                 "midpoint_count": midpoint,
                 "mean_gate": gate_sum / em_result.counts.len().max(1) as f64,
-                "minimum_gate": args.rank_blend_floor,
+                "minimum_gate": ABUNDANCE_BLEND_FLOOR,
             });
         }
         let total: f64 = em_result.counts.iter().sum();
