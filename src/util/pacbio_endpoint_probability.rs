@@ -216,7 +216,6 @@ mod tests {
             ref_id: 0,
             start,
             end,
-            prob: 0.0,
             strand: Strand::Forward,
             left_clip: 0,
             right_clip: 0,

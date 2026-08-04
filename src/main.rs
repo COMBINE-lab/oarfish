@@ -87,6 +87,22 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
         );
     }
 
+    // Unannotated-isoform modeling needs the junction evidence and locus
+    // attribution that only projection produces; in transcriptome mode there is
+    // no splice structure to disagree with, so the flag would silently do
+    // nothing.
+    if args.model_unannotated_isoforms
+        && args.genome.is_none()
+        && args.genome_alignments.is_none()
+    {
+        anyhow::bail!(
+            "--model-unannotated-isoforms requires genome (projection) mode: it relies on \
+             the splice-junction evidence produced when genomic alignments are projected \
+             onto the annotation, which transcriptome alignments do not carry. Please pass \
+             --genome (with --reads) or --genome-alignments, together with --annotation."
+        );
+    }
+
     // set all of the filter options that the user
     // wants to apply.
     match args.filter_group {

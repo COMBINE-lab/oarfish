@@ -17,6 +17,11 @@ ABLATIONS = (
     "no-agreement-gate", "no-bayes-cap", "quality-gate",
     "uncertainty-gate", "eq-class-training", "all-candidates",
     "abundance-blend", "pacbio-physical-endpoint",
+    "endpoint-feasible-smoothing", "endpoint-feasible-prior",
+    "endpoint-feasible-geometry", "endpoint-wide-prior-grid",
+    "endpoint-nt-measure", "endpoint-nt-measure-geometry",
+    "continuous-nested-guard", "responsibility-profiles",
+    "component-mass-conservation", "polya-three-prime",
 )
 
 
@@ -47,7 +52,8 @@ def accuracy(truth, quant):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("manifest", type=Path,
-                        help="TSV: sample, bam, technology, truth, truth_type")
+                        help="TSV: sample, technology, truth, truth_type, and either "
+                             "`bam` (alignment mode) or `reads`+`reference` (raw-read mode)")
     parser.add_argument("output_dir", type=Path)
     parser.add_argument("--binary", type=Path, default=Path("target/release/oarfish"))
     parser.add_argument("--threads", type=int, default=4)
@@ -94,8 +100,16 @@ def main():
                     time_file = prefix.with_suffix(".time.txt")
                     model = "none" if ablation == "none" else "auto"
                     ablation_arg = "full" if ablation == "none" else ablation
+                    # Truth-bearing panels are often distributed as reads rather
+                    # than as fixed alignments; accept either form so both tiers
+                    # can run under one driver.
+                    if item.get("bam"):
+                        source = ["--alignments", item["bam"]]
+                    else:
+                        source = ["--reads", item["reads"],
+                                  "--annotated", item["reference"]]
                     command = ["/usr/bin/time", "-v", "-o", str(time_file),
-                               str(args.binary), "--alignments", item["bam"],
+                               str(args.binary), *source,
                                "--output", str(prefix), "--coverage-model", model,
                                "--seq-tech", item["technology"], "--coverage-ablation",
                                ablation_arg, "--filter-group", "no-filters", "--threads",

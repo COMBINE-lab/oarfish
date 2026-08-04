@@ -106,6 +106,12 @@ mod backend {
             self.m.is_supplementary
         }
 
+        fn three_prime_polya(&self) -> u32 {
+            // The rammap mapping does not retain the read sequence here, so
+            // raw-read mode currently supplies no tail evidence. BAM input does.
+            0
+        }
+
         fn terminal_clips(&self) -> (u32, u32) {
             let query_start = self.m.query_start as u32;
             let query_end = self.m.query_end as u32;

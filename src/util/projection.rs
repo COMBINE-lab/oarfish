@@ -224,6 +224,8 @@ pub fn projected_to_records(
             query_aligned_len: p.query_aligned_len,
             is_reverse: p.is_reverse,
             similarity: p.similarity_score,
+            junc_hits: p.junc_hits,
+            junc_misses: p.junc_misses,
             aln_score: src_scores.get(p.input_index).copied().unwrap_or(0),
         })
         .collect()
@@ -273,6 +275,42 @@ pub fn load_rescue_fasta(args: &Args) -> anyhow::Result<Option<FastaDb>> {
 }
 
 /// Long-read projection config. `use_fasta` reflects whether a rescue reference
+/// Genomic span `[start, end)` covered by an alignment's reference-consuming
+/// CIGAR operations (M/D/N/=/X), in the same 1-based coordinates as `ref_start`.
+///
+/// Used to ask which annotated transcripts a read physically overlaps when
+/// projection produced nothing; the span deliberately spans introns (`N`), since
+/// the point is to locate the read's locus, not to reconstruct its structure.
+pub fn genomic_span(aln: &GenomicAlignment) -> (u32, u32) {
+    let mut span: u32 = 0;
+    for &(len, op) in &aln.cigar {
+        // 0=M, 2=D, 3=N, 7='=', 8=X consume the reference.
+        if matches!(op, 0 | 2 | 3 | 7 | 8) {
+            span += len;
+        }
+    }
+    let start = aln.ref_start.max(0) as u32;
+    (start, start.saturating_add(span))
+}
+
+/// Transcripts whose exons overlap any alignment in a read group, ignoring
+/// splice compatibility. Empty when the read lies outside every annotated exon.
+pub fn overlapping_transcripts(alns: &[GenomicAlignment], g2t: &bramble_rs::g2t::G2TTree) -> Vec<u32> {
+    let mut out: Vec<u32> = Vec::new();
+    for aln in alns {
+        if aln.ref_id < 0 {
+            continue;
+        }
+        let (start, end) = genomic_span(aln);
+        if end > start {
+            out.extend(g2t.overlapping_transcripts(aln.ref_id, start, end));
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// was actually resolved (from a FASTA or the aligner index) — soft-clip rescue
 /// is on by default and disabled by `--no-rescue` or the absence of any source.
 pub fn projection_config(args: &Args, use_fasta: bool) -> ProjectionConfig {
@@ -280,6 +318,11 @@ pub fn projection_config(args: &Args, use_fasta: bool) -> ProjectionConfig {
         long_reads: true,
         use_fasta,
         junc_miss_discount: args.junc_miss_discount,
+        similarity_threshold: args.projection_similarity_threshold.map(|t| t as f32),
+        max_clip: args.projection_max_clip,
+        max_junc_ins: args.projection_max_junc_ins,
+        max_junc_gap: args.projection_max_junc_gap,
+        max_error_exon: args.projection_max_error_exon,
     }
 }
 

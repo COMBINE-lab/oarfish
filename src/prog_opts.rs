@@ -120,6 +120,51 @@ pub enum CoverageAblation {
     PacbioPhysicalEndpoint,
     AbundanceBlend,
     AllCandidates,
+    /// Restrict the endpoint smoother to the reachable region of the grid.
+    ///
+    /// Because `five_gap + three_gap = 1 - aligned_fraction <= 1`, only the 210
+    /// cells with `x + y < GRID` can ever hold an observation. The default 3x3
+    /// smoother nonetheless averages the 190 structurally-empty cells into
+    /// anti-diagonal neighbours, deflating them by a cell-specific factor that
+    /// no scalar prior can undo.
+    EndpointFeasibleSmoothing,
+    /// Spread the endpoint Dirichlet prior over reachable cells only.
+    EndpointFeasiblePrior,
+    /// Both endpoint geometry corrections at once.
+    EndpointFeasibleGeometry,
+    /// Extend the endpoint prior-mass search below its current lower bound.
+    ///
+    /// The cross-fitted held-out selector picks the smallest offered value
+    /// (10.0) in every ONT library measured, so the search is truncated at a
+    /// boundary rather than at an interior optimum.
+    EndpointWidePriorGrid,
+    /// Compare endpoint candidates on a common nucleotide measure.
+    ///
+    /// A grid cell is a probability, but candidates of different length spread
+    /// it over different numbers of integer gap pairs, so raw cell
+    /// probabilities compare differently-sized events.
+    EndpointNtMeasure,
+    /// The nucleotide measure plus both feasible-region corrections.
+    EndpointNtMeasureGeometry,
+    /// Replace the hard PacBio extreme-creation clamp with a continuous
+    /// abundance gate on nested-isoform candidates.
+    ///
+    /// Rejected on 2026-07-21 on the three PacBio 250k confirmations alone --
+    /// all matched-Illumina comparator data, at margins as small as 0.08% --
+    /// with no truth-bearing evidence cited. Re-opened against the truth tier.
+    ContinuousNestedGuard,
+    /// Rebuild the logistic coverage profile from cross-fitted coverage-free
+    /// abundance responsibilities instead of counting every alignment once.
+    ResponsibilityProfiles,
+    /// Preserve each ambiguity component's pre-blend mass across the abundance
+    /// blend, for multi-transcript components above 0.25% of the library.
+    ComponentMassConservation,
+    /// Sharpen the 3' penalty for reads that demonstrably carry a poly(A) tail.
+    PolyaThreePrime,
+    /// Give reads that disagree with every annotated candidate's splice
+    /// structure a per-locus novel latent state, so unannotated-isoform mass is
+    /// not forced onto annotated transcripts. Genome mode only.
+    AnnotationOmission,
 }
 
 fn parse_unit_f64(arg: &str) -> anyhow::Result<f64> {
@@ -582,6 +627,49 @@ pub struct Args {
     #[arg(long, hide = true, default_value_t = 1.0)]
     pub junc_miss_discount: f64,
 
+    /// genome mode: model isoforms missing from the annotation. Reads whose splice
+    /// structure disagrees with every annotated candidate are given a per-locus
+    /// novel latent state instead of being forced onto an annotated transcript,
+    /// and a `<output>.unexplained.tsv` report of per-locus unexplained mass is
+    /// written. Also attributes reads that fail projection entirely to the loci
+    /// whose exons they overlap, so their mass is reported rather than silently
+    /// dropped.
+    ///
+    /// EXPERIMENTAL and off by default. This is the single supported entry point;
+    /// the `--novel-*` options tune it and `--coverage-ablation` is for ablation
+    /// studies only.
+    #[arg(long, help_heading = "unannotated isoforms")]
+    pub model_unannotated_isoforms: bool,
+
+    /// genome mode: override bramble's projection similarity threshold (long-read
+    /// default 0.60). Lowering it admits reads whose splice structure agrees less
+    /// well with every annotated transcript; diagnostic use only.
+    #[arg(long, hide = true)]
+    pub projection_similarity_threshold: Option<f64>,
+
+    /// genome mode: override bramble's maximum tolerated soft clip (long-read
+    /// default 40). Diagnostic use only.
+    #[arg(long, hide = true)]
+    pub projection_max_clip: Option<u8>,
+
+    /// genome mode: override bramble's maximum insertion tolerated at an internal
+    /// junction (long-read default 40). Raising it lets an exon chain absorb more
+    /// splice-structure disagreement, so reads from unannotated isoforms are
+    /// projected onto annotated transcripts instead of being excluded.
+    /// Diagnostic use only.
+    #[arg(long, hide = true)]
+    pub projection_max_junc_ins: Option<u8>,
+
+    /// genome mode: override bramble's maximum gap tolerated at an internal
+    /// junction (long-read default 40). Diagnostic use only.
+    #[arg(long, hide = true)]
+    pub projection_max_junc_gap: Option<u8>,
+
+    /// genome mode: override bramble's small-exon error tolerance (long-read
+    /// default 35). Diagnostic use only.
+    #[arg(long, hide = true)]
+    pub projection_max_error_exon: Option<u8>,
+
     /// If this flag is passed, oarfish only performs indexing and not quantification.
     /// Designed primarily for workflow management systems.
     /// Note: A prebuilt index is not needed to quantify with oarfish; an index can be
@@ -715,6 +803,30 @@ pub struct Args {
     #[arg(long, help_heading = "coverage model", value_enum, default_value_t = CoverageAblation::Full)]
     pub coverage_ablation: CoverageAblation,
 
+    /// odds multiplier per unmatched internal junction favouring an
+    /// unannotated isoform over the best annotated candidate (genome mode)
+    #[arg(long, help_heading = "coverage model", default_value_t = 2.0,
+          value_parser = parse_pos_f64)]
+    pub novel_odds_per_miss: f64,
+
+    /// minimum unmatched internal junctions before a read is treated as
+    /// evidence of an unannotated isoform. A single mismatch is often
+    /// alignment noise; requiring more trades sensitivity for specificity
+    #[arg(long, help_heading = "coverage model", default_value_t = 1)]
+    pub novel_min_misses: i32,
+
+    /// minimum flagged reads a locus must accumulate before it is given a novel
+    /// latent state. A locus with one or two disagreeing reads is alignment
+    /// noise; a genuinely unannotated isoform accumulates many
+    #[arg(long, help_heading = "coverage model", default_value_t = 5)]
+    pub novel_min_locus_reads: usize,
+
+    /// additionally require the read to *agree* with at least one internal
+    /// junction, so that reads which match nothing (likely misaligned) are not
+    /// mistaken for novel isoforms
+    #[arg(long, help_heading = "coverage model")]
+    pub novel_require_hits: bool,
+
     /// coverage-free EM evaluations used by abundance-warmup experiments
     #[arg(long, help_heading = "coverage model", default_value_t = 100)]
     pub coverage_warmup_iterations: u32,
@@ -817,6 +929,19 @@ pub struct Args {
     /// use a KDE model of the observed fragment length distribution
     #[arg(short, long, hide = true)]
     pub use_kde: bool,
+}
+
+impl Args {
+    /// Whether unannotated-isoform modeling is active.
+    ///
+    /// `--model-unannotated-isoforms` is the user-facing switch; the
+    /// `AnnotationOmission` ablation is the equivalent entry point used by the
+    /// ablation harness, kept separate so ablation sweeps can address it without
+    /// the user-facing flag and vice versa.
+    pub fn models_unannotated_isoforms(&self) -> bool {
+        self.model_unannotated_isoforms
+            || self.coverage_ablation == CoverageAblation::AnnotationOmission
+    }
 }
 
 #[cfg(test)]
