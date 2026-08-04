@@ -45,9 +45,10 @@ best setting for everything except the model itself.** See
 | projection similarity threshold | **default (0.60)** | inert — a 12× reduction admits 41 reads out of 1.14M |
 | novel-state odds/thresholds | **defaults** | `--novel-min-locus-reads 5` removes the MARD regression |
 
-So there is nothing to bundle beyond "turn the model on", and this flag is simply
-the supported way to do that. `--coverage-ablation annotation-omission` remains an
-equivalent entry point reserved for the ablation harness.
+So there is nothing to bundle beyond "turn the model on", and this flag is the
+only entry point. The parallel `--coverage-ablation annotation-omission` entry
+point was dropped when the coverage-ablation machinery was retired; see
+`docs/coverage-kernel-retirement-2026-08-03.md`.
 
 ## Reports
 

@@ -8,6 +8,18 @@ It optionally employs many filters to help discard alignments that may reduce qu
 
 Additionally, `oarfish` provides options to make use of coverage profiles derived from the aligned reads to improve quantification accuracy. The use of this coverage model is enabled with the `--model-coverage` flag. You can read more about `oarfish`[^preprint] in the [preprint](https://www.biorxiv.org/content/10.1101/2024.02.28.582591v1). Please cite the preprint if you use `oarfish` in your work or analysis.
 
+> **A note on the dated evaluation documents.** The `docs/` directory doubles as a
+> lab notebook: files named with a date record what was measured *on that date*
+> and are not updated afterwards. Several of them discuss coverage models and
+> flags that have since been retired — `--coverage-model auto|adaptive|endpoint|
+> hybrid|degradation`, `--coverage-ablation`, `--rank-blend`,
+> `--candidate-pruning`, `--censoring-model` and `--alignment-calibration` were
+> all removed after being measured against `--model-coverage` on data with exact
+> read-level truth. See
+> [coverage kernel retirement](coverage-kernel-retirement-2026-08-03.md) and the
+> [`auto` re-benchmark](coverage-auto-rebenchmark-results-2026-08-03.md) for what
+> replaced them, and `CHANGELOG.md` for the current option set.
+
 Also, please note that `oarfish` is scientific software in active development. Therefore, please check the [GitHub Release](https://github.com/COMBINE-lab/oarfish/releases) page to make sure that you are using the latest version
 
 ## Installation
