@@ -146,6 +146,9 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                             accel: crate::prog_opts::EmAccel::None,
                             init_abundances: None,
                             kde_model: None,
+                            novel_locus: Vec::new(),
+                            novel_loci: 0,
+                            novel_odds_per_miss: 1.0,
                         };
                         // run the EM for this cell
                         let counts = em::em(&emi, 1).counts;

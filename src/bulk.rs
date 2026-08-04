@@ -104,6 +104,41 @@ fn get_json_info(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Connected components of transcripts linked by shared ambiguous reads.
+///
+/// Returns each transcript's component representative. Transcripts never seen
+/// on a multi-candidate read are their own singleton component.
+fn ambiguity_components<'a>(
+    groups: impl Iterator<Item = &'a [AlnInfo]>,
+    num_txps: usize,
+) -> Vec<usize> {
+    let mut parent: Vec<usize> = (0..num_txps).collect();
+
+    fn find(parent: &mut [usize], mut node: usize) -> usize {
+        while parent[node] != node {
+            // Path halving keeps this near-constant without recursion.
+            parent[node] = parent[parent[node]];
+            node = parent[node];
+        }
+        node
+    }
+
+    for alns in groups {
+        if alns.len() < 2 {
+            continue;
+        }
+        let first = find(&mut parent, alns[0].ref_id as usize);
+        for aln in &alns[1..] {
+            let other = find(&mut parent, aln.ref_id as usize);
+            if other != first {
+                parent[other] = first;
+            }
+        }
+    }
+    (0..num_txps).map(|i| find(&mut parent, i)).collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 fn perform_inference_and_write_output(
     header: &noodles_sam::header::Header,
     store: &mut InMemoryAlignmentStore,
@@ -124,8 +159,22 @@ fn perform_inference_and_write_output(
         None
     };
 
+    // Report tail detection so the rate can be compared against the offline
+    // measurement before any modelling depends on it.
+    {
+        let with_tail = store.polya_tail.iter().filter(|t| **t > 0).count();
+        let reads = store.len();
+        if reads > 0 {
+            info!(
+                reads,
+                with_tail,
+                percent = format!("{:.1}", 100.0 * with_tail as f64 / reads as f64),
+                "poly(A) tail detection"
+            );
+        }
+    }
     let coverage_start = std::time::Instant::now();
-    let coverage_diagnostics = json!({});
+    let mut coverage_diagnostics = json!({});
     if args.coverage_model == crate::prog_opts::CoverageModel::Logistic {
         //obtaining the Cumulative Distribution Function (CDF) for each transcript
         logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
@@ -134,6 +183,18 @@ fn perform_inference_and_write_output(
     }
     let coverage_time = coverage_start.elapsed();
 
+    if store.junc_informative_reads > 0 {
+        info!(
+            "junction evidence: reads spanning >=1 internal boundary: {}; of those, disagreeing with EVERY candidate: {} ({:.2}%) -- candidate unannotated-isoform mass",
+            store
+                .junc_informative_reads
+                .to_formatted_string(&Locale::en),
+            store
+                .junc_all_mismatch_reads
+                .to_formatted_string(&Locale::en),
+            100.0 * store.junc_all_mismatch_reads as f64 / store.junc_informative_reads as f64,
+        );
+    }
     info!(
         "Total number of alignment records : {}",
         store.total_len().to_formatted_string(&Locale::en)
@@ -153,6 +214,112 @@ fn perform_inference_and_write_output(
         read_short_quant_vec(sr_path, txps_name).unwrap_or_else(|e| panic!("{}", e))
     });
 
+    // Reads whose splice structure disagrees with every annotated candidate get
+    // a novel latent state, shared by all such reads at the same locus. The
+    // locus is the read's ambiguity component, so no gene annotation is needed.
+    let mut novel_locus: Vec<i32> = Vec::new();
+    let mut novel_loci = 0usize;
+    // locus id -> (member transcript ids, flagged read count), for the report.
+    let mut novel_members: Vec<(Vec<u32>, usize)> = Vec::new();
+    if args.models_unannotated_isoforms() && !store.min_junc_misses.is_empty() {
+        let components = ambiguity_components(store.iter().map(|(alns, _, _)| alns), txps.len());
+        let mut dense: std::collections::HashMap<usize, i32> = std::collections::HashMap::new();
+        novel_locus = vec![-1; store.len()];
+        for (read_index, slot) in novel_locus.iter_mut().enumerate() {
+            if store.min_junc_misses.get(read_index).copied().unwrap_or(0)
+                < args.novel_min_misses.max(1)
+            {
+                continue;
+            }
+            if args.novel_require_hits
+                && store.max_junc_hits.get(read_index).copied().unwrap_or(0) <= 0
+            {
+                continue;
+            }
+            let start = store.boundaries[read_index];
+            let end = store.boundaries[read_index + 1];
+            if end == start {
+                continue;
+            }
+            let root = components[store.alignments[start].ref_id as usize];
+            let next = dense.len() as i32;
+            let id = *dense.entry(root).or_insert(next);
+            *slot = id;
+        }
+        // Drop loci that accumulated too little evidence, and re-densify. A
+        // handful of disagreeing reads at a locus is alignment noise; a real
+        // unannotated isoform accumulates many.
+        if args.novel_min_locus_reads > 1 {
+            let mut per_locus = vec![0usize; dense.len()];
+            for &id in &novel_locus {
+                if id >= 0 {
+                    per_locus[id as usize] += 1;
+                }
+            }
+            let mut remap = vec![-1i32; dense.len()];
+            let mut next = 0i32;
+            for (old_id, count) in per_locus.iter().enumerate() {
+                if *count >= args.novel_min_locus_reads {
+                    remap[old_id] = next;
+                    next += 1;
+                }
+            }
+            for id in novel_locus.iter_mut() {
+                if *id >= 0 {
+                    *id = remap[*id as usize];
+                }
+            }
+            // Retain must be followed by remapping the surviving values: they
+            // still hold pre-filter ids, which would index past the compacted
+            // locus table.
+            dense.retain(|_, v| remap[*v as usize] >= 0);
+            for v in dense.values_mut() {
+                *v = remap[*v as usize];
+            }
+            novel_loci = next as usize;
+        } else {
+            novel_loci = dense.len();
+        }
+        // Members of each surviving locus, so the report can name it. There is
+        // no gene label to key on: bramble carries transcript names only, and a
+        // genuinely novel locus has no gene by definition.
+        novel_members = vec![(Vec::new(), 0usize); novel_loci];
+        let mut root_of_locus: std::collections::HashMap<i32, usize> =
+            std::collections::HashMap::new();
+        for (root, id) in dense.iter() {
+            root_of_locus.insert(*id, *root);
+        }
+        let mut by_root: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+        for (id, root) in root_of_locus.iter() {
+            by_root.insert(*root, *id as usize);
+        }
+        for (txp, root) in components.iter().enumerate() {
+            if let Some(&id) = by_root.get(root) {
+                novel_members[id].0.push(txp as u32);
+            }
+        }
+        for &id in novel_locus.iter() {
+            if id >= 0 {
+                novel_members[id as usize].1 += 1;
+            }
+        }
+        let flagged = novel_locus.iter().filter(|v| **v >= 0).count();
+        info!(
+            novel_loci,
+            flagged_reads = flagged,
+            odds_per_miss = args.novel_odds_per_miss,
+            min_misses = args.novel_min_misses,
+            min_locus_reads = args.novel_min_locus_reads,
+            require_hits = args.novel_require_hits,
+            "annotation-omission model: novel latent states created"
+        );
+        coverage_diagnostics["annotation_omission"] = json!({
+            "novel_loci": novel_loci,
+            "flagged_reads": flagged,
+            "odds_per_miss": args.novel_odds_per_miss,
+        });
+    }
+
     // wrap up all of the relevant information we need for estimation
     // in an EMInfo struct and then call the EM algorithm.
     let emi = EMInfo {
@@ -163,6 +330,9 @@ fn perform_inference_and_write_output(
         accel: args.em_accel,
         init_abundances,
         kde_model: kde_opt,
+        novel_locus,
+        novel_loci,
+        novel_odds_per_miss: args.novel_odds_per_miss,
     };
 
     if args.use_kde {
@@ -181,7 +351,8 @@ fn perform_inference_and_write_output(
     }
 
     let em_start = std::time::Instant::now();
-    let mut em_result = if args.threads > 4 {
+    // The parallel M-step does not implement the novel latent state.
+    let mut em_result = if novel_loci == 0 && args.threads > 4 {
         em::em_par(&emi, args.threads)
     } else {
         em::em(&emi, args.threads)
@@ -195,6 +366,119 @@ fn perform_inference_and_write_output(
             .iter_mut()
             .for_each(|count| *count *= scale);
     }
+    // Per-locus unexplained mass. Keyed by ambiguity component rather than by
+    // gene: bramble exposes transcript names only, and a genuinely unannotated
+    // locus has no gene label by construction. A gene is reported when one can
+    // be recovered from the transcript name (e.g. GENCODE's pipe-delimited
+    // header), otherwise "." -- the member transcripts are the real identifier.
+    if !novel_members.is_empty() {
+        let mut path = args.output.as_ref().expect("output prefix").clone();
+        let mut name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        name.push_str(".unexplained.tsv");
+        path.set_file_name(name);
+        let mut w = std::io::BufWriter::new(std::fs::File::create(&path)?);
+        use std::io::Write;
+        writeln!(
+            w,
+            "locus\tgene\tn_transcripts\tflagged_reads\tunprojectable_reads\tunexplained_mass\tannotated_mass\tunexplained_fraction\ttranscripts"
+        )?;
+        let n_txps = txps.len();
+        let mut reported = 0usize;
+        for (id, (members, flagged)) in novel_members.iter().enumerate() {
+            let unexplained = em_result.counts.get(n_txps + id).copied().unwrap_or(0.0);
+            if unexplained <= 0.0 {
+                continue;
+            }
+            let annotated: f64 = members
+                .iter()
+                .map(|t| em_result.counts.get(*t as usize).copied().unwrap_or(0.0))
+                .sum();
+            // A gene label if the reference name carries one; otherwise the
+            // member transcripts identify the locus.
+            let gene = members
+                .first()
+                .and_then(|t| txps_name.get(*t as usize))
+                .and_then(|n| n.split('|').nth(1))
+                .filter(|g| g.starts_with("ENSG") || g.starts_with("gene"))
+                .unwrap_or(".");
+            let mut names: Vec<&str> = members
+                .iter()
+                .filter_map(|t| txps_name.get(*t as usize))
+                .map(|n| n.split('|').next().unwrap_or(n.as_str()))
+                .take(8)
+                .collect();
+            if members.len() > names.len() {
+                names.push("...");
+            }
+            // Unprojectable reads overlapping this locus. A read overlapping
+            // several member transcripts increments each of them, so the max is
+            // a lower bound on distinct reads while the sum would double-count;
+            // report the lower bound.
+            let unprojectable = members
+                .iter()
+                .filter_map(|t| store.unprojectable_per_txp.get(*t as usize))
+                .copied()
+                .max()
+                .unwrap_or(0);
+            writeln!(
+                w,
+                "{}\t{}\t{}\t{}\t{}\t{:.3}\t{:.3}\t{:.4}\t{}",
+                id,
+                gene,
+                members.len(),
+                flagged,
+                unprojectable,
+                unexplained,
+                annotated,
+                unexplained / (unexplained + annotated).max(f64::MIN_POSITIVE),
+                names.join(",")
+            )?;
+            reported += 1;
+        }
+        info!(
+            loci = reported,
+            path = %path.display(),
+            "wrote per-locus unexplained-mass report"
+        );
+    }
+
+    // Per-transcript unprojectable overlap counts. Unlike the locus report above
+    // this covers every annotated transcript with overlapping unprojectable
+    // reads, including loci that produced no junction-mismatch evidence and so
+    // have no novel state -- the mass there is invisible to the locus report.
+    if store.unprojectable_per_txp.iter().any(|c| *c > 0) {
+        let mut path = args.output.as_ref().expect("output prefix").clone();
+        let mut name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        name.push_str(".unprojectable.tsv");
+        path.set_file_name(name);
+        let mut w = std::io::BufWriter::new(std::fs::File::create(&path)?);
+        use std::io::Write;
+        writeln!(w, "tname\tunprojectable_overlapping_reads")?;
+        let mut rows = 0usize;
+        for (tid, count) in store.unprojectable_per_txp.iter().enumerate() {
+            if *count == 0 {
+                continue;
+            }
+            let name = txps_name
+                .get(tid)
+                .map(|n| n.split('|').next().unwrap_or(n.as_str()))
+                .unwrap_or(".");
+            writeln!(w, "{}\t{}", name, count)?;
+            rows += 1;
+        }
+        info!(
+            transcripts = rows,
+            path = %path.display(),
+            "wrote per-transcript unprojectable-overlap report"
+        );
+    }
+
     let counts = &em_result.counts;
 
     let aux_txp_counts = crate::util::aux_counts::get_aux_counts(store, txps)?;
@@ -419,7 +703,13 @@ pub fn quantify_genome_raw_reads(
     let prob_source = args.projected_prob_source;
 
     type ReadGroup = ReadChunkWithNames;
-    type AlignmentGroupInfo = (Vec<AlnInfo>, Vec<f32>, Vec<usize>, Option<Vec<String>>);
+    type AlignmentGroupInfo = (
+        Vec<AlnInfo>,
+        Vec<f32>,
+        Vec<usize>,
+        Option<Vec<String>>,
+        Vec<(i32, i32)>,
+    );
 
     let (read_sender, read_receiver): (Sender<ReadGroup>, Receiver<ReadGroup>) =
         bounded(args.threads * 10);
@@ -500,11 +790,38 @@ pub fn quantify_genome_raw_reads(
                 Receiver<AlignmentGroupInfo>,
             ) = bounded(args.threads * 100);
 
-            let write_assignment_probs: bool = args.write_assignment_probs.is_some();
+            // Read names are also required by the coverage-signal export; keep this
+            // in sync with the `AlignmentFilters` builder in `main.rs`, which enables
+            // name retention for either output.
+            let write_assignment_probs: bool =
+                args.write_assignment_probs.is_some() || args.write_coverage_signals;
             // Diagnostics: reads the aligner maps to the genome vs reads that
             // produce >=1 projected transcriptome alignment (projection loss).
             let n_genome_mapped = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
             let n_projected = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            // Junction evidence: reads whose splice structure disagrees with
+            // every candidate transcript are evidence that their true isoform is
+            // missing from the annotation.
+            let n_junc_informative = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let n_junc_all_mismatch = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            // Unprojectable reads: mapped to the genome but compatible with no
+            // annotated transcript's splice structure, so they are dropped before
+            // quantification. Under `--model-unannotated-isoforms` we attribute
+            // them to the loci whose exons they overlap so their mass is
+            // reported rather than silently lost. Purely diagnostic: these reads
+            // still never enter the EM, so no annotated estimate is perturbed.
+            let track_unprojectable = args.models_unannotated_isoforms();
+            let n_unprojectable = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let n_unprojectable_intergenic =
+                std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let unprojectable_per_txp: std::sync::Arc<Vec<std::sync::atomic::AtomicU32>> =
+                std::sync::Arc::new(if track_unprojectable {
+                    (0..txps.len())
+                        .map(|_| std::sync::atomic::AtomicU32::new(0))
+                        .collect()
+                } else {
+                    Vec::new()
+                });
             // Mapper threads: align each read to the genome, then project its
             // mappings onto the transcriptome and filter.
             let consumers: Vec<_> = (0..map_threads)
@@ -514,6 +831,11 @@ pub fn quantify_genome_raw_reads(
                     let loc_aligner = aligner.clone();
                     let my_txp_info_view = &txp_info_view;
                     let aln_group_sender = aln_group_sender.clone();
+                    let loc_junc_informative = n_junc_informative.clone();
+                    let loc_junc_all_mismatch = n_junc_all_mismatch.clone();
+                    let loc_unprojectable = n_unprojectable.clone();
+                    let loc_unprojectable_intergenic = n_unprojectable_intergenic.clone();
+                    let loc_unprojectable_per_txp = unprojectable_per_txp.clone();
                     let n_genome_mapped = std::sync::Arc::clone(&n_genome_mapped);
                     let n_projected = std::sync::Arc::clone(&n_projected);
 
@@ -525,6 +847,7 @@ pub fn quantify_genome_raw_reads(
                         let mut aln_group_probs: Vec<f32> = Vec::new();
                         let mut aln_group_boundaries: Vec<usize> = Vec::new();
                         let mut aln_group_read_names = write_assignment_probs.then(Vec::new);
+                        let mut aln_group_junc: Vec<(i32, i32)> = Vec::new();
                         aln_group_boundaries.push(0);
                         // reused across all reads this worker projects (avoids
                         // per-read allocation of bramble's projection scratch).
@@ -582,10 +905,43 @@ pub fn quantify_genome_raw_reads(
                                 let projected =
                                     project_group_with(&galns, g2t, proj_config, &mut pctx);
                                 if projected.is_empty() {
+                                    if track_unprojectable {
+                                        loc_unprojectable
+                                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                        let overlaps =
+                                            crate::util::projection::overlapping_transcripts(
+                                                &galns, g2t,
+                                            );
+                                        if overlaps.is_empty() {
+                                            loc_unprojectable_intergenic
+                                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                        }
+                                        for tid in overlaps {
+                                            if let Some(slot) =
+                                                loc_unprojectable_per_txp.get(tid as usize)
+                                            {
+                                                slot.fetch_add(
+                                                    1,
+                                                    std::sync::atomic::Ordering::Relaxed,
+                                                );
+                                            }
+                                        }
+                                    }
                                     continue;
                                 }
                                 n_projected.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 let recs = projected_to_records(&projected, &src_scores);
+                                // A read spanning no internal boundary says
+                                // nothing about splice structure; only count
+                                // reads that carry junction evidence.
+                                if recs.iter().any(|r| r.junc_hits + r.junc_misses > 0) {
+                                    loc_junc_informative
+                                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    if recs.iter().all(|r| r.junc_misses > 0) {
+                                        loc_junc_all_mismatch
+                                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    }
+                                }
                                 let (ag, aprobs) = filter.filter_projected(
                                     &mut discard_table,
                                     my_txp_info_view,
@@ -596,6 +952,13 @@ pub fn quantify_genome_raw_reads(
                                 );
 
                                 if !ag.is_empty() {
+                                    // Junction evidence must ride along with the
+                                    // group: the store is filled on the consumer
+                                    // side, which never sees the projections.
+                                    aln_group_junc.push((
+                                        recs.iter().map(|r| r.junc_misses).min().unwrap_or(0),
+                                        recs.iter().map(|r| r.junc_hits).max().unwrap_or(0),
+                                    ));
                                     aln_group_alns.extend_from_slice(&ag);
                                     aln_group_probs.extend_from_slice(&aprobs);
                                     aln_group_boundaries.push(aln_group_alns.len());
@@ -612,10 +975,12 @@ pub fn quantify_genome_raw_reads(
                                             aln_group_probs.clone(),
                                             aln_group_boundaries.clone(),
                                             aln_group_read_names,
+                                            aln_group_junc.clone(),
                                         ))
                                         .expect("Error sending alignment group");
                                     aln_group_alns.clear();
                                     aln_group_probs.clear();
+                                    aln_group_junc.clear();
                                     aln_group_boundaries.clear();
                                     aln_group_boundaries.push(0);
                                     aln_group_read_names = write_assignment_probs.then(Vec::new);
@@ -630,6 +995,7 @@ pub fn quantify_genome_raw_reads(
                                     aln_group_probs,
                                     aln_group_boundaries,
                                     aln_group_read_names,
+                                    aln_group_junc,
                                 ))
                                 .expect("Error sending alignment group");
                         }
@@ -668,7 +1034,8 @@ pub fn quantify_genome_raw_reads(
                 );
                 pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
 
-                for (ags, aprobs, aln_boundaries, read_names) in aln_group_receiver {
+                for (ags, aprobs, aln_boundaries, read_names, junc) in aln_group_receiver {
+                    let mut junc_iter = junc.into_iter();
                     let mut reversed_read_names = if let Some(mut names_vec) = read_names {
                         names_vec.reverse();
                         Some(names_vec)
@@ -686,7 +1053,10 @@ pub fn quantify_genome_raw_reads(
                             None
                         };
 
+                        let (min_misses, max_hits) = junc_iter.next().unwrap_or((0, 0));
                         if store.add_filtered_group(ag, as_probs, txps_mut) {
+                            store.min_junc_misses.push(min_misses);
+                            store.max_junc_hits.push(max_hits);
                             if let Some(ref mut nvec) = name_vec {
                                 let read_name =
                                     read_name_opt.unwrap_or(EMPTY_READ_NAME.to_string());
@@ -723,6 +1093,42 @@ pub fn quantify_genome_raw_reads(
             );
             let n_gm = n_genome_mapped.load(std::sync::atomic::Ordering::Relaxed);
             let n_pr = n_projected.load(std::sync::atomic::Ordering::Relaxed);
+            let n_ji = n_junc_informative.load(std::sync::atomic::Ordering::Relaxed);
+            let n_jm = n_junc_all_mismatch.load(std::sync::atomic::Ordering::Relaxed);
+            info!(
+                "junction evidence: reads spanning >=1 internal boundary: {} ({:.2}% of projected);                  of those, disagreeing with EVERY candidate: {} ({:.2}%) -- candidate unannotated-isoform mass",
+                n_ji.to_formatted_string(&Locale::en),
+                if n_pr > 0 {
+                    100.0 * n_ji as f64 / n_pr as f64
+                } else {
+                    0.0
+                },
+                n_jm.to_formatted_string(&Locale::en),
+                if n_ji > 0 {
+                    100.0 * n_jm as f64 / n_ji as f64
+                } else {
+                    0.0
+                },
+            );
+            if track_unprojectable {
+                store.unprojectable_reads =
+                    n_unprojectable.load(std::sync::atomic::Ordering::Relaxed);
+                store.unprojectable_intergenic =
+                    n_unprojectable_intergenic.load(std::sync::atomic::Ordering::Relaxed);
+                store.unprojectable_per_txp = unprojectable_per_txp
+                    .iter()
+                    .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                    .collect();
+                let attributed = store.unprojectable_reads - store.unprojectable_intergenic;
+                info!(
+                    "unprojectable reads: {} ({} attributable to an annotated locus, {} intergenic) -- reported, not quantified",
+                    store.unprojectable_reads.to_formatted_string(&Locale::en),
+                    attributed.to_formatted_string(&Locale::en),
+                    store
+                        .unprojectable_intergenic
+                        .to_formatted_string(&Locale::en),
+                );
+            }
             info!(
                 "reads aligned to genome: {}; of those, projected to >=1 transcript: {} ({:.2}%); projection-dropped: {}",
                 n_gm.to_formatted_string(&Locale::en),
@@ -821,7 +1227,14 @@ pub fn quantify_bulk_alignments_raw_reads(
     let map_threads = args.threads.saturating_sub(2).max(1);
 
     type ReadGroup = ReadChunkWithNames;
-    type AlignmentGroupInfo = (Vec<AlnInfo>, Vec<f32>, Vec<usize>, Option<Vec<String>>);
+    type AlignmentGroupInfo = (
+        Vec<AlnInfo>,
+        Vec<f32>,
+        Vec<usize>,
+        Option<Vec<String>>,
+        // No projection here, so no junction evidence.
+        Vec<(i32, i32)>,
+    );
 
     let (read_sender, read_receiver): (Sender<ReadGroup>, Receiver<ReadGroup>) =
         bounded(args.threads * 10);
@@ -909,7 +1322,11 @@ pub fn quantify_bulk_alignments_raw_reads(
             ) = bounded(args.threads * 100);
 
             // Consumer threads: receive sequences and perform alignment
-            let write_assignment_probs: bool = args.write_assignment_probs.is_some();
+            // Read names are also required by the coverage-signal export; keep this
+            // in sync with the `AlignmentFilters` builder in `main.rs`, which enables
+            // name retention for either output.
+            let write_assignment_probs: bool =
+                args.write_assignment_probs.is_some() || args.write_coverage_signals;
             let consumers: Vec<_> = (0..map_threads)
                 .map(|_| {
                     let receiver = read_receiver.clone();
@@ -926,6 +1343,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                         let mut aln_group_probs: Vec<f32> = Vec::new();
                         let mut aln_group_boundaries: Vec<usize> = Vec::new();
                         let mut aln_group_read_names = write_assignment_probs.then(Vec::new);
+                        let mut aln_group_junc: Vec<(i32, i32)> = Vec::new();
                         aln_group_boundaries.push(0);
 
                         // get the next chunk of reads
@@ -936,7 +1354,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                                 let map_res_opt =
                                     crate::util::mapper::map_read(&loc_aligner, name, seq);
                                 if let Ok(mut mappings) = map_res_opt {
-                                    let (ag, aprobs) = filter.filter(
+                                    let (ag, aprobs, _polya) = filter.filter(
                                         &mut discard_table,
                                         header,
                                         my_txp_info_view,
@@ -944,6 +1362,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                                     );
 
                                     if !ag.is_empty() {
+                                        aln_group_junc.push((0, 0));
                                         aln_group_alns.extend_from_slice(&ag);
                                         aln_group_probs.extend_from_slice(&aprobs);
                                         aln_group_boundaries.push(aln_group_alns.len());
@@ -962,10 +1381,12 @@ pub fn quantify_bulk_alignments_raw_reads(
                                                 aln_group_probs.clone(),
                                                 aln_group_boundaries.clone(),
                                                 aln_group_read_names,
+                                                aln_group_junc.clone(),
                                             ))
                                             .expect("Error sending alignment group");
                                         aln_group_alns.clear();
                                         aln_group_probs.clear();
+                                        aln_group_junc.clear();
                                         aln_group_boundaries.clear();
                                         aln_group_boundaries.push(0);
                                         aln_group_read_names =
@@ -987,6 +1408,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                                     aln_group_probs,
                                     aln_group_boundaries,
                                     aln_group_read_names,
+                                    aln_group_junc,
                                 ))
                                 .expect("Error sending alignment group");
                         }
@@ -1026,7 +1448,8 @@ pub fn quantify_bulk_alignments_raw_reads(
                 );
                 pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
 
-                for (ags, aprobs, aln_boundaries, read_names) in aln_group_receiver {
+                for (ags, aprobs, aln_boundaries, read_names, junc) in aln_group_receiver {
+                    let mut junc_iter = junc.into_iter();
                     // if we are getting read names out then we are going to "reverse" them
                     // here so that we can simply pop the strings off the back to get them
                     // in order. We do this since we cannot otherwise "move" a string out of a
@@ -1050,7 +1473,10 @@ pub fn quantify_bulk_alignments_raw_reads(
                             None
                         };
 
+                        let (min_misses, max_hits) = junc_iter.next().unwrap_or((0, 0));
                         if store.add_filtered_group(ag, as_probs, txps_mut) {
+                            store.min_junc_misses.push(min_misses);
+                            store.max_junc_hits.push(max_hits);
                             if let Some(ref mut nvec) = name_vec {
                                 let read_name =
                                     read_name_opt.unwrap_or(EMPTY_READ_NAME.to_string());
@@ -1111,4 +1537,66 @@ pub fn quantify_bulk_alignments_raw_reads(
         aln_time,
         args,
     )
+}
+
+#[cfg(test)]
+mod ambiguity_component_tests {
+    use super::ambiguity_components;
+    use crate::util::oarfish_types::AlnInfo;
+    use bio_types::strand::Strand;
+
+    fn group(ref_ids: &[u32]) -> Vec<AlnInfo> {
+        ref_ids
+            .iter()
+            .map(|&ref_id| AlnInfo {
+                ref_id,
+                start: 1,
+                end: 100,
+                strand: Strand::Forward,
+                left_clip: 0,
+                right_clip: 0,
+            })
+            .collect()
+    }
+
+    fn components_of(groups: &[Vec<AlnInfo>], n: usize) -> Vec<usize> {
+        ambiguity_components(groups.iter().map(|g| g.as_slice()), n)
+    }
+
+    #[test]
+    fn unlinked_transcripts_are_singletons() {
+        let c = components_of(&[], 4);
+        assert_eq!(c, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn unique_reads_do_not_link_anything() {
+        let groups = vec![group(&[0]), group(&[1])];
+        let c = components_of(&groups, 3);
+        assert_eq!(c[0], 0);
+        assert_ne!(c[0], c[1]);
+    }
+
+    #[test]
+    fn ambiguous_reads_merge_their_candidates() {
+        let groups = vec![group(&[0, 2])];
+        let c = components_of(&groups, 4);
+        assert_eq!(c[0], c[2]);
+        assert_ne!(c[0], c[1]);
+        assert_ne!(c[0], c[3]);
+    }
+
+    #[test]
+    fn components_merge_transitively_through_shared_reads() {
+        // 0-1 and 1-2 are linked by different reads, so all three are one
+        // component even though no read lists 0 and 2 together.
+        let groups = vec![group(&[0, 1]), group(&[1, 2]), group(&[4, 5])];
+        let c = components_of(&groups, 6);
+        assert_eq!(c[0], c[1]);
+        assert_eq!(c[1], c[2]);
+        assert_eq!(c[4], c[5]);
+        assert_ne!(c[0], c[4]);
+        assert_ne!(c[0], c[3]);
+        assert_eq!(c.iter().collect::<std::collections::HashSet<_>>().len(), 3);
+    }
 }

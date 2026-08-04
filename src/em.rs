@@ -15,6 +15,11 @@ struct PreparedEq<'a> {
     alignments: &'a [AlnInfo],
     weight_start: usize,
     multiplicity: u32,
+    /// Index of this read's novel latent state (past the annotated transcripts),
+    /// or `usize::MAX` when the read shows no annotation-gap evidence.
+    novel_id: usize,
+    /// Weight of the novel candidate, on the same scale as the annotated ones.
+    novel_weight: f64,
 }
 
 fn prepare_equivalence_classes<'a>(
@@ -31,7 +36,8 @@ fn prepare_equivalence_classes<'a>(
     let mut weights = Vec::with_capacity(em_info.eq_map.alignments.len());
     let mut classes: Vec<PreparedEq<'a>> = Vec::with_capacity(em_info.eq_map.len());
     let mut by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
-    for (alns, probs, coverage_probs) in em_info.eq_map.iter() {
+    let n_txps = em_info.txp_info.len();
+    for (read_index, (alns, probs, coverage_probs)) in em_info.eq_map.iter().enumerate() {
         let weight_start = weights.len();
         weights.extend(izip!(alns, probs, coverage_probs).map(|(a, p, cp)| {
             let target_id = a.ref_id as usize;
@@ -39,6 +45,31 @@ fn prepare_equivalence_classes<'a>(
             let cov_prob = if model_coverage { *cp } else { 1.0 };
             *p as f64 * cov_prob * density_fn(txp_len, a.alignment_span() as usize)
         }));
+        // A read whose splice structure disagrees with every annotated
+        // candidate gets an extra candidate: a hypothetical transcript at this
+        // locus that would match. Its weight is the best annotated weight
+        // scaled by the odds of each unmatched junction, so the EM can decline
+        // to force the read onto an annotated transcript.
+        let (novel_id, novel_weight) = match em_info.novel_locus.get(read_index) {
+            Some(&locus) if locus >= 0 => {
+                let best = weights[weight_start..]
+                    .iter()
+                    .copied()
+                    .fold(0.0_f64, f64::max);
+                let misses = em_info
+                    .eq_map
+                    .min_junc_misses
+                    .get(read_index)
+                    .copied()
+                    .unwrap_or(0)
+                    .max(1) as f64;
+                (
+                    n_txps + locus as usize,
+                    best * em_info.novel_odds_per_miss.powf(misses),
+                )
+            }
+            _ => (usize::MAX, 0.0),
+        };
         if collapse_exact {
             let local_weights = &weights[weight_start..];
             let mut hasher = DefaultHasher::new();
@@ -47,11 +78,15 @@ fn prepare_equivalence_classes<'a>(
                 alignment.ref_id.hash(&mut hasher);
                 weight.to_bits().hash(&mut hasher);
             }
+            novel_id.hash(&mut hasher);
+            novel_weight.to_bits().hash(&mut hasher);
             let hash = hasher.finish();
             let duplicate = by_hash.get(&hash).and_then(|indices| {
                 indices.iter().copied().find(|&index| {
                     let existing = &classes[index];
-                    existing.alignments.len() == alns.len()
+                    existing.novel_id == novel_id
+                        && existing.novel_weight.to_bits() == novel_weight.to_bits()
+                        && existing.alignments.len() == alns.len()
                         && existing
                             .alignments
                             .iter()
@@ -74,6 +109,8 @@ fn prepare_equivalence_classes<'a>(
             alignments: alns,
             weight_start,
             multiplicity: 1,
+            novel_id,
+            novel_weight,
         });
     }
     (classes, weights)
@@ -89,21 +126,31 @@ fn m_step_prepared(
     for eq in eq_iterates {
         let read_count = eq.multiplicity as f64;
         let alns = eq.alignments;
-        if let [alignment] = alns {
+        let has_novel = eq.novel_id != usize::MAX;
+        if !has_novel && let [alignment] = alns {
+            // With no novel alternative the single-candidate weight cancels.
             curr_counts[alignment.ref_id as usize] += read_count;
             continue;
         }
         let eq_weights = &weights[eq.weight_start..eq.weight_start + alns.len()];
-        let denom: f64 = alns
+        let mut denom: f64 = alns
             .iter()
             .zip(eq_weights)
             .map(|(a, weight)| prev_count[a.ref_id as usize] * weight)
             .sum();
+        if has_novel {
+            // The novel state competes for this read, so the annotated
+            // candidates now receive less than one full read between them.
+            denom += prev_count[eq.novel_id] * eq.novel_weight;
+        }
         if denom > constants::EM_DENOM_THRESH {
             let scale = read_count / denom;
             for (a, weight) in alns.iter().zip(eq_weights) {
                 let target_id = a.ref_id as usize;
                 curr_counts[target_id] += prev_count[target_id] * weight * scale;
+            }
+            if has_novel {
+                curr_counts[eq.novel_id] += prev_count[eq.novel_id] * eq.novel_weight * scale;
             }
         }
     }
@@ -218,7 +265,9 @@ fn run_driver(
     do_log: bool,
 ) -> EMResult {
     const MIN_EVAL: u32 = 50;
-    let n = em_info.txp_info.len();
+    // Novel latent states live past the annotated transcripts in the same
+    // vector, so downstream consumers indexing by reference id are unaffected.
+    let n = em_info.txp_info.len() + em_info.novel_loci;
     let avg = if n == 0 {
         0.0
     } else {

@@ -198,6 +198,13 @@ pub trait AlnRecordLike {
     fn aln_end(&self) -> u32;
     fn is_supp(&self) -> bool;
     fn terminal_clips(&self) -> (u32, u32);
+    /// Length of a poly(A) tail immediately adjacent to the 3' end of the
+    /// alignment, or 0 if the read does not demonstrably reach its tail.
+    ///
+    /// A read carrying its tail is *3'-complete*: its 3' end is the transcript's
+    /// 3' end, not an arbitrary truncation point. That is far stronger evidence
+    /// than a small 3' gap alone, which most reads have anyway.
+    fn three_prime_polya(&self) -> u32;
     #[allow(dead_code)]
     fn name(&self) -> Option<String>;
 }
@@ -341,6 +348,41 @@ impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for
         (clip(first), clip(last))
     }
 
+    fn three_prime_polya(&self) -> u32 {
+        use noodles_sam::alignment::record::cigar::op::Kind;
+        let seq: Vec<u8> = self.sequence().iter().collect();
+        if seq.is_empty() {
+            // Secondary records carry no SEQ; the read's tail is recovered from
+            // whichever record in its group does.
+            return 0;
+        }
+        let ops: Vec<_> = self.cigar().iter().filter_map(Result::ok).collect();
+        let (Some(first), Some(last)) = (ops.first(), ops.last()) else {
+            return 0;
+        };
+        let soft = |op: &noodles_sam::alignment::record::cigar::Op| {
+            if matches!(op.kind(), Kind::SoftClip) {
+                op.len()
+            } else {
+                0
+            }
+        };
+        if self.is_reverse_complemented() {
+            // SEQ is reference-oriented, so the read's 3' end is the leading
+            // clip and the tail appears as poly(T) at its inner edge.
+            let n = soft(first).min(seq.len());
+            polya_len_in_clip(&seq[..n], b'T')
+        } else {
+            let n = soft(last).min(seq.len());
+            let start = seq.len() - n;
+            let clip = &seq[start..];
+            // Reverse so the base adjacent to the alignment is last.
+            let mut oriented = clip.to_vec();
+            oriented.reverse();
+            polya_len_in_clip(&oriented, b'A')
+        }
+    }
+
     fn name(&self) -> Option<String> {
         self.name().map(|n| n.to_string())
     }
@@ -351,11 +393,36 @@ pub struct AlnInfo {
     pub ref_id: u32,
     pub start: u32,
     pub end: u32,
-    pub prob: f64,
     pub strand: Strand,
     /// Terminal query clipping in reference-left/reference-right orientation.
     pub left_clip: u32,
     pub right_clip: u32,
+}
+
+/// Window scanned for the tail, and the minimum fraction of it that must be the
+/// expected base. The tail must sit *adjacent* to the alignment end; an A-rich
+/// stretch elsewhere in the clip is ordinary sequence, not a tail.
+pub(crate) const POLYA_WINDOW: usize = 30;
+pub(crate) const POLYA_MIN_FRACTION: f64 = 0.8;
+pub(crate) const POLYA_MIN_WINDOW: usize = 10;
+
+/// Detect a tail in the soft-clipped bases flanking the 3' end of an alignment.
+///
+/// `clip3` must already be oriented so that its *last* base is the one adjacent
+/// to the aligned block, and `base` is `b'A'` for forward alignments or `b'T'`
+/// for reverse-complemented ones (the record stores the reverse complement).
+pub(crate) fn polya_len_in_clip(clip3: &[u8], base: u8) -> u32 {
+    let window = clip3.len().min(POLYA_WINDOW);
+    if window < POLYA_MIN_WINDOW {
+        return 0;
+    }
+    let seg = &clip3[clip3.len() - window..];
+    let matches = seg.iter().filter(|b| **b == base).count();
+    if (matches as f64) / (window as f64) >= POLYA_MIN_FRACTION {
+        window as u32
+    } else {
+        0
+    }
 }
 
 impl AlnInfo {
@@ -372,7 +439,6 @@ impl AlnInfo {
             ref_id: aln.ref_id(aln_header).expect("valid ref_id") as u32,
             start: aln.aln_start(),
             end: aln.aln_end(),
-            prob: 0.0_f64,
             strand: if aln.is_reverse_complemented() {
                 Strand::Reverse
             } else {
@@ -390,7 +456,6 @@ impl<T: sam::alignment::record::Record> From<&T> for AlnInfo {
             ref_id: aln.reference_sequence_id().unwrap() as u32,
             start: aln.alignment_start().unwrap().expect("valid aln start").get() as u32,
             end: aln.alignment_end().unwrap().expect("valid aln end").get() as u32,
-            prob: 0.0_f64,
             strand: if aln.flags().expect("valid flags").is_reverse_complemented() {
                 Strand::Reverse
             } else {
@@ -445,6 +510,19 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     pub convergence_thresh: f64,
     /// Optional fixed-point acceleration scheme.
     pub accel: crate::prog_opts::EmAccel,
+    /// Per-read index of a *novel* (unannotated-isoform) latent state, or -1.
+    ///
+    /// A read whose splice structure disagrees with every annotated candidate is
+    /// evidence that its true isoform is missing. Such reads get an extra
+    /// candidate shared by all reads at the same locus, so the EM can decline to
+    /// force them onto annotated transcripts. Indices are offsets past
+    /// `txp_info.len()`; empty disables the feature.
+    pub novel_locus: Vec<i32>,
+    /// Number of distinct novel states (loci) addressed by `novel_locus`.
+    pub novel_loci: usize,
+    /// Odds multiplier per unmatched internal junction favouring the novel
+    /// state over the best annotated candidate.
+    pub novel_odds_per_miss: f64,
     // An optional vector of abundances from which
     // to initalize the EM, otherwise, a default
     // uniform initalization is used.
@@ -562,6 +640,35 @@ pub struct InMemoryAlignmentStore<'h> {
     pub aln_header: &'h Header,
     pub alignments: Vec<AlnInfo>,
     pub as_probabilities: Vec<f32>,
+    /// Per *read*: length of the detected 3' poly(A) tail, 0 if none. A nonzero
+    /// value means the read demonstrably reached its transcript's 3' end.
+    pub polya_tail: Vec<u32>,
+    /// Reads spanning at least one internal exon boundary (i.e. carrying
+    /// junction evidence at all).
+    pub junc_informative_reads: usize,
+    /// Of those, reads whose splice structure disagrees with *every* candidate
+    /// transcript -- candidate unannotated-isoform mass.
+    pub junc_all_mismatch_reads: usize,
+    /// Reads that mapped to the genome but projected onto no annotated
+    /// transcript, so they were dropped before quantification. Populated only
+    /// under `--model-unannotated-isoforms`.
+    pub unprojectable_reads: u64,
+    /// Of those, reads overlapping no annotated exon at all (intergenic), which
+    /// cannot be attributed to any locus.
+    pub unprojectable_intergenic: u64,
+    /// Per transcript: how many unprojectable reads overlap its exons. A read
+    /// overlapping several transcripts increments each, so this attributes mass
+    /// to loci without claiming which transcript it came from. Empty unless
+    /// `--model-unannotated-isoforms` is set.
+    pub unprojectable_per_txp: Vec<u32>,
+    /// Per *read*: the smallest number of internal junction mismatches achieved
+    /// by any candidate. Zero means some annotated transcript explains the
+    /// read's splice structure, so the read is not evidence of an annotation
+    /// gap. Empty when no projection was performed (transcriptome mode).
+    pub min_junc_misses: Vec<i32>,
+    /// Per *read*: the largest number of internal junctions matched by any
+    /// candidate. A read that matches none is more likely misaligned than novel.
+    pub max_junc_hits: Vec<i32>,
     pub coverage_probabilities: Vec<f64>,
     // holds the boundaries between records for different reads
     pub(crate) boundaries: Vec<usize>,
@@ -622,6 +729,14 @@ impl<'h> InMemoryAlignmentStore<'h> {
             aln_header: header,
             alignments: vec![],
             as_probabilities: vec![],
+            polya_tail: vec![],
+            junc_informative_reads: 0,
+            junc_all_mismatch_reads: 0,
+            unprojectable_reads: 0,
+            unprojectable_intergenic: 0,
+            unprojectable_per_txp: Vec::new(),
+            min_junc_misses: vec![],
+            max_junc_hits: vec![],
             coverage_probabilities: vec![],
             boundaries: vec![0],
             discard_table: DiscardTable::new(),
@@ -643,10 +758,10 @@ impl<'h> InMemoryAlignmentStore<'h> {
         ag: &mut Vec<T>,
     ) -> bool {
         if !ag.is_empty() {
-            let (alns, as_probs) =
+            let (alns, as_probs, polya) =
                 self.filter_opts
                     .filter(&mut self.discard_table, self.aln_header, txps, ag);
-            self.add_filtered_group(&alns, &as_probs, txps)
+            self.add_filtered_group_with_polya(&alns, &as_probs, txps, polya)
         } else {
             false
         }
@@ -671,6 +786,18 @@ impl<'h> InMemoryAlignmentStore<'h> {
         if recs.is_empty() {
             return false;
         }
+        // A read spanning no internal boundary is uninformative about splice
+        // structure, so only reads carrying junction evidence are counted.
+        let mut min_misses = 0i32;
+        let mut max_hits = 0i32;
+        if recs.iter().any(|r| r.junc_hits + r.junc_misses > 0) {
+            self.junc_informative_reads += 1;
+            min_misses = recs.iter().map(|r| r.junc_misses).min().unwrap_or(0);
+            max_hits = recs.iter().map(|r| r.junc_hits).max().unwrap_or(0);
+            if min_misses > 0 {
+                self.junc_all_mismatch_reads += 1;
+            }
+        }
         let (alns, as_probs) = self.filter_opts.filter_projected(
             &mut self.discard_table,
             txps,
@@ -679,7 +806,13 @@ impl<'h> InMemoryAlignmentStore<'h> {
             beta,
             prob_source,
         );
-        self.add_filtered_group(&alns, &as_probs, txps)
+        let added = self.add_filtered_group(&alns, &as_probs, txps);
+        if added {
+            // One entry per retained read, parallel to `boundaries`.
+            self.min_junc_misses.push(min_misses);
+            self.max_junc_hits.push(max_hits);
+        }
+        added
     }
 
     #[inline(always)]
@@ -688,6 +821,16 @@ impl<'h> InMemoryAlignmentStore<'h> {
         alns: &[AlnInfo],
         as_probs: &[f32],
         txps: &mut [TranscriptInfo],
+    ) -> bool {
+        self.add_filtered_group_with_polya(alns, as_probs, txps, 0)
+    }
+
+    pub fn add_filtered_group_with_polya(
+        &mut self,
+        alns: &[AlnInfo],
+        as_probs: &[f32],
+        txps: &mut [TranscriptInfo],
+        polya: u32,
     ) -> bool {
         if !alns.is_empty() {
             for a in alns.iter() {
@@ -698,6 +841,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
             self.as_probabilities.extend_from_slice(as_probs);
             self.coverage_probabilities
                 .extend(vec![0.0_f64; alns.len()]);
+            self.polya_tail.push(polya);
             self.boundaries.push(self.alignments.len());
             true
         } else {
@@ -930,7 +1074,7 @@ impl AlignmentFilters {
         aln_header: &Header,
         txps: &[TranscriptInfo],
         ag: &mut Vec<T>,
-    ) -> (Vec<AlnInfo>, Vec<f32>) {
+    ) -> (Vec<AlnInfo>, Vec<f32>, u32) {
         // track the best score of any alignment we've seen
         // so far for this read (this will designate the
         // "primary" alignment for the read).
@@ -1052,13 +1196,13 @@ impl AlignmentFilters {
             } else {
                 discard_table.no_valid_aln += 1;
             }
-            return (vec![], vec![]);
+            return (vec![], vec![], 0);
         }
         if aln_frac_at_best_retained < self.min_aligned_fraction {
             // The best retained alignment did not have sufficient
             // coverage to be kept
             discard_table.discard_aln_frac += 1;
-            return (vec![], vec![]);
+            return (vec![], vec![], 0);
         }
 
         // if we got here, then we have a valid "best" alignment
@@ -1093,11 +1237,17 @@ impl AlignmentFilters {
         ag.retain(|_| *score_it.next().unwrap() > i32::MIN);
         assert_eq!(ag.len(), probabilities.len());
 
+        // Only the primary record carries SEQ, and it is always retained (it
+        // holds the best score), so the maximum over the group is the read's
+        // tail length.
+        let polya = ag.iter().map(|x| x.three_prime_polya()).max().unwrap_or(0);
+
         (
             ag.iter()
                 .map(|x| AlnInfo::from_aln_rec_like(x, aln_header))
                 .collect(),
             probabilities,
+            polya,
         )
     }
 }
@@ -1128,6 +1278,14 @@ pub struct ProjectedAlnRecord {
     /// bramble similarity score (higher is better; best in a group anchors the
     /// probability), used in place of the integer alignment score.
     pub similarity: f64,
+    /// Internal exon boundaries where the read's splice structure agrees with
+    /// this transcript. Zero means the read spans no internal boundary and so
+    /// carries no junction evidence either way.
+    pub junc_hits: i32,
+    /// Internal exon boundaries where the read disagrees with this transcript.
+    /// Nonzero against *every* candidate is evidence that the read's true
+    /// isoform is absent from the annotation.
+    pub junc_misses: i32,
     /// alignment score of the *source genomic alignment* this was
     /// projected from (shared by all transcripts at the same genomic locus).
     /// Used by the `score`/`combined` probability sources to discriminate
@@ -1256,7 +1414,6 @@ impl AlignmentFilters {
                 ref_id: r.ref_id,
                 start,
                 end,
-                prob: 0.0_f64,
                 strand: if r.is_reverse {
                     Strand::Reverse
                 } else {
@@ -1284,7 +1441,6 @@ mod tests {
             ref_id: 0,
             start: 0,
             end: 100,
-            prob: 0.5,
             strand: Strand::Forward,
             left_clip: 0,
             right_clip: 0,
@@ -1313,5 +1469,14 @@ mod tests {
         assert_eq!(txp.coverage_bins[..3], [0.0, 0.0, 0.0]);
         assert!((txp.coverage_bins[3] - 0.25).abs() < 1e-12);
         assert!((txp.total_weight - 0.25).abs() < 1e-12);
+    }
+}
+
+#[cfg(test)]
+mod aln_layout_tests {
+    use super::AlnInfo;
+    #[test]
+    fn alninfo_is_compact() {
+        assert_eq!(std::mem::size_of::<AlnInfo>(), 24);
     }
 }

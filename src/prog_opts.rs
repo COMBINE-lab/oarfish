@@ -36,6 +36,17 @@ pub enum CoverageModel {
     Logistic,
 }
 
+fn parse_pos_f64(arg: &str) -> anyhow::Result<f64> {
+    let value: f64 = arg
+        .parse()
+        .map_err(|_| anyhow::anyhow!("`{}` is not a valid number", arg))?;
+    if value.is_finite() && value > 0.0 {
+        Ok(value)
+    } else {
+        anyhow::bail!("value must be > 0, but got {}", value)
+    }
+}
+
 /// Default denominator for the transcriptome score→probability conversion
 /// `exp((score - best)/D)`.
 ///
@@ -442,6 +453,48 @@ pub struct Args {
     #[arg(long, hide = true, default_value_t = 1.0)]
     pub junc_miss_discount: f64,
 
+    /// genome mode: model isoforms missing from the annotation. Reads whose splice
+    /// structure disagrees with every annotated candidate are given a per-locus
+    /// novel latent state instead of being forced onto an annotated transcript,
+    /// and a `<output>.unexplained.tsv` report of per-locus unexplained mass is
+    /// written. Also attributes reads that fail projection entirely to the loci
+    /// whose exons they overlap, so their mass is reported rather than silently
+    /// dropped.
+    ///
+    /// EXPERIMENTAL and off by default. This is the single supported entry point;
+    /// the `--novel-*` options tune it.
+    #[arg(long, help_heading = "unannotated isoforms")]
+    pub model_unannotated_isoforms: bool,
+
+    /// genome mode: override bramble's projection similarity threshold (long-read
+    /// default 0.60). Lowering it admits reads whose splice structure agrees less
+    /// well with every annotated transcript; diagnostic use only.
+    #[arg(long, hide = true)]
+    pub projection_similarity_threshold: Option<f64>,
+
+    /// genome mode: override bramble's maximum tolerated soft clip (long-read
+    /// default 40). Diagnostic use only.
+    #[arg(long, hide = true)]
+    pub projection_max_clip: Option<u8>,
+
+    /// genome mode: override bramble's maximum insertion tolerated at an internal
+    /// junction (long-read default 40). Raising it lets an exon chain absorb more
+    /// splice-structure disagreement, so reads from unannotated isoforms are
+    /// projected onto annotated transcripts instead of being excluded.
+    /// Diagnostic use only.
+    #[arg(long, hide = true)]
+    pub projection_max_junc_ins: Option<u8>,
+
+    /// genome mode: override bramble's maximum gap tolerated at an internal
+    /// junction (long-read default 40). Diagnostic use only.
+    #[arg(long, hide = true)]
+    pub projection_max_junc_gap: Option<u8>,
+
+    /// genome mode: override bramble's small-exon error tolerance (long-read
+    /// default 35). Diagnostic use only.
+    #[arg(long, hide = true)]
+    pub projection_max_error_exon: Option<u8>,
+
     /// If this flag is passed, oarfish only performs indexing and not quantification.
     /// Designed primarily for workflow management systems.
     /// Note: A prebuilt index is not needed to quantify with oarfish; an index can be
@@ -542,6 +595,19 @@ pub struct Args {
     #[arg(long, help_heading = "coverage model", value_enum, default_value_t = CoverageModel::None)]
     pub coverage_model: CoverageModel,
 
+    /// unannotated isoform over the best annotated candidate (genome mode)
+    #[arg(long, help_heading = "coverage model", default_value_t = 2.0,
+          value_parser = parse_pos_f64)]
+    pub novel_odds_per_miss: f64,
+    /// alignment noise; requiring more trades sensitivity for specificity
+    #[arg(long, help_heading = "coverage model", default_value_t = 1)]
+    pub novel_min_misses: i32,
+    /// noise; a genuinely unannotated isoform accumulates many
+    #[arg(long, help_heading = "coverage model", default_value_t = 5)]
+    pub novel_min_locus_reads: usize,
+    /// mistaken for novel isoforms
+    #[arg(long, help_heading = "coverage model")]
+    pub novel_require_hits: bool,
     /// if using the coverage model, use this as the value of `k` in the logistic equation
     #[arg(
         short = 'k',
@@ -636,6 +702,17 @@ pub struct Args {
     /// use a KDE model of the observed fragment length distribution
     #[arg(short, long, hide = true)]
     pub use_kde: bool,
+}
+
+impl Args {
+    /// Whether unannotated-isoform modeling is active.
+    ///
+    /// `--model-unannotated-isoforms` is the user-facing switch. The parallel
+    /// `AnnotationOmission` ablation entry point was dropped when the coverage
+    /// ablation machinery was retired; this flag is now the only way in.
+    pub fn models_unannotated_isoforms(&self) -> bool {
+        self.model_unannotated_isoforms
+    }
 }
 
 #[cfg(test)]
