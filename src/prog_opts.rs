@@ -34,47 +34,6 @@ pub enum CoverageModel {
     None,
     /// Repaired version of oarfish's historical inverse-logistic model.
     Logistic,
-    /// Learned joint distribution of transcript-relative alignment endpoints.
-    Endpoint,
-    /// Regularized log-linear combination of logistic and endpoint evidence.
-    Hybrid,
-    /// Cross-fitted, smoothed, reliability-gated hybrid coverage evidence.
-    Adaptive,
-    /// Adaptive evidence after removing a learned ONT direct-RNA degradation process.
-    Degradation,
-    /// Select a technology kernel and learn evidence strength from the sample.
-    Auto,
-}
-
-/// Experimental ONT direct-RNA degradation observation kernel.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
-pub enum DegradationKernel {
-    /// Constant per-base degradation hazard (validated default).
-    #[default]
-    Constant,
-    /// Strongly regularized two-region piecewise hazard.
-    Piecewise2,
-}
-
-/// Experimental switches used to measure individual adaptive-coverage terms.
-/// These are intentionally not selected by `auto` until the ablation study
-/// demonstrates an accuracy benefit outside the fitting samples.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
-pub enum CoverageAblation {
-    #[default]
-    Full,
-    NoLogistic,
-    NoEndpoint,
-    NoSupportGate,
-    NoAgreementGate,
-    NoBayesCap,
-    QualityGate,
-    UncertaintyGate,
-    EqClassTraining,
-    /// PacBio-specific intact/truncated/broken physical endpoint mixture.
-    PacbioPhysicalEndpoint,
-    AbundanceBlend,
-    AllCandidates,
 }
 
 /// Default denominator for the transcriptome score→probability conversion
@@ -88,48 +47,6 @@ pub enum CoverageAblation {
 /// flat region rather than to a sharp peak. See
 /// `docs/score-prob-denom-recalibration-2026-08-03.md`.
 pub const DEFAULT_SCORE_PROB_DENOM: f32 = 3.0;
-
-fn parse_unit_f64(arg: &str) -> anyhow::Result<f64> {
-    let value: f64 = arg
-        .parse()
-        .map_err(|_| anyhow::anyhow!("`{}` is not a valid number", arg))?;
-    if value.is_finite() && (0.0..=1.0).contains(&value) {
-        Ok(value)
-    } else {
-        anyhow::bail!("value must be between 0 and 1, but got {}", value)
-    }
-}
-
-fn parse_pos_f64(arg: &str) -> anyhow::Result<f64> {
-    let value: f64 = arg
-        .parse()
-        .map_err(|_| anyhow::anyhow!("`{}` is not a valid number", arg))?;
-    if value.is_finite() && value > 0.0 {
-        Ok(value)
-    } else {
-        anyhow::bail!("value must be > 0, but got {}", value)
-    }
-}
-
-fn parse_bayes_factor(arg: &str) -> anyhow::Result<f64> {
-    let value = parse_pos_f64(arg)?;
-    if value >= 1.0 {
-        Ok(value)
-    } else {
-        anyhow::bail!("value must be >= 1, but got {}", value)
-    }
-}
-
-fn parse_folds(arg: &str) -> anyhow::Result<usize> {
-    let value: usize = arg
-        .parse()
-        .map_err(|_| anyhow::anyhow!("`{}` is not a valid integer", arg))?;
-    if (2..=20).contains(&value) {
-        Ok(value)
-    } else {
-        anyhow::bail!("value must be between 2 and 20, but got {}", value)
-    }
-}
 
 fn parse_positive_usize(arg: &str) -> anyhow::Result<usize> {
     let value: usize = arg.parse()?;
@@ -625,47 +542,6 @@ pub struct Args {
     #[arg(long, help_heading = "coverage model", value_enum, default_value_t = CoverageModel::None)]
     pub coverage_model: CoverageModel,
 
-    /// logistic exponent in the hybrid coverage model
-    #[arg(long, help_heading = "coverage model", default_value_t = 1.0, value_parser = parse_unit_f64)]
-    pub logistic_weight: f64,
-
-    /// endpoint exponent in the hybrid coverage model
-    #[arg(long, help_heading = "coverage model", default_value_t = 0.5, value_parser = parse_unit_f64)]
-    pub endpoint_weight: f64,
-
-    /// endpoint observations giving 50% support-gate strength in hybrid mode
-    #[arg(long, help_heading = "coverage model", default_value_t = 25.0, value_parser = parse_pos_f64)]
-    pub endpoint_support_scale: f64,
-
-    /// cross-validation folds used by the adaptive endpoint model
-    #[arg(long, help_heading = "coverage model", default_value_t = 5, value_parser = parse_folds)]
-    pub coverage_folds: usize,
-
-    /// experimental degradation distribution used by ONT direct-RNA auto/degradation modes
-    #[arg(
-        long,
-        help_heading = "coverage model",
-        value_enum,
-        default_value_t = DegradationKernel::Constant
-    )]
-    pub degradation_kernel: DegradationKernel,
-
-    /// largest per-read coverage odds ratio allowed in adaptive mode
-    #[arg(long, help_heading = "coverage model", default_value_t = 4.0, value_parser = parse_bayes_factor)]
-    pub coverage_max_bayes_factor: f64,
-
-    /// experimental adaptive-coverage ablation or candidate enhancement
-    #[arg(long, help_heading = "coverage model", value_enum, default_value_t = CoverageAblation::Full)]
-    pub coverage_ablation: CoverageAblation,
-
-    /// coverage-free EM evaluations used by abundance-warmup experiments
-    #[arg(long, help_heading = "coverage model", default_value_t = 100)]
-    pub coverage_warmup_iterations: u32,
-
-    /// preliminary counts per million giving half-strength abundance gating
-    #[arg(long, help_heading = "coverage model", default_value_t = 300.0, value_parser = parse_pos_f64)]
-    pub coverage_abundance_midpoint_per_million: f64,
-
     /// if using the coverage model, use this as the value of `k` in the logistic equation
     #[arg(
         short = 'k',
@@ -764,7 +640,7 @@ pub struct Args {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, CoverageModel, DegradationKernel, EmAccel};
+    use super::{Args, CoverageModel, EmAccel};
     use clap::Parser;
 
     #[test]
@@ -807,135 +683,29 @@ mod tests {
             "--em-accel",
             "daarem",
             "--coverage-model",
-            "endpoint",
+            "logistic",
         ])
         .expect("valid model options");
         assert_eq!(parsed.em_accel, EmAccel::Daarem);
-        assert_eq!(parsed.coverage_model, CoverageModel::Endpoint);
-
-        let hybrid = Args::try_parse_from([
-            "oarfish",
-            "-a",
-            "reads.bam",
-            "-o",
-            "out",
-            "--coverage-model",
-            "hybrid",
-            "--logistic-weight",
-            "0.75",
-            "--endpoint-weight",
-            "0.25",
-        ])
-        .expect("valid hybrid options");
-        assert_eq!(hybrid.coverage_model, CoverageModel::Hybrid);
-        assert_eq!(hybrid.logistic_weight, 0.75);
-        assert_eq!(hybrid.endpoint_weight, 0.25);
-
-        let adaptive = Args::try_parse_from([
-            "oarfish",
-            "-a",
-            "reads.bam",
-            "-o",
-            "out",
-            "--coverage-model",
-            "adaptive",
-            "--coverage-folds",
-            "7",
-            "--coverage-max-bayes-factor",
-            "3",
-        ])
-        .expect("valid adaptive options");
-        assert_eq!(adaptive.coverage_model, CoverageModel::Adaptive);
-        assert_eq!(adaptive.coverage_folds, 7);
-        assert_eq!(adaptive.coverage_max_bayes_factor, 3.0);
-        let degradation = Args::try_parse_from([
-            "oarfish",
-            "-a",
-            "reads.bam",
-            "-o",
-            "out",
-            "--coverage-model",
-            "degradation",
-            "--seq-tech",
-            "ont-drna",
-            "--degradation-kernel",
-            "piecewise2",
-        ])
-        .expect("valid degradation options");
-        assert_eq!(degradation.coverage_model, CoverageModel::Degradation);
-        assert_eq!(degradation.seq_tech, Some(super::SequencingTech::OntDRNA));
-        assert_eq!(
-            degradation.degradation_kernel,
-            DegradationKernel::Piecewise2
-        );
-        let automatic = Args::try_parse_from([
-            "oarfish",
-            "-a",
-            "reads.bam",
-            "-o",
-            "out",
-            "--coverage-model",
-            "auto",
-            "--seq-tech",
-            "pac-bio-hifi",
-        ])
-        .expect("valid automatic technology options");
-        assert_eq!(automatic.coverage_model, CoverageModel::Auto);
-        assert_eq!(automatic.seq_tech, Some(super::SequencingTech::PacBioHifi));
-        // The four experimental coverage extras (rank blending, dominance
-        // pruning, alignment calibration, censoring) were removed; see
-        // archive/coverage-extras-2026-08-03.  `auto` now selects only the
-        // technology kernel.
-        assert!(
-            Args::try_parse_from([
-                "oarfish",
-                "-a",
-                "reads.bam",
-                "-o",
-                "out",
-                "--coverage-folds",
-                "1"
-            ])
-            .is_err()
-        );
-        assert!(
-            Args::try_parse_from([
-                "oarfish",
-                "-a",
-                "reads.bam",
-                "-o",
-                "out",
-                "--coverage-max-bayes-factor",
-                "0.9",
-            ])
-            .is_err()
-        );
-        assert!(
-            Args::try_parse_from([
-                "oarfish",
-                "-a",
-                "reads.bam",
-                "-o",
-                "out",
-                "--logistic-weight",
-                "1.1",
-            ])
-            .is_err()
-        );
-
-        assert!(
-            Args::try_parse_from([
-                "oarfish",
-                "-a",
-                "reads.bam",
-                "-o",
-                "out",
-                "--model-coverage",
-                "--coverage-model",
-                "endpoint",
-            ])
-            .is_err()
-        );
+        assert_eq!(parsed.coverage_model, CoverageModel::Logistic);
+        // The non-logistic coverage kernels (auto/adaptive/endpoint/hybrid/
+        // degradation) were retired; see archive/coverage-kernels-2026-08-03.
+        // Only `none` and `logistic` remain selectable.
+        for retired in ["auto", "adaptive", "endpoint", "hybrid", "degradation"] {
+            assert!(
+                Args::try_parse_from([
+                    "oarfish",
+                    "-a",
+                    "reads.bam",
+                    "-o",
+                    "out",
+                    "--coverage-model",
+                    retired,
+                ])
+                .is_err(),
+                "retired coverage model `{retired}` must no longer parse"
+            );
+        }
     }
 
     #[test]

@@ -116,15 +116,10 @@ indexing:
       --index-out <INDEX_OUT>  path where the index will be written (if provided)
 
 coverage model:
-      --model-coverage             apply the coverage model
-      --coverage-model <MODEL>     bulk coverage evidence: none, logistic, endpoint, hybrid, adaptive, degradation, auto [default: none]
+      --model-coverage             apply the coverage model (aliases `--coverage-model logistic`)
+      --coverage-model <MODEL>     bulk coverage evidence: none, logistic [default: none]
   -k, --growth-rate <GROWTH_RATE>  logistic `k` [default: 2]
   -b, --bin-width <BIN_WIDTH>      coverage bin width [default: 100]
-      --coverage-folds <N>         cross-validation folds in adaptive mode [default: 5]
-      --coverage-max-bayes-factor <BF>
-                                   maximum per-read coverage odds in adaptive mode [default: 4]
-      --degradation-kernel <KERNEL>
-                                   ONT dRNA kernel: constant or experimental piecewise2
 
 output read-txps probabilities:
       --write-assignment-probs[=<WRITE_ASSIGNMENT_PROBS>]  write per-read assignment probs (uncompressed|compressed)
@@ -142,60 +137,21 @@ EM:
 single-candidate reads. See [the staged evaluation protocol](evaluation.md)
 and [current coverage-model results](coverage-evaluation-2026-07-19.md).
 The default-versus-abundance-blend decision is documented in the
-[expanded truth-bearing benchmark](coverage-default-benchmark-expansion-2026-07-20.md).
-The selected hybrid weight sweep is documented in
-[hybrid coverage evaluation](hybrid-evaluation-2026-07-19.md).
+`--model-coverage` (equivalently `--coverage-model logistic`) applies a repaired
+inverse-logistic positional model. On six NanoSim/TKSM simulations with exact
+read-level truth it improves Spearman by **+0.026** over no coverage model, on
+5 of 6 samples.
 
-`--coverage-model hybrid` combines logistic and endpoint likelihoods in log
-space. Its defaults are `--logistic-weight 1.0`, `--endpoint-weight 0.5`, and
-`--endpoint-support-scale 25`; sparse endpoint cells are automatically shrunk
-toward the logistic-only result. These parameters are experimental and apply
-only to bulk quantification.
-
-`--coverage-model adaptive` adds safeguards intended for transfer across
-samples: deterministic cross-fitting, locally smoothed endpoint counts,
-held-out selection of the endpoint prior strength, a reliability gate based on
-support and logistic/endpoint agreement, and a per-read Bayes-factor cap. The
-model records the selected prior, mean reliability, cap count, coverage time,
-and EM time in `.meta_info.json`. It remains experimental and opt-in; see the
-[adaptive coverage evaluation](adaptive-coverage-evaluation-2026-07-19.md).
-The frozen-parameter degradation and PacBio checks are recorded in the
-[coverage outer-validation report](coverage-outer-validation-2026-07-19.md).
-The subsequent 24-library, eight-cell-line evaluation and depth confirmation
-are recorded in the
-[LongBench coverage evaluation](longbench-coverage-evaluation-2026-07-19.md).
-
-The annotation-free component and candidate-model assessment, including
-accuracy, runtime, and peak-memory ablations, is recorded in the
-[coverage-component ablation](coverage-component-ablation-2026-07-20.md).
-The follow-on correction-weight and technical-truncation experiments are in the
-[competing-risk degradation evaluation](competing-risk-degradation-evaluation-2026-07-20.md).
-The bounded beta and piecewise alternatives are evaluated in the
-[degradation-kernel challenger study](degradation-kernel-challengers-2026-07-20.md).
-
-`--coverage-model degradation --seq-tech ont-drna` removes a cross-fitted,
-sample-wide 3'-anchored degradation process before applying adaptive endpoint
-evidence. It learns intact, length-invariant technical-truncation, and
-length-scaled degradation fractions plus a degradation hazard from
-single-candidate reads and records them in `.meta_info.json`. The current
-kernel is specific to ONT direct RNA; cDNA and PacBio should continue to use
-`adaptive` until their protocol-specific kernels have been validated. See the
-[degradation-model evaluation](degradation-model-evaluation-2026-07-19.md).
-
-`--coverage-model auto --seq-tech <TECH>` is the recommended entry point for
-bulk coverage correction. For ONT direct RNA it learns whether degradation
-correction is supported, its strength, and the per-read posterior; when
-unsupported it reduces to adaptive coverage evidence. ONT cDNA uses the
-adaptive logistic-plus-endpoint kernel. PacBio uses a learned physical
-intact/truncated/broken endpoint mixture combined with adaptive logistic
-evidence. A coverage-free abundance anchor prevents extreme coverage-only
-creation of endpoint-unidentifiable nested isoforms. BAM
-inputs require `--seq-tech` in auto mode because the protocol cannot be
-inferred safely from alignment records. The CLI default remains `none`, so
-workflows should request `auto` explicitly.
-The recent-platform regression policy, rejected accuracy candidates, packed
-bootstrap results, and exact weighted-class optimization are documented in the
-[coverage and inference refinement round](coverage-next-round-2026-07-21.md).
+A family of alternative coverage kernels (`endpoint`, `hybrid`, `adaptive`,
+`degradation`, and the technology-dispatching `auto`) was developed and then
+retired: head-to-head on exact truth, `logistic` beat every one of them, and
+`auto` cost 26% more wall time for -0.0004 Spearman. They are preserved on the
+`archive/coverage-kernels-2026-08-03` branch. The evaluation, including the
+per-sample table and the one caveat that survives it (`logistic` underperforms
+on PacBio), is in
+[coverage kernel retirement](coverage-kernel-retirement-2026-08-03.md); the
+re-benchmark that prompted it is in
+[coverage auto re-benchmark](coverage-auto-rebenchmark-results-2026-08-03.md).
 
 > The block above is abridged for readability; run `oarfish --help` for the exact, complete option text for your installed version.
 
@@ -208,7 +164,7 @@ Assume you have ONT cDNA reads in `sample1_reads.fq.gz` and a *transcriptome* re
 ```bash
 $ minimap2 -t 16 --eqx -N 100 -ax map-ont transcripts.fa sample1_reads.fq.gz | samtools view -@4 -b -o alignments.bam
 $ oarfish -j 16 -a alignments.bam -o sample1 --filter-group no-filters \
-    --seq-tech ont-cdna --coverage-model auto
+    --seq-tech ont-cdna --model-coverage
 ```
 
 ### Read-mode example (oarfish maps to the transcriptome)
@@ -217,7 +173,7 @@ Here `oarfish` maps the reads to the transcriptome for you (no external aligner 
 
 ```bash
 $ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa \
-    --seq-tech ont-cdna -o sample1 --filter-group no-filters --coverage-model auto
+    --seq-tech ont-cdna -o sample1 --filter-group no-filters --model-coverage
 ```
 
 If you will quantify more than one sample against the same reference, save the index that the above command builds and reuse it:
@@ -226,10 +182,10 @@ If you will quantify more than one sample against the same reference, save the i
 # build + quantify, writing the index out
 $ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa \
     --index-out transcripts.oar --seq-tech ont-cdna -o sample1 \
-    --filter-group no-filters --coverage-model auto
+    --filter-group no-filters --model-coverage
 # subsequent samples reuse the index
 $ oarfish -j 16 --reads sample2_reads.fq.gz --index transcripts.oar \
-    --seq-tech ont-cdna -o sample2 --filter-group no-filters --coverage-model auto
+    --seq-tech ont-cdna -o sample2 --filter-group no-filters --model-coverage
 ```
 
 ### Genome read-projection example (reads → genome → transcripts)

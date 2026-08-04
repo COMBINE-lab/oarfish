@@ -13,6 +13,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- The non-logistic coverage kernels: `--coverage-model auto|adaptive|endpoint|
+  hybrid|degradation` and their four supporting modules (1,478 lines), plus the
+  parameters that only served them (`--coverage-folds`, `--endpoint-weight`,
+  `--logistic-weight`, `--endpoint-support-scale`, `--coverage-max-bayes-factor`,
+  `--degradation-kernel`, `--coverage-ablation`, `--coverage-warmup-iterations`,
+  `--coverage-abundance-midpoint-per-million`). `--coverage-model` now accepts
+  `none|logistic`. Head-to-head on six simulations with exact read-level truth,
+  `logistic` beat every alternative: `endpoint` -0.0428 (worse than using no
+  coverage model at all), `hybrid` -0.0037, `auto` -0.0004 at +25.9% wall time,
+  `degradation` -0.0019. Coverage modelling itself remains clearly worthwhile
+  (`logistic` is +0.026 over `none` on 5/6). Preserved on
+  `archive/coverage-kernels-2026-08-03`; see
+  `docs/coverage-kernel-retirement-2026-08-03.md`.
 - The four experimental `--coverage-model auto` extras -- abundance rank
   blending (`--rank-blend`, `--rank-blend-floor`), dominance pruning
   (`--candidate-pruning`, `--dominance-bayes-factor`), alignment calibration
