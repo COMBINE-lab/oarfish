@@ -351,8 +351,7 @@ fn perform_inference_and_write_output(
     }
 
     let em_start = std::time::Instant::now();
-    // The parallel M-step does not implement the novel latent state.
-    let mut em_result = if novel_loci == 0 && args.threads > 4 {
+    let mut em_result = if args.threads > 4 {
         em::em_par(&emi, args.threads)
     } else {
         em::em(&emi, args.threads)

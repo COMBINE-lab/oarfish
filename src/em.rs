@@ -116,8 +116,13 @@ fn prepare_equivalence_classes<'a>(
     (classes, weights)
 }
 
+/// `NOVEL` is a const generic rather than a runtime flag so that the
+/// unannotated-isoform path costs nothing when it is off: with `NOVEL == false`
+/// every `novel_id`/`novel_weight` test below folds away at compile time and the
+/// loop is byte-for-byte the pre-feature one, including the unconditional
+/// single-candidate fast path.
 #[inline]
-fn m_step_prepared(
+fn m_step_prepared<const NOVEL: bool>(
     eq_iterates: &[PreparedEq],
     weights: &[f64],
     prev_count: &[f64],
@@ -126,7 +131,7 @@ fn m_step_prepared(
     for eq in eq_iterates {
         let read_count = eq.multiplicity as f64;
         let alns = eq.alignments;
-        let has_novel = eq.novel_id != usize::MAX;
+        let has_novel = NOVEL && eq.novel_id != usize::MAX;
         if !has_novel && let [alignment] = alns {
             // With no novel alternative the single-candidate weight cancels.
             curr_counts[alignment.ref_id as usize] += read_count;
@@ -195,8 +200,12 @@ fn m_step_prepared_counts(
 /// the true alignment (using the abunance estimates from `prev_counts`).
 /// Then, `curr_counts` is computed by summing over the expected assignment
 /// likelihood for all reads mapping to each target.
+/// As with [`m_step_prepared`], `NOVEL` is a const generic so the disabled path
+/// is exactly the original loop. Shards are sized by the caller to cover the
+/// novel states, which live past the annotated transcripts, so a novel id
+/// indexes `local` directly and the reduction below picks it up unchanged.
 #[inline]
-fn m_step_par(
+fn m_step_par<const NOVEL: bool>(
     eq_iterates: &[PreparedEq],
     weights: &[f64],
     prev_count: &[f64],
@@ -213,10 +222,12 @@ fn m_step_par(
             let end = ((shard + 1) * chunk_size).min(eq_iterates.len());
             for eq in &eq_iterates[start..end] {
                 let alns = eq.alignments;
+                let has_novel = NOVEL && eq.novel_id != usize::MAX;
                 // A read with one candidate contributes exactly one count: its
                 // alignment/coverage weight cancels between numerator and
-                // denominator. Avoid evaluating that weight twice.
-                if let [alignment] = alns {
+                // denominator. Avoid evaluating that weight twice. With a novel
+                // competitor present the weight no longer cancels.
+                if !has_novel && let [alignment] = alns {
                     local[alignment.ref_id as usize] += eq.multiplicity as f64;
                     continue;
                 }
@@ -226,11 +237,17 @@ fn m_step_par(
                     let target_id = a.ref_id as usize;
                     denom += prev_count[target_id] * weight;
                 }
+                if has_novel {
+                    denom += prev_count[eq.novel_id] * eq.novel_weight;
+                }
                 if denom > constants::EM_DENOM_THRESH {
                     let scale = eq.multiplicity as f64 / denom;
                     for (a, weight) in alns.iter().zip(eq_weights) {
                         let target_id = a.ref_id as usize;
                         local[target_id] += prev_count[target_id] * weight * scale;
+                    }
+                    if has_novel {
+                        local[eq.novel_id] += prev_count[eq.novel_id] * eq.novel_weight * scale;
                     }
                 }
             }
@@ -385,11 +402,20 @@ pub fn em(em_info: &EMInfo, _nthreads: usize) -> EMResult {
     let _guard = span.enter();
 
     let (eq_iterates, weights) = prepare_equivalence_classes(em_info, true);
-    let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
-        dst.fill(0.0);
-        m_step_prepared(&eq_iterates, &weights, src, dst);
-    };
-    run_driver(em_info, &mut fixed_point, true)
+    // Dispatch once, outside the fixed point, so the hot loop is monomorphic.
+    if em_info.novel_loci > 0 {
+        let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
+            dst.fill(0.0);
+            m_step_prepared::<true>(&eq_iterates, &weights, src, dst);
+        };
+        run_driver(em_info, &mut fixed_point, true)
+    } else {
+        let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
+            dst.fill(0.0);
+            m_step_prepared::<false>(&eq_iterates, &weights, src, dst);
+        };
+        run_driver(em_info, &mut fixed_point, true)
+    }
 }
 
 fn do_bootstrap_prepared(
@@ -452,10 +478,21 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> EMResult {
     let (eq_iterates, weights) = prepare_equivalence_classes(em_info, false);
     // Reuse private dense accumulators across all fixed-point evaluations.
     // Capping the shard count avoids excessive memory use on high-core hosts.
+    // Shards must span the novel states as well, since those ids index past the
+    // annotated transcripts into the same accumulator.
     let shard_count = nthreads.clamp(1, 64);
-    let mut shards = vec![vec![0.0; em_info.txp_info.len()]; shard_count];
-    let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
-        m_step_par(&eq_iterates, &weights, src, dst, &mut shards);
-    };
-    pool.install(|| run_driver(em_info, &mut fixed_point, true))
+    let n_states = em_info.txp_info.len() + em_info.novel_loci;
+    let mut shards = vec![vec![0.0; n_states]; shard_count];
+    // Dispatch once, outside the fixed point, so the hot loop is monomorphic.
+    if em_info.novel_loci > 0 {
+        let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
+            m_step_par::<true>(&eq_iterates, &weights, src, dst, &mut shards);
+        };
+        pool.install(|| run_driver(em_info, &mut fixed_point, true))
+    } else {
+        let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
+            m_step_par::<false>(&eq_iterates, &weights, src, dst, &mut shards);
+        };
+        pool.install(|| run_driver(em_info, &mut fixed_point, true))
+    }
 }
