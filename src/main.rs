@@ -124,7 +124,10 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                     args.write_assignment_probs.is_some() || args.write_coverage_signals,
                 )
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
-                .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
+                .score_prob_denom(
+                    args.score_prob_denom
+                        .unwrap_or(crate::prog_opts::DEFAULT_SCORE_PROB_DENOM),
+                )
                 .build())
         }
         Some(FilterGroup::NanocountFilters) => {
@@ -162,7 +165,10 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                     args.write_assignment_probs.is_some() || args.write_coverage_signals,
                 )
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
-                .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
+                .score_prob_denom(
+                    args.score_prob_denom
+                        .unwrap_or(crate::prog_opts::DEFAULT_SCORE_PROB_DENOM),
+                )
                 .build())
         }
         None => {
@@ -180,7 +186,10 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                     args.write_assignment_probs.is_some() || args.write_coverage_signals,
                 )
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
-                .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
+                .score_prob_denom(
+                    args.score_prob_denom
+                        .unwrap_or(crate::prog_opts::DEFAULT_SCORE_PROB_DENOM),
+                )
                 .build())
         }
     }

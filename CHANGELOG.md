@@ -11,6 +11,34 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Removed
+
+- The four experimental `--coverage-model auto` extras -- abundance rank
+  blending (`--rank-blend`, `--rank-blend-floor`), dominance pruning
+  (`--candidate-pruning`, `--dominance-bayes-factor`), alignment calibration
+  (`--alignment-calibration`) and censoring (`--censoring-model`). None could be
+  supported against `--model-coverage` on data with exact read-level truth.
+  Rank blending and dominance pruning regressed it by 0.0878 and 0.0437
+  Spearman; the two that shipped *enabled by default* were net negative
+  (-0.000143 and -0.000233, improving only 2/6 and 3/6 samples). All four are
+  preserved on `archive/coverage-extras-2026-08-03` together with the evidence.
+  Defect analysis in `docs/coverage-auto-defaults-review-2026-08-03.md`; the
+  deciding re-benchmark in
+  `docs/coverage-auto-rebenchmark-results-2026-08-03.md` (448 runs).
+  `--coverage-model auto` now selects only the technology kernel and reproduces
+  the previous kernel-only configuration exactly; `--model-coverage` is
+  unchanged.
+
+### Changed
+
+- `--score-prob-denom` now defaults to **3** (was 5), sharpening the
+  score→probability weighting `exp((score - best)/D)` slightly. Improves 32 of
+  34 samples: +0.0015 Spearman on six simulations with exact truth (MARD better
+  on 6/6) and +0.0007 on 28 real LongBench samples (27/28), uniformly across
+  ONT-cDNA, ONT-dRNA and PacBio. Pass `--score-prob-denom 5` to restore the
+  previous behaviour exactly. See
+  `docs/score-prob-denom-recalibration-2026-08-03.md`.
+
 ### Added
 
 - Opt-in `--em-accel none|squarem|daarem` for bulk estimates and bootstraps,
@@ -41,35 +69,6 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - An eight-cell-line LongBench evaluation across ONT cDNA, ONT direct RNA, and
   PacBio Kinnex, including a selective 250,000-read depth confirmation tier and
   machine-readable accuracy/runtime results.
-
-### Changed
-
-- `--rank-blend` and `--candidate-pruning` now default to `none`, so
-  `--coverage-model auto` no longer enables abundance rank blending or
-  dominance pruning implicitly. Both remain reachable as `auto`/`fixed`/
-  `dominance` for benchmarking.
-
-  On NanoSim (ONT) and TKSM (PacBio) simulations with exact read-level truth,
-  the previous defaults regressed Spearman by 0.04-0.12 versus the published
-  `--model-coverage` (logistic) model, and inflated MARD up to 2.7x. Attributed
-  by add-one ablation on NanoSim NA12878 1D-cDNA (baseline 0.8846 Spearman):
-  rank blending -0.0967, dominance pruning -0.0282, alignment calibration
-  -0.0004, censoring -0.0019. With both demoted, `auto` returns to parity with
-  the logistic baseline (0.8824 vs 0.8850) at 1.8x the speed, and the adaptive
-  kernel alone matches or beats it on all three ONT datasets tested.
-
-  Two specific defects motivated the demotion. Rank blending mixes 20% of a
-  coverage-free warm-up EM into every estimate, and that warm-up terminates
-  non-converged at the 100-iteration cap; its 37 nt censoring-scale activation
-  gate was calibrated assuming independent simulations fit the 25 nt clamp and
-  would abstain, but NanoSim 1D-cDNA fits 87.85 nt and the gate fires. Dominance
-  pruning hard-zeroes 22-27% of all candidates before the EM at a Bayes factor
-  of 2.0, using alignment span as a trusted signal, which systematically favors
-  longer isoforms.
-
-  See `docs/coverage-auto-defaults-review-2026-08-03.md`. These defaults are
-  provisional pending a re-benchmark of the original selection panel with
-  `logistic` reinstated as a comparator.
 
 ## 0.10.3 - 2026-07-16
 

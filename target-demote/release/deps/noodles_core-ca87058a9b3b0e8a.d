@@ -1,0 +1,9 @@
+/scratch1/rob/long-read-ecosystem/oarfish-demote/target-demote/release/deps/noodles_core-ca87058a9b3b0e8a.d: /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/lib.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/position.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/position/sequence_index.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/region.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/region/interval.rs
+
+/scratch1/rob/long-read-ecosystem/oarfish-demote/target-demote/release/deps/libnoodles_core-ca87058a9b3b0e8a.rmeta: /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/lib.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/position.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/position/sequence_index.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/region.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/region/interval.rs
+
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/lib.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/position.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/position/sequence_index.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/region.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noodles-core-0.20.0/src/region/interval.rs:

@@ -1,0 +1,7 @@
+/scratch1/rob/long-read-ecosystem/oarfish-demote/target-demote/release/deps/csv_core-64cd1cc2bc9dd966.d: /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/csv-core-0.1.13/src/lib.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/csv-core-0.1.13/src/reader.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/csv-core-0.1.13/src/writer.rs
+
+/scratch1/rob/long-read-ecosystem/oarfish-demote/target-demote/release/deps/libcsv_core-64cd1cc2bc9dd966.rmeta: /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/csv-core-0.1.13/src/lib.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/csv-core-0.1.13/src/reader.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/csv-core-0.1.13/src/writer.rs
+
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/csv-core-0.1.13/src/lib.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/csv-core-0.1.13/src/reader.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/csv-core-0.1.13/src/writer.rs:

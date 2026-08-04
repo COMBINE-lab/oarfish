@@ -1,0 +1,11 @@
+/scratch1/rob/long-read-ecosystem/oarfish-demote/target-demote/release/deps/console-a5f174a8bbf96518.d: /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/lib.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/common_term.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/kb.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/term.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/unix_term.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/utils.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/ansi.rs
+
+/scratch1/rob/long-read-ecosystem/oarfish-demote/target-demote/release/deps/libconsole-a5f174a8bbf96518.rmeta: /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/lib.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/common_term.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/kb.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/term.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/unix_term.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/utils.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/ansi.rs
+
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/lib.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/common_term.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/kb.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/term.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/unix_term.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/utils.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/console-0.16.4/src/ansi.rs:

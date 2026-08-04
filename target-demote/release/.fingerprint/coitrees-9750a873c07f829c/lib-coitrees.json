@@ -1,0 +1,1 @@
+{"rustc":12019306335353385202,"features":"[]","declared_features":"[\"nosimd\"]","target":4110083434720682412,"profile":3372821733303221554,"path":11045492972641278010,"deps":[],"local":[{"CheckDepInfo":{"dep_info":"release/.fingerprint/coitrees-9750a873c07f829c/dep-lib-coitrees","checksum":false}}],"rustflags":[],"config":9396254390672932401,"compile_kind":0}

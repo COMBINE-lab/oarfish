@@ -1,0 +1,5 @@
+/scratch1/rob/long-read-ecosystem/oarfish-demote/target-demote/release/deps/futures_io-7d1dd623cb33e82f.d: /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-io-0.3.33/src/lib.rs
+
+/scratch1/rob/long-read-ecosystem/oarfish-demote/target-demote/release/deps/libfutures_io-7d1dd623cb33e82f.rmeta: /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-io-0.3.33/src/lib.rs
+
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/futures-io-0.3.33/src/lib.rs:

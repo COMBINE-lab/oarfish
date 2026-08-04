@@ -77,6 +77,18 @@ pub enum CoverageAblation {
     AllCandidates,
 }
 
+/// Default denominator for the transcriptome score→probability conversion
+/// `exp((score - best)/D)`.
+///
+/// Chosen over the previous value of 5 on the strength of 34 samples: +0.0015
+/// Spearman on 6 simulations with exact read-level truth (5/6 improving, MARD
+/// better on 6/6) and +0.0007 on 28 real LongBench samples (27/28 improving),
+/// uniformly across ONT-cDNA, ONT-dRNA and PacBio. The optimum is broad -- both
+/// 3 and 5 are far better than 1 or 8 -- so this moves toward the centre of a
+/// flat region rather than to a sharp peak. See
+/// `docs/score-prob-denom-recalibration-2026-08-03.md`.
+pub const DEFAULT_SCORE_PROB_DENOM: f32 = 3.0;
+
 fn parse_unit_f64(arg: &str) -> anyhow::Result<f64> {
     let value: f64 = arg
         .parse()
@@ -499,7 +511,7 @@ pub struct Args {
     pub projected_prob_source: ProjProbSource,
 
     /// denominator `D` in the score→probability conversion `exp((score - best)/D)`
-    /// used to weight a read's alignments in the EM (default 5). Larger `D`
+    /// used to weight a read's alignments in the EM (default 3). Larger `D`
     /// flattens the weighting across alignments of differing score; smaller `D`
     /// sharpens it toward the best-scoring alignment. Transcriptome mode only —
     /// in genome mode projected alignments are weighted by bramble similarity, so

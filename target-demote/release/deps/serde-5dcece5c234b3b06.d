@@ -1,0 +1,12 @@
+/scratch1/rob/long-read-ecosystem/oarfish-demote/target-demote/release/deps/serde-5dcece5c234b3b06.d: /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /scratch1/rob/long-read-ecosystem/oarfish-demote/target-demote/release/build/serde-aaf331b9c46abbfc/out/private.rs
+
+/scratch1/rob/long-read-ecosystem/oarfish-demote/target-demote/release/deps/libserde-5dcece5c234b3b06.rmeta: /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs /nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs /scratch1/rob/long-read-ecosystem/oarfish-demote/target-demote/release/build/serde-aaf331b9c46abbfc/out/private.rs
+
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/integer128.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/mod.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/de.rs:
+/nfshomes/nomad/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/private/ser.rs:
+/scratch1/rob/long-read-ecosystem/oarfish-demote/target-demote/release/build/serde-aaf331b9c46abbfc/out/private.rs:
+
+# env-dep:OUT_DIR=/scratch1/rob/long-read-ecosystem/oarfish-demote/target-demote/release/build/serde-aaf331b9c46abbfc/out
