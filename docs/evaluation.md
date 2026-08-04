@@ -24,6 +24,79 @@ the BAM and all filtering options fixed.  Primary metrics are MARD, CCC, and
 within-gene isoform-fraction error; secondary metrics are RMSE, Pearson,
 Spearman, expressed-transcript precision/recall, wall time, and peak RSS.
 
+## Truth tier versus comparator tier
+
+Panel results must be reported in two tiers, split by the provenance of the truth column, and
+never pooled into a single mean:
+
+* **Truth tier** (`truth_type = counts`): molecular ground truth or known spike-in concentration —
+  the synthetic dRNA set, the independent ONT/PacBio simulations, and the SIRV mixtures.
+* **Comparator tier** (`truth_type = illumina`): matched short-read abundance. This is a
+  *different technology with its own assignment behaviour*, not ground truth.
+
+The reason is empirical. `benchmarks/coverage_ablation_manifest.tsv` is 27 comparator libraries
+and one truth-bearing sample, so a pooled mean is ~96% comparator — and on three separate
+occasions a candidate that improved the comparator was contradicted by molecular truth:
+
+| Round | Comparator | Molecular truth |
+|---|---|---|
+| Unique-read-only profiles (2026-07-21) | better Spearman/MARD in all 24 libraries | synthetic CCC 0.99704 -> 0.94994 |
+| Endpoint nucleotide measure (2026-07-24) | ONT dRNA Spearman +0.000515 (8/9) | true-transcript discrimination -0.043 |
+| Score temperature (2026-07-24) | prefers `D -> 0.5`, monotonically | prefers `D -> 20`, monotonically |
+
+**Promotion additionally requires that no primary metric regress in the truth tier.** A gain that
+exists only in the comparator tier is evidence about agreement with Illumina, not about accuracy.
+
+Report both tiers with:
+
+```
+python3 scripts/summarize_panel.py <results.tsv ...> \
+    --manifest benchmarks/coverage_ablation_manifest.tsv \
+    --manifest benchmarks/truth_tier_manifest.tsv \
+    --control full --candidate <arm>
+```
+
+It prints per-tier means and win counts and emits a verdict, including `INDETERMINATE` when a run
+contains no truth-bearing sample. `benchmarks/truth_tier_manifest.tsv` holds the truth-bearing
+panel; `scripts/run_coverage_ablation.py` accepts either a `bam` column (alignment mode) or
+`reads` + `reference` (raw-read mode), so both tiers run under one driver.
+
+### Determinism, and a Spearman noise floor in raw-read mode
+
+Alignment (BAM) mode is fully deterministic: repeated identical runs are byte-identical, so every
+metric on the 28-case comparator panel and on the BAM rows of the truth tier is exactly
+reproducible.
+
+**Raw-read mode is not.** Parallel mapping breaks ties differently between runs. The effect on
+abundance is negligible — on `independent-pb-100k`, 59 of 385,659 transcripts differ and total
+movement rounds to 0.0 reads — but Spearman is rank-based and hypersensitive to reordering among
+near-zero transcripts. Measured across two identical `--threads 8` runs:
+
+| Metric | run 1 | run 2 | \|delta\| |
+|---|---:|---:|---:|
+| pearson | 0.962394 | 0.962394 | 0.000000 |
+| ccc | 0.961812 | 0.961812 | 0.000000 |
+| rmse | 0.136305 | 0.136306 | 0.000000 |
+| mard | 0.010690 | 0.010690 | 0.000000 |
+| **spearman** | 0.753194 | 0.748438 | **0.004756** |
+
+So on the five raw-read rows of the truth tier (`independent-*`, `sirv-*`), **Spearman deltas below
+about 0.005 are noise**, which is larger than nearly every effect this project measures. Judge
+those rows on CCC, Pearson, RMSE and MARD; treat their Spearman as uninformative unless it moves by
+more than the floor, or re-run with repeats. The BAM rows (`synthetic-drna`, `kinnex-*`) have no
+such caveat.
+
+Two cautions:
+
+* The truth tier is itself heterogeneous. Alignment score alone picks the true transcript for
+  98.7% of ambiguous reads on the independent ONT simulation but only 43.7% on the synthetic dRNA
+  set, so the two disagree about how much work coverage has to do. Do not treat any single case as
+  decisive.
+* Aggregate abundance accuracy and per-read assignment accuracy are distinct axes and can move in
+  opposite directions on the *same* dataset — the nucleotide-measure candidate improved synthetic
+  CCC while lowering true-transcript discrimination on that same sample. When a candidate changes
+  a length-dependent term, check both.
+
 ## Stage report template
 
 1. **Hypothesis:** the new information the model is expected to capture.

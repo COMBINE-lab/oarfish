@@ -1,0 +1,7 @@
+sample	bam	technology	truth	truth_type	extra_flags
+nanosim-NA12878-cdna	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/sim-panel/nanosim/NA12878_1DcDNA/cdna_T.bam	ont-cdna	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/sim-panel/nanosim/ground_truth/cdna_ground_truth.csv	counts
+nanosim-NA12878-drna	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/sim-panel/nanosim/NA12878_directRNA/drna_T.bam	ont-drna	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/sim-panel/nanosim/ground_truth/drna_ground_truth.csv	counts	-d fw
+nanosim-H9-cdna	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/sim-panel/nanosim/H9_1DcDNA/cdna_T.bam	ont-cdna	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/sim-panel/nanosim/ground_truth/H9_1DcDNA_ground_truth.csv	counts
+nanosim-H9-drna	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/sim-panel/nanosim/H9_directRNA/drna_T.bam	ont-drna	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/sim-panel/nanosim/ground_truth/H9_directRNA_ground_truth.csv	counts	-d fw
+tksm-RSII	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/sim-panel/tksm/RSII_T.bam	pac-bio	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/sim-panel/tksm/ground_truth/RSII_ground_truth.csv	counts
+tksm-SQ2	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/sim-panel/tksm/SQ2_T.bam	pac-bio-hifi	/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/sim-panel/tksm/ground_truth/SQ2_ground_truth.csv	counts

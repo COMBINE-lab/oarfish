@@ -72,7 +72,9 @@ sprs = "0.11.4"
 # 0.1.6 exports SeqMap + FastaDb::from_seq_map for the zero-copy rescue path
 # and makes from_seqs hasher-agnostic (0.1.5's deterministic-hasher signature
 # broke default-RandomState callers — COMBINE-lab/oarfish#68; 0.1.5 yanked).
-bramble-rs = "0.1.6"
+# Local path during development of the junction-evidence API; revert to the
+# published crate once the bramble change is released.
+bramble-rs = { path = "/scratch1/rob/long-read-ecosystem/bramble/bramble-rs" }
 
 # rammap: pure-Rust long-read mapper; oarfish's sole read-mapping backend.
 # Published as the `rammap-core` library crate; renamed to `rammap` here so the

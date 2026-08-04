@@ -87,6 +87,20 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
         );
     }
 
+    // Unannotated-isoform modeling needs the junction evidence and locus
+    // attribution that only projection produces; in transcriptome mode there is
+    // no splice structure to disagree with, so the flag would silently do
+    // nothing.
+    if args.model_unannotated_isoforms && args.genome.is_none() && args.genome_alignments.is_none()
+    {
+        anyhow::bail!(
+            "--model-unannotated-isoforms requires genome (projection) mode: it relies on \
+             the splice-junction evidence produced when genomic alignments are projected \
+             onto the annotation, which transcriptome alignments do not carry. Please pass \
+             --genome (with --reads) or --genome-alignments, together with --annotation."
+        );
+    }
+
     // set all of the filter options that the user
     // wants to apply.
     match args.filter_group {
@@ -124,7 +138,10 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                     args.write_assignment_probs.is_some() || args.write_coverage_signals,
                 )
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
-                .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
+                .score_prob_denom(
+                    args.score_prob_denom
+                        .unwrap_or(crate::prog_opts::DEFAULT_SCORE_PROB_DENOM),
+                )
                 .build())
         }
         Some(FilterGroup::NanocountFilters) => {
@@ -162,7 +179,10 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                     args.write_assignment_probs.is_some() || args.write_coverage_signals,
                 )
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
-                .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
+                .score_prob_denom(
+                    args.score_prob_denom
+                        .unwrap_or(crate::prog_opts::DEFAULT_SCORE_PROB_DENOM),
+                )
                 .build())
         }
         None => {
@@ -180,7 +200,10 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                     args.write_assignment_probs.is_some() || args.write_coverage_signals,
                 )
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
-                .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
+                .score_prob_denom(
+                    args.score_prob_denom
+                        .unwrap_or(crate::prog_opts::DEFAULT_SCORE_PROB_DENOM),
+                )
                 .build())
         }
     }
@@ -346,61 +369,9 @@ fn main() -> anyhow::Result<()> {
 
     if args.model_coverage && !args.single_cell {
         args.coverage_model = crate::prog_opts::CoverageModel::Logistic;
-    } else if matches!(
-        args.coverage_model,
-        crate::prog_opts::CoverageModel::Logistic
-            | crate::prog_opts::CoverageModel::Hybrid
-            | crate::prog_opts::CoverageModel::Adaptive
-            | crate::prog_opts::CoverageModel::Degradation
-            | crate::prog_opts::CoverageModel::Auto
-    ) {
-        // Only the historical model needs per-transcript coverage bins.  The
-        // endpoint model learns directly from retained alignment coordinates.
+    } else if args.coverage_model == crate::prog_opts::CoverageModel::Logistic {
+        // The logistic model needs per-transcript coverage bins.
         args.model_coverage = true;
-    }
-    if matches!(
-        args.coverage_model,
-        crate::prog_opts::CoverageModel::Hybrid
-            | crate::prog_opts::CoverageModel::Adaptive
-            | crate::prog_opts::CoverageModel::Degradation
-            | crate::prog_opts::CoverageModel::Auto
-    ) && args.logistic_weight == 0.0
-        && args.endpoint_weight == 0.0
-    {
-        anyhow::bail!(
-            "hybrid/adaptive/degradation coverage requires a nonzero logistic or endpoint weight"
-        );
-    }
-    if args.coverage_model == crate::prog_opts::CoverageModel::Degradation
-        && args.seq_tech != Some(crate::prog_opts::SequencingTech::OntDRNA)
-    {
-        anyhow::bail!("--coverage-model degradation currently requires --seq-tech ont-drna");
-    }
-    if args.coverage_model == crate::prog_opts::CoverageModel::Auto && args.seq_tech.is_none() {
-        anyhow::bail!(
-            "--coverage-model auto requires --seq-tech so it can select a technology kernel"
-        );
-    }
-    if args.coverage_ablation == crate::prog_opts::CoverageAblation::PacbioPhysicalEndpoint
-        && !matches!(
-            args.seq_tech,
-            Some(crate::prog_opts::SequencingTech::PacBio)
-                | Some(crate::prog_opts::SequencingTech::PacBioHifi)
-        )
-    {
-        anyhow::bail!(
-            "--coverage-ablation pacbio-physical-endpoint requires PacBio sequencing technology"
-        );
-    }
-    if args.degradation_kernel != crate::prog_opts::DegradationKernel::Constant
-        && (!matches!(
-            args.coverage_model,
-            crate::prog_opts::CoverageModel::Degradation | crate::prog_opts::CoverageModel::Auto
-        ) || args.seq_tech != Some(crate::prog_opts::SequencingTech::OntDRNA))
-    {
-        anyhow::bail!(
-            "non-constant --degradation-kernel values require ONT direct-RNA auto/degradation coverage"
-        );
     }
     if args.single_cell && args.coverage_model != crate::prog_opts::CoverageModel::None {
         anyhow::bail!(

@@ -146,6 +146,9 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                             accel: crate::prog_opts::EmAccel::None,
                             init_abundances: None,
                             kde_model: None,
+                            novel_locus: Vec::new(),
+                            novel_loci: 0,
+                            novel_odds_per_miss: 1.0,
                         };
                         // run the EM for this cell
                         let counts = em::em(&emi, 1).counts;
@@ -195,7 +198,7 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
 
         // get the data for the next cell
         let mut peekable_bam_iter = reader.record_bufs(header).peekable();
-        const CB_TAG: [u8; 2] = [b'C', b'B'];
+        const CB_TAG: [u8; 2] = *b"CB";
         let mut num_cells = 0_usize;
         // parser thread
         while let Some(next_res) = peekable_bam_iter.peek() {

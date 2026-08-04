@@ -11,6 +11,47 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Removed
+
+- The non-logistic coverage kernels: `--coverage-model auto|adaptive|endpoint|
+  hybrid|degradation` and their four supporting modules (1,478 lines), plus the
+  parameters that only served them (`--coverage-folds`, `--endpoint-weight`,
+  `--logistic-weight`, `--endpoint-support-scale`, `--coverage-max-bayes-factor`,
+  `--degradation-kernel`, `--coverage-ablation`, `--coverage-warmup-iterations`,
+  `--coverage-abundance-midpoint-per-million`). `--coverage-model` now accepts
+  `none|logistic`. Head-to-head on six simulations with exact read-level truth,
+  `logistic` beat every alternative: `endpoint` -0.0428 (worse than using no
+  coverage model at all), `hybrid` -0.0037, `auto` -0.0004 at +25.9% wall time,
+  `degradation` -0.0019. Coverage modelling itself remains clearly worthwhile
+  (`logistic` is +0.026 over `none` on 5/6). Preserved on
+  `archive/coverage-kernels-2026-08-03`; see
+  `docs/coverage-kernel-retirement-2026-08-03.md`.
+- The four experimental `--coverage-model auto` extras -- abundance rank
+  blending (`--rank-blend`, `--rank-blend-floor`), dominance pruning
+  (`--candidate-pruning`, `--dominance-bayes-factor`), alignment calibration
+  (`--alignment-calibration`) and censoring (`--censoring-model`). None could be
+  supported against `--model-coverage` on data with exact read-level truth.
+  Rank blending and dominance pruning regressed it by 0.0878 and 0.0437
+  Spearman; the two that shipped *enabled by default* were net negative
+  (-0.000143 and -0.000233, improving only 2/6 and 3/6 samples). All four are
+  preserved on `archive/coverage-extras-2026-08-03` together with the evidence.
+  Defect analysis in `docs/coverage-auto-defaults-review-2026-08-03.md`; the
+  deciding re-benchmark in
+  `docs/coverage-auto-rebenchmark-results-2026-08-03.md` (448 runs).
+  `--coverage-model auto` now selects only the technology kernel and reproduces
+  the previous kernel-only configuration exactly; `--model-coverage` is
+  unchanged.
+
+### Changed
+
+- `--score-prob-denom` now defaults to **3** (was 5), sharpening the
+  score→probability weighting `exp((score - best)/D)` slightly. Improves 32 of
+  34 samples: +0.0015 Spearman on six simulations with exact truth (MARD better
+  on 6/6) and +0.0007 on 28 real LongBench samples (27/28), uniformly across
+  ONT-cDNA, ONT-dRNA and PacBio. Pass `--score-prob-denom 5` to restore the
+  previous behaviour exactly. See
+  `docs/score-prob-denom-recalibration-2026-08-03.md`.
+
 ### Added
 
 - Opt-in `--em-accel none|squarem|daarem` for bulk estimates and bootstraps,

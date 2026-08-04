@@ -87,11 +87,18 @@ def analyze(path):
                 continue
             ambiguous += 1
             score_total, cov_total = sum(score), sum(cov)
-            score_n = [x / score_total for x in score]
-            cov_n = [x / cov_total for x in cov]
+            # Candidate pruning can zero every score probability for a read, and
+            # a coverage model may assign zero to structurally impossible cells.
+            # Fall back to a uniform distribution rather than dividing by zero.
+            uniform = 1.0 / len(score)
+            score_n = ([x / score_total for x in score] if score_total > 0
+                       else [uniform] * len(score))
+            cov_n = ([x / cov_total for x in cov] if cov_total > 0
+                     else [uniform] * len(cov))
             combined = [x * y for x, y in zip(score_n, cov_n)]
             combined_total = sum(combined)
-            combined = [x / combined_total for x in combined]
+            combined = ([x / combined_total for x in combined] if combined_total > 0
+                        else [uniform] * len(combined))
             sw, cw, bw = max(range(len(score)), key=score_n.__getitem__), max(range(len(cov)), key=cov_n.__getitem__), max(range(len(combined)), key=combined.__getitem__)
             confidence = score_n[sw]
             if confidence >= 0.9:

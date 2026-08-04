@@ -17,10 +17,30 @@ struct PreparedEq<'a> {
     multiplicity: u32,
 }
 
+/// Per-class novel-state data, held in an array parallel to the prepared
+/// classes rather than inline. Carrying these 16 bytes inside `PreparedEq`
+/// would cost cache footprint in the M-step hot loop on every run, including
+/// the overwhelmingly common one where no novel state exists; the array is left
+/// empty unless `--model-unannotated-isoforms` created states.
+#[derive(Clone, Copy)]
+struct NovelSlot {
+    /// Index of this read's novel latent state (past the annotated
+    /// transcripts), or `usize::MAX` when the read shows no annotation-gap
+    /// evidence.
+    id: usize,
+    /// Weight of the novel candidate, on the same scale as the annotated ones.
+    weight: f64,
+}
+
+const NO_NOVEL: NovelSlot = NovelSlot {
+    id: usize::MAX,
+    weight: 0.0,
+};
+
 fn prepare_equivalence_classes<'a>(
     em_info: &'a EMInfo<'_, '_, '_>,
     collapse_exact: bool,
-) -> (Vec<PreparedEq<'a>>, Vec<f64>) {
+) -> (Vec<PreparedEq<'a>>, Vec<f64>, Vec<NovelSlot>) {
     let model_coverage = em_info.eq_map.filter_opts.model_coverage;
     let density_fn = |x, y| -> f64 {
         match em_info.kde_model {
@@ -31,7 +51,15 @@ fn prepare_equivalence_classes<'a>(
     let mut weights = Vec::with_capacity(em_info.eq_map.alignments.len());
     let mut classes: Vec<PreparedEq<'a>> = Vec::with_capacity(em_info.eq_map.len());
     let mut by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
-    for (alns, probs, coverage_probs) in em_info.eq_map.iter() {
+    let n_txps = em_info.txp_info.len();
+    // Only materialised when the feature actually created states.
+    let modelling_novel = em_info.novel_loci > 0;
+    let mut novel: Vec<NovelSlot> = if modelling_novel {
+        Vec::with_capacity(em_info.eq_map.len())
+    } else {
+        Vec::new()
+    };
+    for (read_index, (alns, probs, coverage_probs)) in em_info.eq_map.iter().enumerate() {
         let weight_start = weights.len();
         weights.extend(izip!(alns, probs, coverage_probs).map(|(a, p, cp)| {
             let target_id = a.ref_id as usize;
@@ -39,6 +67,35 @@ fn prepare_equivalence_classes<'a>(
             let cov_prob = if model_coverage { *cp } else { 1.0 };
             *p as f64 * cov_prob * density_fn(txp_len, a.alignment_span() as usize)
         }));
+        // A read whose splice structure disagrees with every annotated
+        // candidate gets an extra candidate: a hypothetical transcript at this
+        // locus that would match. Its weight is the best annotated weight
+        // scaled by the odds of each unmatched junction, so the EM can decline
+        // to force the read onto an annotated transcript.
+        let slot = if !modelling_novel {
+            NO_NOVEL
+        } else {
+            match em_info.novel_locus.get(read_index) {
+                Some(&locus) if locus >= 0 => {
+                    let best = weights[weight_start..]
+                        .iter()
+                        .copied()
+                        .fold(0.0_f64, f64::max);
+                    let misses = em_info
+                        .eq_map
+                        .min_junc_misses
+                        .get(read_index)
+                        .copied()
+                        .unwrap_or(0)
+                        .max(1) as f64;
+                    NovelSlot {
+                        id: n_txps + locus as usize,
+                        weight: best * em_info.novel_odds_per_miss.powf(misses),
+                    }
+                }
+                _ => NO_NOVEL,
+            }
+        };
         if collapse_exact {
             let local_weights = &weights[weight_start..];
             let mut hasher = DefaultHasher::new();
@@ -47,11 +104,18 @@ fn prepare_equivalence_classes<'a>(
                 alignment.ref_id.hash(&mut hasher);
                 weight.to_bits().hash(&mut hasher);
             }
+            if modelling_novel {
+                slot.id.hash(&mut hasher);
+                slot.weight.to_bits().hash(&mut hasher);
+            }
             let hash = hasher.finish();
             let duplicate = by_hash.get(&hash).and_then(|indices| {
                 indices.iter().copied().find(|&index| {
                     let existing = &classes[index];
-                    existing.alignments.len() == alns.len()
+                    (!modelling_novel
+                        || (novel[index].id == slot.id
+                            && novel[index].weight.to_bits() == slot.weight.to_bits()))
+                        && existing.alignments.len() == alns.len()
                         && existing
                             .alignments
                             .iter()
@@ -75,35 +139,58 @@ fn prepare_equivalence_classes<'a>(
             weight_start,
             multiplicity: 1,
         });
+        if modelling_novel {
+            novel.push(slot);
+        }
     }
-    (classes, weights)
+    debug_assert!(!modelling_novel || novel.len() == classes.len());
+    (classes, weights, novel)
 }
 
+/// `NOVEL` is a const generic rather than a runtime flag so that the
+/// unannotated-isoform path costs nothing when it is off: with `NOVEL == false`
+/// every `novel_id`/`novel_weight` test below folds away at compile time and the
+/// loop is byte-for-byte the pre-feature one, including the unconditional
+/// single-candidate fast path.
 #[inline]
-fn m_step_prepared(
+fn m_step_prepared<const NOVEL: bool>(
     eq_iterates: &[PreparedEq],
     weights: &[f64],
+    novel: &[NovelSlot],
     prev_count: &[f64],
     curr_counts: &mut [f64],
 ) {
-    for eq in eq_iterates {
+    for (index, eq) in eq_iterates.iter().enumerate() {
         let read_count = eq.multiplicity as f64;
         let alns = eq.alignments;
-        if let [alignment] = alns {
+        // Short-circuits before the load when NOVEL is false, so the disabled
+        // path neither touches `novel` nor keeps the index alive.
+        let slot = if NOVEL { novel[index] } else { NO_NOVEL };
+        let has_novel = NOVEL && slot.id != usize::MAX;
+        if !has_novel && let [alignment] = alns {
+            // With no novel alternative the single-candidate weight cancels.
             curr_counts[alignment.ref_id as usize] += read_count;
             continue;
         }
         let eq_weights = &weights[eq.weight_start..eq.weight_start + alns.len()];
-        let denom: f64 = alns
+        let mut denom: f64 = alns
             .iter()
             .zip(eq_weights)
             .map(|(a, weight)| prev_count[a.ref_id as usize] * weight)
             .sum();
+        if has_novel {
+            // The novel state competes for this read, so the annotated
+            // candidates now receive less than one full read between them.
+            denom += prev_count[slot.id] * slot.weight;
+        }
         if denom > constants::EM_DENOM_THRESH {
             let scale = read_count / denom;
             for (a, weight) in alns.iter().zip(eq_weights) {
                 let target_id = a.ref_id as usize;
                 curr_counts[target_id] += prev_count[target_id] * weight * scale;
+            }
+            if has_novel {
+                curr_counts[slot.id] += prev_count[slot.id] * slot.weight * scale;
             }
         }
     }
@@ -148,10 +235,15 @@ fn m_step_prepared_counts(
 /// the true alignment (using the abunance estimates from `prev_counts`).
 /// Then, `curr_counts` is computed by summing over the expected assignment
 /// likelihood for all reads mapping to each target.
+/// As with [`m_step_prepared`], `NOVEL` is a const generic so the disabled path
+/// is exactly the original loop. Shards are sized by the caller to cover the
+/// novel states, which live past the annotated transcripts, so a novel id
+/// indexes `local` directly and the reduction below picks it up unchanged.
 #[inline]
-fn m_step_par(
+fn m_step_par<const NOVEL: bool>(
     eq_iterates: &[PreparedEq],
     weights: &[f64],
+    novel: &[NovelSlot],
     prev_count: &[f64],
     curr_counts: &mut [f64],
     shards: &mut [Vec<f64>],
@@ -164,12 +256,19 @@ fn m_step_par(
             local.fill(0.0);
             let start = shard * chunk_size;
             let end = ((shard + 1) * chunk_size).min(eq_iterates.len());
-            for eq in &eq_iterates[start..end] {
+            for (offset, eq) in eq_iterates[start..end].iter().enumerate() {
                 let alns = eq.alignments;
+                let slot = if NOVEL {
+                    novel[start + offset]
+                } else {
+                    NO_NOVEL
+                };
+                let has_novel = NOVEL && slot.id != usize::MAX;
                 // A read with one candidate contributes exactly one count: its
                 // alignment/coverage weight cancels between numerator and
-                // denominator. Avoid evaluating that weight twice.
-                if let [alignment] = alns {
+                // denominator. Avoid evaluating that weight twice. With a novel
+                // competitor present the weight no longer cancels.
+                if !has_novel && let [alignment] = alns {
                     local[alignment.ref_id as usize] += eq.multiplicity as f64;
                     continue;
                 }
@@ -179,11 +278,17 @@ fn m_step_par(
                     let target_id = a.ref_id as usize;
                     denom += prev_count[target_id] * weight;
                 }
+                if has_novel {
+                    denom += prev_count[slot.id] * slot.weight;
+                }
                 if denom > constants::EM_DENOM_THRESH {
                     let scale = eq.multiplicity as f64 / denom;
                     for (a, weight) in alns.iter().zip(eq_weights) {
                         let target_id = a.ref_id as usize;
                         local[target_id] += prev_count[target_id] * weight * scale;
+                    }
+                    if has_novel {
+                        local[slot.id] += prev_count[slot.id] * slot.weight * scale;
                     }
                 }
             }
@@ -218,7 +323,9 @@ fn run_driver(
     do_log: bool,
 ) -> EMResult {
     const MIN_EVAL: u32 = 50;
-    let n = em_info.txp_info.len();
+    // Novel latent states live past the annotated transcripts in the same
+    // vector, so downstream consumers indexing by reference id are unaffected.
+    let n = em_info.txp_info.len() + em_info.novel_loci;
     let avg = if n == 0 {
         0.0
     } else {
@@ -335,12 +442,21 @@ pub fn em(em_info: &EMInfo, _nthreads: usize) -> EMResult {
     let span = span!(tracing::Level::INFO, "em");
     let _guard = span.enter();
 
-    let (eq_iterates, weights) = prepare_equivalence_classes(em_info, true);
-    let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
-        dst.fill(0.0);
-        m_step_prepared(&eq_iterates, &weights, src, dst);
-    };
-    run_driver(em_info, &mut fixed_point, true)
+    let (eq_iterates, weights, novel) = prepare_equivalence_classes(em_info, true);
+    // Dispatch once, outside the fixed point, so the hot loop is monomorphic.
+    if em_info.novel_loci > 0 {
+        let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
+            dst.fill(0.0);
+            m_step_prepared::<true>(&eq_iterates, &weights, &novel, src, dst);
+        };
+        run_driver(em_info, &mut fixed_point, true)
+    } else {
+        let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
+            dst.fill(0.0);
+            m_step_prepared::<false>(&eq_iterates, &weights, &novel, src, dst);
+        };
+        run_driver(em_info, &mut fixed_point, true)
+    }
 }
 
 fn do_bootstrap_prepared(
@@ -370,7 +486,7 @@ pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f6
         .num_threads(nthreads)
         .build()
         .unwrap();
-    let (eq_iterates, weights) = prepare_equivalence_classes(em_info, false);
+    let (eq_iterates, weights, _novel) = prepare_equivalence_classes(em_info, false);
 
     pool.install(|| {
         (0..num_boot)
@@ -400,13 +516,42 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> EMResult {
 
     // Pack invariant alignment, coverage and density terms once. They are
     // otherwise recomputed twice per alignment on every EM iteration.
-    let (eq_iterates, weights) = prepare_equivalence_classes(em_info, false);
+    let (eq_iterates, weights, novel) = prepare_equivalence_classes(em_info, false);
     // Reuse private dense accumulators across all fixed-point evaluations.
     // Capping the shard count avoids excessive memory use on high-core hosts.
+    // Shards must span the novel states as well, since those ids index past the
+    // annotated transcripts into the same accumulator.
     let shard_count = nthreads.clamp(1, 64);
-    let mut shards = vec![vec![0.0; em_info.txp_info.len()]; shard_count];
-    let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
-        m_step_par(&eq_iterates, &weights, src, dst, &mut shards);
-    };
-    pool.install(|| run_driver(em_info, &mut fixed_point, true))
+    let n_states = em_info.txp_info.len() + em_info.novel_loci;
+    let mut shards = vec![vec![0.0; n_states]; shard_count];
+    // Dispatch once, outside the fixed point, so the hot loop is monomorphic.
+    if em_info.novel_loci > 0 {
+        let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
+            m_step_par::<true>(&eq_iterates, &weights, &novel, src, dst, &mut shards);
+        };
+        pool.install(|| run_driver(em_info, &mut fixed_point, true))
+    } else {
+        let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
+            m_step_par::<false>(&eq_iterates, &weights, &novel, src, dst, &mut shards);
+        };
+        pool.install(|| run_driver(em_info, &mut fixed_point, true))
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::{NovelSlot, PreparedEq};
+    /// The novel-state data must stay out of the hot-loop struct: carrying it
+    /// inline costs 16 bytes per equivalence class on every run, enabled or not.
+    #[test]
+    fn prepared_eq_does_not_carry_novel_state() {
+        assert_eq!(
+            std::mem::size_of::<PreparedEq>(),
+            std::mem::size_of::<&[crate::util::oarfish_types::AlnInfo]>()
+                + std::mem::size_of::<usize>()
+                + std::mem::size_of::<u32>()
+                + 4, // padding
+        );
+        assert_eq!(std::mem::size_of::<NovelSlot>(), 16);
+    }
 }

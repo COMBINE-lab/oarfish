@@ -351,10 +351,10 @@ pub fn write_coverage_signals(
     txps_name: &[String],
     sample_rate: usize,
 ) -> anyhow::Result<()> {
-    if let Some(parent) = output.parent() {
-        if parent != Path::new("") {
-            create_dir_all(parent)?;
-        }
+    if let Some(parent) = output.parent()
+        && parent != Path::new("")
+    {
+        create_dir_all(parent)?;
     }
     let path = output.with_additional_extension(".coverage_signals.tsv");
     let file = OpenOptions::new()
@@ -369,7 +369,7 @@ pub fn write_coverage_signals(
     )?;
     let rate = sample_rate.max(1);
     for (read_index, ((alns, score, coverage), name)) in
-        emi.eq_map.iter().zip(names_vec.into_iter()).enumerate()
+        emi.eq_map.iter().zip(names_vec).enumerate()
     {
         if read_index % rate != 0 {
             continue;
