@@ -8,7 +8,8 @@ three other threads that share the same files. This document checks that the
 port reproduces the behaviour the original evaluation
 (`docs/annotation-omission-evaluation-2026-07-25.md`, on that branch) measured.
 
-**Result: the detection claim reproduces exactly. The accuracy claim does not.**
+**Result: both the detection and the accuracy claims reproduce.** An initial
+report that accuracy regressed was a scoring error, documented in §4.
 
 ## Setup
 
@@ -71,51 +72,61 @@ Of 14,908 transcripts not belonging to any flagged locus, **91 (0.61%)** change
 by more than 1e-6 between model-off and model-on. The model is well localised
 and does not perturb the rest of the quantification.
 
-## 4. The accuracy claim does NOT reproduce
+## 4. The accuracy claim reproduces (after a scoring correction)
 
-Mean |log2(est/truth)| over transcripts belonging to acted-on loci:
+Mean |log2(est/truth)| over transcripts belonging to acted-on loci, with
+estimates renormalised to the truth library size:
 
-| population | n | model OFF → ON | change |
+| scope | measure | model OFF → ON | change |
 |---|---|---|---|
-| all acted-on | 215 | 1.8413 → 1.9207 | **+4.3% (worse)** |
-| genes retaining a survivor | 211 | 1.8263 → 1.9082 | **+4.5% (worse)** |
-| genes losing every isoform | 0 | — | — |
-| *original evaluation, origin50* | *179* | *1.2255 → 1.0512* | *−14.2%* |
+| acted-on loci (n=215) | mean \|log2 err\| | 1.5854 → 1.4158 | **−10.7%** |
+| acted-on loci | median signed error | +0.5218 → +0.4190 | over-attribution reduced |
+| acted-on loci | % over-attributed | 61.9% → 58.6% | |
+| global (56,098 survivors) | CCC on log1p | 0.83578 → 0.83616 | **+0.00038** |
+| global | MARD | 0.23330 → 0.23306 | −0.00024 |
+| global | RMSE | 674.638 → 668.759 | −5.879 |
+| survivors at affected genes (n=24,935) | CCC | 0.76668 → 0.76710 | +0.00042 |
+| *original evaluation, origin50* | *acted-on* | *1.2255 → 1.0512* | *−14.2%* |
+| *original evaluation, origin50* | *global CCC* | | *+0.00118* |
 
-**A hypothesis was tested and rejected.** The original document notes that
-designs deleting *every* isoform of a gene (`locus*`) are "harmful by
-construction" (+42.0% on locus25) because no survivor exists to absorb the
-correction. 52.3% of the genes affected by this holdout lose all their expressed
-isoforms, so the mixture seemed a likely explanation. It is not: splitting the
-two populations shows 211 of 215 acted-on transcripts already lie in
-survivor-retaining genes, and the regression is present there at +4.5%. Genes
-losing every isoform contribute nothing to the acted-on set, because they retain
-no surviving member that could appear in a flagged locus.
+The direction and mechanism match the original throughout: the baseline
+over-attributes (median +0.52 here, +0.43 there) and the model reduces it. The
+magnitude is smaller, consistent with a differently-constructed holdout.
 
-Remaining differences from the original setup, none of which is established as
-the cause:
+### The scoring error that initially inverted this
 
-- the holdout differs in size (15,122 deleted / 9,720 genes here versus 11,904 /
-  7,969 there), and the baseline error differs correspondingly (1.83 versus
-  1.23), so the two are not scoring the same transcript population;
-- the original holdout-construction scripts were not preserved, so "origin50"
-  cannot be reproduced exactly — only re-derived from its description;
-- this run uses the shipped defaults (`--novel-odds-per-miss 2.0`,
-  `--novel-min-misses 1`, `--novel-min-locus-reads 5`); the original sweep's
-  settings are not recorded per table.
+A first pass reported **+4.5% (worse)** and concluded the accuracy claim failed
+to reproduce. That was a defect in the scoring, not in the feature.
 
-**Status: unverified, not refuted.** The accuracy effect may be specific to a
-holdout construction this reproduction did not match. It should not be cited
-until it is reproduced against a preserved holdout.
+The holdout drops assigned reads from 1,356,492 to 881,436. Comparing raw
+estimated counts against a truth table for the *full* library therefore imposes
+a uniform deflation on every surviving transcript — the acted-on population
+measured a median signed error of **−1.70**, i.e. estimates roughly 3x below
+truth, where the original evaluation's comparable figure was **+0.43**. On a
+population that starved, diverting further mass to a novel state can only
+increase the error, so the measured sign was an artifact of the missing
+renormalisation.
+
+The mismatch in baseline sign (−1.70 versus +0.43) was the signal that the two
+analyses were not measuring the same thing; it should have been checked before
+concluding non-reproduction. Renormalising both arms by the same factor,
+computed over all surviving expressed transcripts so the normaliser is not
+itself perturbed by the intervention, restores agreement.
+
+A second hypothesis was also tested and rejected along the way: that the
+regression came from genes losing *every* expressed isoform, which the original
+calls harmful by construction. 211 of 215 acted-on transcripts already lie in
+survivor-retaining genes, so that mixture was not the cause either.
 
 ## Bearing on the feature
 
 The original document's own headline is *"not 'the novel state improves
 accuracy' — that is a 4th-decimal global effect on top of an already-robust
 baseline"*, but rather that the model **contributes reporting**: near-perfect
-precision on which loci are incomplete. That claim is the one validated here.
-The secondary accuracy claim is the one that failed to reproduce, which leaves
-the feature's stated primary contribution intact.
+precision on which loci are incomplete. That claim is validated here at
+precision 1.000 with an 11.9x enrichment over the false-positive floor. The
+secondary accuracy claim also reproduces, at -10.7% error on acted-on loci
+against the original's -14.2%.
 
 ## Operational note
 
