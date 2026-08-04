@@ -519,12 +519,6 @@ pub struct Args {
     #[arg(long, value_parser = parse_pos_f32, help_heading = "filters")]
     pub score_prob_denom: Option<f32>,
 
-
-
-
-
-
-
     /// genome mode: per-internal-junction-mismatch discount in (0,1] applied to a
     /// transcript's projection similarity (sharpens isoform discrimination).
     /// 1.0 = off (default).

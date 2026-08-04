@@ -37,5 +37,5 @@ Cargo.toml:
 # env-dep:CARGO_PKG_DESCRIPTION=A fast, accurate and versatile tool for long-read transcript quantification.
 # env-dep:CARGO_PKG_NAME=oarfish
 # env-dep:CARGO_PKG_VERSION=0.10.3
-# env-dep:CLIPPY_ARGS=
+# env-dep:CLIPPY_ARGS=-D__CLIPPY_HACKERY__warnings__CLIPPY_HACKERY__
 # env-dep:CLIPPY_CONF_DIR

@@ -337,8 +337,7 @@ fn perform_inference_and_write_output(
     if (matches!(
         args.coverage_ablation,
         crate::prog_opts::CoverageAblation::AbundanceBlend
-    ))
-        && warmup_abundances.is_none()
+    )) && warmup_abundances.is_none()
     {
         let warmup_start = std::time::Instant::now();
         let previous_model_coverage = store.filter_opts.model_coverage;
@@ -486,8 +485,8 @@ fn perform_inference_and_write_output(
             for (count, &baseline) in em_result.counts.iter_mut().zip(&reference) {
                 let ratio = baseline.max(0.0) / midpoint;
                 let ratio4 = ratio * ratio * ratio * ratio;
-                let gate = ABUNDANCE_BLEND_FLOOR
-                    + (1.0 - ABUNDANCE_BLEND_FLOOR) * ratio4 / (1.0 + ratio4);
+                let gate =
+                    ABUNDANCE_BLEND_FLOOR + (1.0 - ABUNDANCE_BLEND_FLOOR) * ratio4 / (1.0 + ratio4);
                 *count = baseline + gate * (*count - baseline);
                 gate_sum += gate;
             }

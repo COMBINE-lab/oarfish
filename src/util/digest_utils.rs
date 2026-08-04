@@ -210,7 +210,7 @@ pub(crate) fn digest_from_rammap_index(
 ) -> anyhow::Result<seqcol_rs::DigestResult> {
     use anyhow::ensure;
     // nt4 encoding: 0=A, 1=C, 2=G, 3=T, 4=N (rammap `Index::NT4_TO_ASCII`).
-    const NT4_TO_ASCII: [u8; 5] = [b'A', b'C', b'G', b'T', b'N'];
+    const NT4_TO_ASCII: [u8; 5] = *b"ACGTN";
     let idx = aligner.index();
     ensure!(
         idx.has_sequences(),
