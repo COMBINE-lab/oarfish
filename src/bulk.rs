@@ -197,6 +197,31 @@ fn perform_inference_and_write_output(
         //Normalize the probabilities for the records of each read
         normalize_read_probs(store, txps, &args.bin_width);
     }
+    if args.polya_three_prime {
+        if store.polya_tail.len() != store.len() {
+            warn!(
+                "--polya-three-prime: this input path carries no per-read tail information; skipping"
+            );
+        } else {
+            // The polyA term multiplies into the per-read coverage simplex.
+            // Without a coverage model that simplex is all zeros and unused;
+            // seed it uniform and let the EM consume it.
+            if args.coverage_model == crate::prog_opts::CoverageModel::None {
+                for i in 0..store.len() {
+                    let (s, e) = (store.boundaries[i], store.boundaries[i + 1]);
+                    if e > s {
+                        let u = 1.0 / (e - s) as f64;
+                        store.coverage_probabilities[s..e].fill(u);
+                    }
+                }
+                store.filter_opts.model_coverage = true;
+            }
+            let diagnostics =
+                crate::util::polya_probability::apply_polya_probabilities(store, txps);
+            info!(?diagnostics, "applied poly(A) 3'-completeness likelihood");
+            coverage_diagnostics["polya_three_prime"] = serde_json::to_value(diagnostics)?;
+        }
+    }
     let coverage_time = coverage_start.elapsed();
 
     if store.junc_informative_reads > 0 {

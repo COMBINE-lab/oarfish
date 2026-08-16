@@ -214,3 +214,52 @@ Breaking this tie requires *external* evidence: cross-sample joint priors
 (the same transcript observed unshadowed in a related sample), hybrid
 short-read priors (`--short-quant` already exists as the entry point), or
 richer annotation-independent signals (e.g. full-length flags from adapters).
+
+## F6 — protocol-level full-length (poly(A)) evidence (2026-08-16; shipped opt-in, resurrects a "killed" idea)
+
+Mechanism: a poly(A) tail in a read's terminal soft clip anchors the
+*molecule's* 3' end at the alignment end. Among score-tied candidates this is
+extra information (it lives in the clip): a candidate whose annotated 3'
+terminus is flush with the read's end explains the tail; one that would
+place the molecule's end mid-transcript requires a templated internal
+poly(A).
+
+**Census first (juncprobe `tail-probe`)** — two findings that rewrite the
+history of this idea:
+
+1. **NanoSim simulates no tails** (0.002% detection): the archived
+   `polya-three-prime` term (killed at +0.000108) was evaluated on a panel
+   where four of six samples had no signal *by construction*. Its "killed"
+   verdict was a simulator artifact, not a measurement of the mechanism.
+2. **TKSM per-read truth is recoverable** (FASTQ `molecule_id=` comment →
+   mdf `tid=`): maps built for SQ2/RSII (14.0M reads each, 0 missing) at
+   `sim-panel/tksm/read_truth/`. This unlocks read-level truth on PacBio —
+   the handoff believed only transcript counts existed.
+
+**Tie-breaking measurement** (TKSM, per-read truth): among score-tied
+misassigned reads with tails, the strong configuration (truth flush ≤16nt &
+winner conflict >64nt) favors the truth **1,557:0 (SQ2)** and **4,646:0
+(RSII)** — zero counterexamples in 6,203 firings; the soft any-gap version
+runs 72–830:1. One-directional, unlike every prior endpoint feature. The
+correctable set is small (0.13–0.45% of tied misassignments), and the
+per-transcript presence consumer is weak (AUC 0.50–0.59; tail reads' gaps
+rarely differ between candidates).
+
+**Integration**: the archived `polya_probability.rs` ported as opt-in
+`--polya-three-prime` (per-read conditional 3'-completeness likelihood,
+trained on unique tail reads, odds capped at 20; works with or without the
+coverage model; skips paths without tail info; no-op on tail-free data).
+
+| sample | logistic stack Δ | presence stack Δ |
+|---|---|---|
+| tksm-SQ2 (7.6% tails) | +0.00026 | +0.00032 |
+| tksm-RSII (23.8% tails) | +0.00060 | +0.00050 |
+
+Positive in all four measurable arms, magnitude ∝ tail rate; NanoSim arms
+are structural no-ops. Real libraries carry far higher tail/3'-anchoring
+rates than these sims (dRNA ~100%, cDNA with retained poly(A) well above
+24%), so the sim-measured magnitude is a floor — but confirming that needs
+real data with truth (SIRV read mode, or Panel A as a sign check).
+
+**Killed-list amendment**: `polya-three-prime` moves from "killed" to
+"shipped opt-in; prior verdict was a tails-free-panel artifact."

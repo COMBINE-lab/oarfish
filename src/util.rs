@@ -11,6 +11,7 @@ pub mod mapper;
 pub mod normalize_probability;
 pub mod oarfish_types;
 pub mod parquet_utils;
+pub mod polya_probability;
 pub mod projection;
 pub mod read_function;
 pub mod write_function;

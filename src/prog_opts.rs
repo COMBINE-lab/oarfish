@@ -736,6 +736,17 @@ pub struct Args {
     #[arg(long, hide = true, default_value_t = 0.05)]
     pub presence_rho: f64,
 
+    /// poly(A) 3'-completeness likelihood: a read whose terminal soft clip is
+    /// a poly(A) tail demonstrably reached its molecule's 3' end, so among
+    /// score-tied candidates one whose annotated 3' terminus is flush with
+    /// the read's end is strongly preferred over one that would require the
+    /// molecule to end mid-transcript at a templated poly(A). Measured
+    /// (TKSM PacBio, exact truth): one-directional — 6,203:0 in the strong
+    /// configuration among tied misassigned reads. No effect on reads
+    /// without a detected tail; no-op on simulators that omit tails.
+    #[arg(long, help_heading = "coverage model")]
+    pub polya_three_prime: bool,
+
     /// weight of endpoint-gap positional evidence in the presence posterior:
     /// each assigned read contributes its log-likelihood ratio of sitting
     /// where this library's unique reads typically sit (length-stratified
