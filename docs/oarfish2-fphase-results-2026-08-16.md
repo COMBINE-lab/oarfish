@@ -175,3 +175,42 @@ set contain reads at positions its dominant competitor *cannot* explain,
 computed by projecting exon structures between candidate pairs. That is a
 substantially bigger build (pairwise structure projection) and is recorded
 as the follow-up, not attempted here.
+
+## F5b — differential (competitor-aware) shadowing evidence (2026-08-16; dead)
+
+The follow-up formulation from F5, with a simplification that also bounds the
+exon-projection variant: "reads at positions the dominant competitor cannot
+explain" ⟺ "reads whose candidate set excludes the competitor" — the aligner
+itself adjudicates explainability, and reads are the only observations of
+positions. So `zone-sep --differential` computes, per transcript: its
+dominant shadow (θ-argmax winner over its candidate reads), `d1_frac` (the
+candidate mass from reads excluding that shadow), the breadth of those
+non-shadow reads, the shadow's mass share, and the winner entropy
+(sharing-diversity).
+
+Measured (uniform responsibilities, cdna + SQ2):
+
+| feature | zeroed sets | SQ2 suppressed | est(0,5] zone |
+|---|---|---|---|
+| d1_frac | 0.51–0.54 | 0.53 | 0.44–0.49 |
+| ns_breadth | 0.51–0.54 | 0.53 | 0.48–0.54 |
+| winner_entropy | 0.52–0.53 | 0.50 | 0.50–0.52 |
+| shadow_share | 0.47–0.48 | 0.50 | 0.51–0.56 |
+
+Chance-level everywhere; adding them *degrades* the frozen cross-sample
+model (SQ2 zeroed 0.635 → 0.586). Interpretation: in a dense annotation an
+absent transcript's borrowed reads also arrive from several expressed
+neighbors, so its sharing-diversity matches a real weak transcript's — the
+"one specific sibling" premise fails. Since read-set containment upper-bounds
+what pairwise exon-structure projection could see, the differential approach
+is closed, not deferred.
+
+**The information boundary is now measured from three sides** for the
+fully-shadowed set: post-EM positional (no assigned reads), pre-EM absolute
+tiling (sibling-diluted, AUC ≤ 0.67), pre-EM differential/containment
+(chance). Within one sample's read-level data, real-but-fully-shadowed and
+absent are indistinguishable — which is precisely why the EM shadowed them.
+Breaking this tie requires *external* evidence: cross-sample joint priors
+(the same transcript observed unshadowed in a related sample), hybrid
+short-read priors (`--short-quant` already exists as the entry point), or
+richer annotation-independent signals (e.g. full-length flags from adapters).
