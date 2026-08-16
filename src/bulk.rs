@@ -396,6 +396,62 @@ fn perform_inference_and_write_output(
         });
     }
 
+    // External presence prior (--presence-prior-file): adopt a related
+    // sample's presence posteriors, blended with the baseline prior.
+    let presence_prior_rho: Option<Vec<f64>> = match args.presence_prior_file.as_deref() {
+        None => None,
+        Some(path) => {
+            let strip = |n: &str| -> String {
+                let base = n.split('|').next().unwrap_or(n);
+                match base.rfind('.') {
+                    Some(i)
+                        if i + 1 < base.len()
+                            && base[i + 1..].bytes().all(|b| b.is_ascii_digit()) =>
+                    {
+                        base[..i].to_string()
+                    }
+                    _ => base.to_string(),
+                }
+            };
+            let mut by_name: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for (i, n) in txps_name.iter().enumerate() {
+                by_name.insert(strip(n), i);
+            }
+            let w = args.presence_prior_weight.clamp(0.0, 1.0);
+            let rho0 = args.presence_rho;
+            let mut rho_t = vec![rho0; txps.len()];
+            let mut rdr = csv::ReaderBuilder::new()
+                .delimiter(b'\t')
+                .from_path(path)
+                .map_err(|e| anyhow::anyhow!("failed to open {}: {e}", path.display()))?;
+            let headers = rdr.headers()?.clone();
+            let name_col = headers.iter().position(|h| h == "tname").unwrap_or(0);
+            let q_col = headers
+                .iter()
+                .position(|h| h == "presence_prob")
+                .ok_or_else(|| anyhow::anyhow!("presence prior file lacks presence_prob"))?;
+            let mut matched = 0usize;
+            for rec in rdr.records() {
+                let rec = rec?;
+                if let (Some(nm), Some(qv)) = (rec.get(name_col), rec.get(q_col))
+                    && let Ok(q) = qv.parse::<f64>()
+                    && let Some(&i) = by_name.get(&strip(nm))
+                {
+                    rho_t[i] = w * q + (1.0 - w) * rho0;
+                    matched += 1;
+                }
+            }
+            info!(
+                matched,
+                weight = w,
+                path = %path.display(),
+                "loaded external presence prior"
+            );
+            Some(rho_t)
+        }
+    };
+
     // wrap up all of the relevant information we need for estimation
     // in an EMInfo struct and then call the EM algorithm.
     let emi = EMInfo {
@@ -408,6 +464,7 @@ fn perform_inference_and_write_output(
         convergence_l1_thresh: args.convergence_l1_thresh,
         presence_model: args.presence_model,
         presence_endpoint_alpha: args.presence_endpoint_alpha,
+        presence_prior_rho,
         presence_warmup: args.presence_warmup,
         presence_period: args.presence_period,
         presence_rho: args.presence_rho,

@@ -736,6 +736,20 @@ pub struct Args {
     #[arg(long, hide = true, default_value_t = 0.05)]
     pub presence_rho: f64,
 
+    /// per-transcript presence prior from a related sample: a `.presence.tsv`
+    /// sidecar written by a previous run (same annotation). Each transcript's
+    /// prior becomes `w*q_other + (1-w)*rho` (w = --presence-prior-weight),
+    /// so support in the other sample protects a transcript that this
+    /// sample's ambiguity structure cannot resolve, while absence elsewhere
+    /// never suppresses below the baseline prior. Requires --presence-model.
+    #[arg(long, help_heading = "EM")]
+    pub presence_prior_file: Option<PathBuf>,
+
+    /// blend weight for --presence-prior-file (0 = ignore, 1 = adopt the
+    /// other sample's posterior as this sample's prior)
+    #[arg(long, hide = true, default_value_t = 0.5)]
+    pub presence_prior_weight: f64,
+
     /// poly(A) 3'-completeness likelihood: a read whose terminal soft clip is
     /// a poly(A) tail demonstrably reached its molecule's 3' end, so among
     /// score-tied candidates one whose annotated 3' terminus is flush with

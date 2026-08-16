@@ -532,6 +532,9 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     /// Weight of the endpoint-gap positional log-LR evidence in the presence
     /// posterior (0 disables; see `PositionalModel` in em.rs).
     pub presence_endpoint_alpha: f64,
+    /// Per-transcript presence prior from an external sample
+    /// (`--presence-prior-file`); `None` = uniform `presence_rho`.
+    pub presence_prior_rho: Option<Vec<f64>>,
     /// Per-read index of a *novel* (unannotated-isoform) latent state, or -1.
     ///
     /// A read whose splice structure disagrees with every annotated candidate is

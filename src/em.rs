@@ -413,7 +413,10 @@ struct PresenceState {
     positional: Option<PositionalModel>,
     endpoint_alpha: f64,
     touched: Vec<bool>,
-    rho: f64,
+    /// Per-transcript prior log-odds. Uniform (`logit(rho)`) unless an
+    /// external presence prior (`--presence-prior-file`) raised individual
+    /// transcripts' priors.
+    logit_rho: Vec<f64>,
     calls: u32,
     warmup: u32,
     period: u32,
@@ -427,9 +430,18 @@ impl PresenceState {
         warmup: u32,
         period: u32,
         rho: f64,
+        prior_rho: Option<&[f64]>,
         positional: Option<PositionalModel>,
         endpoint_alpha: f64,
     ) -> Self {
+        let logit = |p: f64| {
+            let p = p.clamp(1e-4, 1.0 - 1e-4);
+            (p / (1.0 - p)).ln()
+        };
+        let logit_rho = match prior_rho {
+            Some(pr) => pr.iter().map(|p| logit(*p)).collect(),
+            None => vec![logit(rho); n_txps],
+        };
         Self {
             q: vec![1.0; n_states],
             eff: vec![0.0; n_states],
@@ -438,7 +450,7 @@ impl PresenceState {
             positional,
             endpoint_alpha,
             touched: vec![false; n_txps],
-            rho,
+            logit_rho,
             calls: 0,
             warmup,
             period: period.max(1),
@@ -516,7 +528,6 @@ impl PresenceState {
                 self.delta[t] += m * term;
             }
         }
-        let logit_rho = (self.rho / (1.0 - self.rho)).ln();
         for t in 0..self.n_txps {
             if !self.touched[t] {
                 continue;
@@ -525,7 +536,7 @@ impl PresenceState {
             // (typical placements add evidence, atypical placements subtract).
             let d = (self.delta[t].max(0.0) + self.endpoint_alpha * self.pos[t])
                 .clamp(-Self::DELTA_CAP, Self::DELTA_CAP);
-            self.q[t] = 1.0 / (1.0 + (-(d + logit_rho)).exp());
+            self.q[t] = 1.0 / (1.0 + (-(d + self.logit_rho[t])).exp());
         }
     }
 }
@@ -558,6 +569,7 @@ fn drive_with_presence(
         em_info.presence_warmup,
         em_info.presence_period,
         em_info.presence_rho,
+        em_info.presence_prior_rho.as_deref(),
         positional,
         endpoint_alpha,
     );

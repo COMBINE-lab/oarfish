@@ -148,6 +148,7 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                             convergence_l1_thresh: args.convergence_l1_thresh,
                             presence_model: crate::prog_opts::PresenceModel::None,
                             presence_endpoint_alpha: 0.0,
+                            presence_prior_rho: None,
                             presence_warmup: args.presence_warmup,
                             presence_period: args.presence_period,
                             presence_rho: args.presence_rho,

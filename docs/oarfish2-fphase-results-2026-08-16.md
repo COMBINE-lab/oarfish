@@ -263,3 +263,42 @@ real data with truth (SIRV read mode, or Panel A as a sign check).
 
 **Killed-list amendment**: `polya-three-prime` moves from "killed" to
 "shipped opt-in; prior verdict was a tails-free-panel artifact."
+
+## F7 — multi-sample presence prior (2026-08-16; shipped opt-in, positive everywhere tested)
+
+The external-evidence tie-breaker for the fully-shadowed set:
+`--presence-prior-file <other-sample .presence.tsv>` adopts a related
+sample's presence posteriors as this sample's per-transcript prior,
+`rho_t = w·q_other + (1−w)·rho0` (`--presence-prior-weight`, default 0.5).
+Floor design: support elsewhere protects; absence elsewhere never suppresses
+below the baseline prior — so a broken sharing premise can only mute the
+feature, not weaponize it.
+
+**Panel limitation, measured first**: the simulated sibling samples do NOT
+share truth (21–56% of expressed transcripts are sample-specific — each sim
+profile was drawn independently), and sibling unique-read support is
+near-chance (AUC 0.48–0.54) as a real-vs-FP separator on this panel. So
+Panel B *understates* the mechanism; two validations bracket it:
+
+1. **Split-half (exactly shared truth)** — NA12878-cdna split by read-name
+   parity; half-1's posteriors prime half-2:
+   alone 0.838836 → w=0.5 **+0.0028** → w=0.8 **+0.0042**.
+   Clean upper-regime validation of the machinery.
+2. **Cross-protocol (broken premise, 21–48% sample-specific)** — cdna↔drna
+   within cell line, on top of the full presence+endpoint stack:
+
+   | sample | pres+ep | +cross-prior (w=0.5) | Δ |
+   |---|---|---|---|
+   | NA12878-cdna | 0.895447 | 0.896595 | +0.0011 |
+   | H9-cdna | 0.916759 | 0.917642 | +0.0009 |
+   | NA12878-drna | 0.925941 | 0.926231 | +0.0003 |
+   | H9-drna | 0.941017 | 0.941598 | +0.0006 |
+
+   Positive 4/4 even under heavy premise violation (w=0.8 slightly better
+   again: +0.0014 on NA12878-cdna). Real biological replicates share far
+   more expression than these sims, so the split-half number is the better
+   estimate of real-data value.
+
+**Cumulative ONT/NanoSim position**: baseline 0.9136 → presence + endpoint +
+cross-prior **0.9205** (+0.0069, ~25% of the +0.0273 detection ceiling), all
+opt-in, each component positive on every sample it touches.
