@@ -1,0 +1,1981 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../annotation-omission-evaluation-2026-07-25/">
+      
+      
+        <link rel="next" href="../competing-risk-degradation-evaluation-2026-07-20/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>oarfish coverage benchmarking — handoff (2026-08-15) - Documentation for oarfish</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#oarfish-coverage-benchmarking-handoff-2026-08-15" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Documentation for oarfish" class="md-header__button md-logo" aria-label="Documentation for oarfish" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Documentation for oarfish
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              oarfish coverage benchmarking — handoff (2026-08-15)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Documentation for oarfish" class="md-nav__button md-logo" aria-label="Documentation for oarfish" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Documentation for oarfish
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    oarfish: transcript quantification from long-read RNA-seq data
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../accuracy-refinement-2026-07-23/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Single-sample accuracy refinement (2026-07-23)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adaptive-coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Adaptive coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../annotation-omission-evaluation-2026-07-25/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluating the annotation-omission model (2026-07-25)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    oarfish coverage benchmarking — handoff (2026-08-15)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    oarfish coverage benchmarking — handoff (2026-08-15)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-where-things-stand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Where things stand
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-the-panels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. The panels
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. The panels">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#panel-b-exact-read-level-truth-use-this-one" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Panel B — exact read-level truth. Use this one.
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#panel-a-proxy-truth-treat-as-a-weak-comparator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Panel A — proxy truth. Treat as a weak comparator.
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#genome-mode-inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Genome-mode inputs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-harness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Harness
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Harness">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#scoring-rules-that-have-already-cost-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scoring rules that have already cost time
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-decision-rules-pre-registered-keep-using-them" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Decision rules (pre-registered; keep using them)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-where-the-remaining-headroom-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Where the remaining headroom is
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Where the remaining headroom is">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#lead-a-a-presenceabsence-component-in-the-em-largest-known" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lead A — a presence/absence component in the EM. Largest known.
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lead-b-logistic-underperforms-on-pacbio-repeatedly-observed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lead B — logistic underperforms on PacBio. Repeatedly observed.
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lead-c-responsibility-profiles-unresolved-and-worth-revisiting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lead C — responsibility-profiles, unresolved and worth revisiting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ideas-already-tested-and-killed-do-not-re-propose-without-new-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ideas already tested and killed — do not re-propose without new evidence
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-open-items" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Open items
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../competing-risk-degradation-evaluation-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Competing-risk degradation evaluation: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-auto-defaults-review-2026-08-03/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review of --coverage-model auto defaults (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-auto-rebenchmark-plan-2026-08-03/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plan: re-benchmark the auto coverage stack against logistic (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-auto-rebenchmark-results-2026-08-03/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Re-benchmark of the auto coverage stack against logistic (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-component-ablation-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-component ablation: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-default-benchmark-expansion-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-default benchmark expansion: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-model evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-kernel-retirement-2026-08-03/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retiring the non-logistic coverage models (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-next-round-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage and inference refinement round (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-outer-validation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-model outer validation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-profile-refinement-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-profile refinement study (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-signal-review-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-signal review (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../degradation-kernel-challengers-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Degradation-kernel challenger study: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../degradation-model-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Degradation-aware coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation-results-2026-07-18/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluation checkpoint: EM acceleration and endpoint model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inference and coverage evaluation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hybrid-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hybrid coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kinnex-coverage-refinement-and-em-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kinnex coverage refinement and EM optimizer study (2026-07-20)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kinnex-fig2-coverage-benchmark-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kinnex Figure 2 coverage-model benchmark (2026-07-20)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../longbench-coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LongBench coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pacbio-physical-endpoint-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PacBio physical endpoint model (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rank-preserving-inference-2026-07-22/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rank-preserving adaptive inference evaluation (2026-07-22)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime-profile-optimization-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime profile and allocation pass (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../score-prob-denom-recalibration-2026-08-03/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Recalibrating --score-prob-denom (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../single-sample-inference-refinement-2026-07-22/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Single-sample inference refinement (2026-07-22)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../unannotated-isoform-port-validation-2026-08-04/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Validating the ported annotation-omission model (2026-08-04)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../unannotated-isoforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Modeling unannotated isoforms (--model-unannotated-isoforms)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-where-things-stand" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Where things stand
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-the-panels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. The panels
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. The panels">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#panel-b-exact-read-level-truth-use-this-one" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Panel B — exact read-level truth. Use this one.
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#panel-a-proxy-truth-treat-as-a-weak-comparator" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Panel A — proxy truth. Treat as a weak comparator.
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#genome-mode-inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Genome-mode inputs
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-harness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Harness
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Harness">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#scoring-rules-that-have-already-cost-time" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scoring rules that have already cost time
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-decision-rules-pre-registered-keep-using-them" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Decision rules (pre-registered; keep using them)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-where-the-remaining-headroom-is" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Where the remaining headroom is
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Where the remaining headroom is">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#lead-a-a-presenceabsence-component-in-the-em-largest-known" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lead A — a presence/absence component in the EM. Largest known.
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lead-b-logistic-underperforms-on-pacbio-repeatedly-observed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lead B — logistic underperforms on PacBio. Repeatedly observed.
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#lead-c-responsibility-profiles-unresolved-and-worth-revisiting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lead C — responsibility-profiles, unresolved and worth revisiting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#ideas-already-tested-and-killed-do-not-re-propose-without-new-evidence" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ideas already tested and killed — do not re-propose without new evidence
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-open-items" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Open items
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="oarfish-coverage-benchmarking-handoff-2026-08-15">oarfish coverage benchmarking — handoff (2026-08-15)</h1>
+<p>Written to be picked up cold. It covers what the evaluation panels are, where
+the data lives, what has been decided and why, and the accuracy leads that were
+measured but not pursued.</p>
+<p>Everything below was verified present on 2026-08-15.</p>
+<hr />
+<h2 id="1-where-things-stand">1. Where things stand</h2>
+<p><code>dev</code> is at <code>ac0248c</code> and in sync with <code>origin/dev</code>. The coverage-model program
+that grew after the logistic model was measured against it on data with exact
+read-level truth, and retired: <code>--coverage-model</code> now accepts only
+<code>none|logistic</code>.</p>
+<table>
+<thead>
+<tr>
+<th>change</th>
+<th>evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>removed rank blending, dominance pruning</td>
+<td>-0.0878 / -0.0437 Spearman, worst family</td>
+</tr>
+<tr>
+<td>removed alignment calibration, censoring (both had shipped <strong>on</strong>)</td>
+<td>-0.000143 / -0.000233 on exact truth</td>
+</tr>
+<tr>
+<td>removed <code>auto\|adaptive\|endpoint\|hybrid\|degradation</code> + 4 modules</td>
+<td><code>endpoint</code> -0.0428 (worse than no coverage model at all); <code>auto</code> -0.0004 at +25.9% wall</td>
+</tr>
+<tr>
+<td><code>--score-prob-denom</code> default 5 → 3</td>
+<td>improved 32 of 34 samples</td>
+</tr>
+<tr>
+<td>added <code>--model-unannotated-isoforms</code> (genome mode)</td>
+<td>detection precision 1.000; -10.7% error at acted-on loci</td>
+</tr>
+</tbody>
+</table>
+<p>Retired code is preserved, each branch carrying a "do not merge without new
+evidence" note:</p>
+<ul>
+<li><code>archive/coverage-extras-2026-08-03</code> — the four extras</li>
+<li><code>archive/coverage-kernels-2026-08-03</code> — the five non-logistic kernels</li>
+<li><code>archive/junction-endpoint-2026-08-03</code> — splice-junction endpoint term</li>
+<li><code>wip/coverage-and-annotation-2026-07-25</code> — in-flight work; <strong>three of its four
+  threads were deliberately not ported</strong> (endpoint grid geometry, further
+  coverage experiments, evaluation-tier methodology)</li>
+</ul>
+<blockquote>
+<p><strong>History caveat.</strong> <code>fef285b</code> (the WIP commit) is an ancestor of <code>dev</code> via the
+port merge, so those three unported threads read as "already merged" although
+their content was resolved away. <code>git merge wip/...</code> is a no-op. The archive
+branches are their real home.</p>
+</blockquote>
+<hr />
+<h2 id="2-the-panels">2. The panels</h2>
+<p>The single most important fact for anyone benchmarking here: <strong>the two panels
+disagree in sign on essentially every arm.</strong> Panel A ranks <code>none</code> above
+<code>logistic</code>; Panel B does not. Any conclusion drawn from Panel A alone is
+unreliable, and that is how the retired features were selected in the first
+place.</p>
+<h3 id="panel-b-exact-read-level-truth-use-this-one">Panel B — exact read-level truth. Use this one.</h3>
+<p>Six transcriptome BAMs, 177,816 RefSeq identifiers, realistic depth
+(320–338 reads per expressed transcript). NanoSim read names encode the
+generating transcript (<code>NM_015477_2260_aligned_...</code>), so <strong>per-read truth is
+available</strong>, not just per-transcript counts.</p>
+<table>
+<thead>
+<tr>
+<th>sample</th>
+<th>BAM (under <code>oarfish-evaluation-data/sim-panel/</code>)</th>
+<th><code>--seq-tech</code></th>
+<th>extra</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>nanosim-NA12878-cdna</td>
+<td><code>nanosim/NA12878_1DcDNA/cdna_T.bam</code> (11G)</td>
+<td><code>ont-cdna</code></td>
+<td></td>
+</tr>
+<tr>
+<td>nanosim-NA12878-drna</td>
+<td><code>nanosim/NA12878_directRNA/drna_T.bam</code> (11G)</td>
+<td><code>ont-drna</code></td>
+<td><code>-d fw</code></td>
+</tr>
+<tr>
+<td>nanosim-H9-cdna</td>
+<td><code>nanosim/H9_1DcDNA/cdna_T.bam</code> (15G)</td>
+<td><code>ont-cdna</code></td>
+<td></td>
+</tr>
+<tr>
+<td>nanosim-H9-drna</td>
+<td><code>nanosim/H9_directRNA/drna_T.bam</code> (18G)</td>
+<td><code>ont-drna</code></td>
+<td><code>-d fw</code></td>
+</tr>
+<tr>
+<td>tksm-RSII</td>
+<td><code>tksm/RSII_T.bam</code> (14G)</td>
+<td><code>pac-bio</code></td>
+<td></td>
+</tr>
+<tr>
+<td>tksm-SQ2</td>
+<td><code>tksm/SQ2_T.bam</code> (13G)</td>
+<td><code>pac-bio-hifi</code></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>Truth: <code>sim-panel/nanosim/ground_truth/*.csv</code>, <code>sim-panel/tksm/ground_truth/*.csv</code>.
+Manifest: <code>rebench-2026-08-03/panelB_manifest.tsv</code>.</p>
+<p>Upstream copies (NFS, mounted on this host — no ssh needed):
+<code>/fs/cbcb-lab/rob/students/zahra/{nanosim_data,tksm_new_model}</code>.</p>
+<p><strong>Truth-format traps.</strong> NanoSim truth is headerless and unversioned. TKSM truth
+has a <code>Transcript_ID/Count</code> header <em>and</em> versioned accessions. Strip
+<code>\.\d+$</code> on both sides before joining.</p>
+<h3 id="panel-a-proxy-truth-treat-as-a-weak-comparator">Panel A — proxy truth. Treat as a weak comparator.</h3>
+<ul>
+<li><strong>28 LongBench samples</strong>, <code>benchmarks/coverage_ablation_manifest.tsv</code>
+  (8 cell lines x ONT-cDNA/ONT-dRNA/PacBio, plus 3 PacBio 250k). Truth is
+  <em>matched Illumina</em>, quantified against a 252k annotation while the BAMs carry
+  386k — score only over the shared reference (251,488), never the union.
+  Absolute Spearman is 0.21–0.43; on this panel <code>none</code> beats <code>logistic</code> by
+  +0.0055.</li>
+<li><strong>12 SIRV / spike-in samples</strong>, <code>rebench-2026-08-03/panelA_sirv_manifest.tsv</code>,
+  read mode. <strong>SIRV E0 is equal-molar</strong>, so truth variance is zero and every
+  rank metric is undefined — report <code>NA</code>, not <code>0.0</code>. Only the 4 E2 samples
+  support Spearman. The 2 <code>independent-sim</code> samples have exact counts but a
+  near-degenerate truth (max 6 reads/transcript, 81% singletons).</li>
+</ul>
+<h3 id="genome-mode-inputs">Genome-mode inputs</h3>
+<ul>
+<li><code>eval/parity/genome.bam</code> (2G) — spliced genome BAM, <strong>NanoSim read names, so
+  per-read truth</strong>; 1,356,492 reads project under the full annotation</li>
+<li><code>eval/GCF.pc_lncrna.matched.gtf</code>, <code>test_data/GCF_000001405.40_GRCh38.p14_genomic.fna</code></li>
+<li><code>test_data/cdna_ground_truth.csv</code> — the expressed set, for building holdouts</li>
+<li>GTFs for junction work: <code>rebench-2026-08-03/junc/refseq.gtf</code> (RefSeq, matches
+  Panel B) and <code>junc/gencode.v47.gtf</code> (matches LongBench; reconciles perfectly,
+  0 length mismatches, vs 4,925 for RefSeq)</li>
+</ul>
+<blockquote>
+<p><code>/scratch1</code> is node-local and <strong>not backed up</strong>. Panel B is re-copyable from
+the NFS paths above; the LongBench BAMs and <code>eval/parity/genome.bam</code> are not
+known to exist elsewhere.</p>
+</blockquote>
+<hr />
+<h2 id="3-harness">3. Harness</h2>
+<p><code>rebench-2026-08-03/</code> (also committed under <code>scripts/rebench-2026-08-03/</code> and
+<code>scripts/omission-validation-2026-08-04/</code>):</p>
+<table>
+<thead>
+<tr>
+<th>file</th>
+<th>purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>run_arms.py</code></td>
+<td>run N arms x M samples; alignment <strong>and</strong> read mode; captures wall/RSS</td>
+</tr>
+<tr>
+<td><code>metrics.py</code></td>
+<td>Spearman, Kendall tau-b, Pearson/CCC on log1p, RMSE, MARD</td>
+</tr>
+<tr>
+<td><code>analyze.py</code></td>
+<td>per-sample and per-family tables, deltas vs <code>logistic</code></td>
+</tr>
+<tr>
+<td><code>make_holdout.py</code>, <code>score_omission.py</code></td>
+<td>annotation-holdout construction and detection scoring</td>
+</tr>
+<tr>
+<td><code>coverage-rebenchmark-2026-08-03.tsv</code></td>
+<td>448-row per-sample deliverable</td>
+</tr>
+</tbody>
+</table>
+<p><code>juncprobe/</code> is a Rust harness (built binary present) with <code>phase0</code>, <code>reweight</code>,
+<code>em</code> and <code>ceiling</code> modes — ~10 s over a 35M-record BAM, versus ~10 min for the
+equivalent Python. Use it for anything that must touch every alignment.</p>
+<h3 id="scoring-rules-that-have-already-cost-time">Scoring rules that have already cost time</h3>
+<ol>
+<li><strong>Score over a hash-verified identical reference transcriptome.</strong> <code>run_arms.py</code>
+   md5s each arm's <code>.quant</code> key set and aborts if two compared arms differ.</li>
+<li><strong>Renormalise to library size before comparing counts.</strong> A holdout that drops
+   35% of assigned reads deflates every surviving transcript ~3x. This inverted
+   the sign of a whole validation once; the tell was a baseline signed error of
+   -1.70 where the reference analysis had +0.43. <strong>If your baseline's sign
+   disagrees with the reference, stop and reconcile before interpreting.</strong></li>
+<li><strong><code>--seq-tech</code> is required even in alignment mode</strong> — <code>bulk.rs</code> gated the
+   PacBio kernel on it, and the original harness passed it.</li>
+<li><strong>Zero truth variance means undefined, not zero</strong> (SIRV E0).</li>
+<li>Arm-vs-arm on one binary is deterministic. The ~0.005 "noise floor" quoted in
+   the older docs is a <em>cross-branch</em> figure for the same nominal model; it does
+   not apply to flag-on/flag-off on one build.</li>
+</ol>
+<hr />
+<h2 id="4-decision-rules-pre-registered-keep-using-them">4. Decision rules (pre-registered; keep using them)</h2>
+<p>From <code>docs/coverage-auto-rebenchmark-plan-2026-08-03.md</code>:</p>
+<ol>
+<li>A feature earns a default only by beating <strong><code>logistic</code></strong> — not <code>none</code> — on the
+   union of both panels, with no dataset family regressing more than 0.01
+   Spearman.</li>
+<li>If the bare kernel does not beat <code>logistic</code>, the kernel should not be a
+   default either.</li>
+<li><strong>If the panels disagree, prefer Panel B and report the disagreement.</strong></li>
+</ol>
+<p>Two amendments learned the hard way:</p>
+<ul>
+<li><strong>Pre-register a minimum effect size.</strong> The junction-endpoint term passed the
+  consistency criterion as literally written (6/6 samples improving) while
+  delivering +0.00026 — about 1/35th of the projected magnitude. Consistency
+  without magnitude is not a bar.</li>
+<li><strong>Rule 5 is not mechanical.</strong> When Panel A is <em>strongly and uniformly</em>
+  opposed rather than merely noisy, that is a conflict to investigate, not a
+  tie to break by fiat. See the <code>responsibility-profiles</code> entry below.</li>
+</ul>
+<hr />
+<h2 id="5-where-the-remaining-headroom-is">5. Where the remaining headroom is</h2>
+<p>Measured on Panel B, <code>logistic</code>:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Spearman</th>
+<th>headroom</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>as shipped</td>
+<td>0.9220</td>
+<td>—</td>
+</tr>
+<tr>
+<td>+ perfect <strong>detection</strong> (truth-zeros forced to 0)</td>
+<td>0.9481</td>
+<td><strong>+0.0261</strong></td>
+</tr>
+<tr>
+<td>+ perfect <strong>abundance</strong> (expressed set to truth)</td>
+<td>0.9765</td>
+<td>+0.0545</td>
+</tr>
+</tbody>
+</table>
+<p><strong>1,812 false-positive transcripts carrying 0.156% of the read mass cost 0.026
+Spearman</strong> — as much as the entire benefit of coverage modelling.</p>
+<h3 id="lead-a-a-presenceabsence-component-in-the-em-largest-known">Lead A — a presence/absence component in the EM. Largest known.</h3>
+<p>Worth up to <strong>+0.0261</strong>, roughly ten times anything the retired stack delivered,
+and orthogonal to which coverage model is used. Naive thresholds capture only
+10% of it (+0.0026 at a 0.5-read floor) and aggressive ones lose 0.04–0.11,
+because the classes overlap exactly where the false positives live: of
+transcripts with est ≤ 1 and no unique read, 65% are truly zero but <strong>35% are
+real</strong>.</p>
+<p>The discriminating information exists — false positives have median 1.32
+estimated reads versus 30.68 for true positives (23x), and 98.7% have no unique
+read versus 61.7%. It needs a probabilistic component (zero-inflated or
+spike-and-slab) emitting a per-transcript presence probability, not a cutoff.</p>
+<p><strong>A 0.5-read floor is available today</strong> for +0.0026 at no cost, as a stopgap.</p>
+<h3 id="lead-b-logistic-underperforms-on-pacbio-repeatedly-observed">Lead B — <code>logistic</code> underperforms on PacBio. Repeatedly observed.</h3>
+<p>On TKSM SQ2, <code>none</code> (0.9501) beats <code>logistic</code> (0.9479). Across both panels
+<code>logistic</code> loses to <code>none</code> on PacBio (-0.0025, 4/13), and the retired <code>auto</code>
+and <code>hybrid</code> kernels both beat it on the two TKSM samples. No kernel beat <code>none</code>
+consistently, so nothing was kept — but this is the most reproducible anomaly in
+the series and the likeliest place a <em>new</em> model finds room. n=2 on exact truth
+is the limiting factor: <strong>more PacBio samples with exact read-level truth is the
+single highest-value data acquisition.</strong></p>
+<h3 id="lead-c-responsibility-profiles-unresolved-and-worth-revisiting">Lead C — <code>responsibility-profiles</code>, unresolved and worth revisiting</h3>
+<p>On <code>wip/coverage-and-annotation-2026-07-25</code> as a <code>--coverage-ablation</code>. It
+rebuilds the logistic coverage profile from cross-fitted abundance
+responsibilities instead of counting every alignment once — the current
+construction lets an ambiguous read deposit a full read of coverage on every
+candidate it touches (<strong>measured 5.09x inflation on H69 cDNA</strong>). A real defect.</p>
+<p>Measured on <code>logistic</code>:</p>
+<table>
+<thead>
+<tr>
+<th>dataset</th>
+<th>truth</th>
+<th>delta</th>
+<th>consistency</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Panel B (NanoSim/TKSM)</td>
+<td>exact</td>
+<td><strong>+0.0023</strong></td>
+<td>6/6</td>
+</tr>
+<tr>
+<td>independent-sim</td>
+<td>exact counts, <strong>different simulator</strong></td>
+<td>-0.0013</td>
+<td>0/2</td>
+</tr>
+<tr>
+<td>SIRV-E2</td>
+<td><strong>real reads, known concentrations</strong></td>
+<td>-0.0004</td>
+<td>1/4</td>
+</tr>
+<tr>
+<td>Panel A LongBench</td>
+<td>matched Illumina</td>
+<td>-0.0030</td>
+<td>0/28</td>
+</tr>
+</tbody>
+</table>
+<p>Not adopted: one dataset family of four supports it, and the two that are
+<em>real with real truth</em> do not. But the defect it fixes is genuine, so a
+different correction for the same inflation may still be worth having. Note it
+is <strong>not</strong> redundant with <code>--score-prob-denom 3</code> — the gain was larger at D=3
+than at D=5.</p>
+<h3 id="ideas-already-tested-and-killed-do-not-re-propose-without-new-evidence">Ideas already tested and killed — do not re-propose without new evidence</h3>
+<table>
+<thead>
+<tr>
+<th>idea</th>
+<th>result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>length / effective-length correction</td>
+<td><strong>oracle</strong> gain -0.0001 Spearman; the bias is real but rank-preserving</td>
+</tr>
+<tr>
+<td>ambiguity-gated coverage correction</td>
+<td>0.0000 at every gate threshold</td>
+</tr>
+<tr>
+<td>splice-junction endpoint term</td>
+<td>9.9x likelihood ratio, +0.025 posterior mass/read, <strong>+0.00026</strong> accuracy</td>
+</tr>
+<tr>
+<td>endpoint grid geometry corrections</td>
+<td>+0.000186; the nucleotide-measure variant is <strong>harmful</strong> (-0.005)</td>
+</tr>
+<tr>
+<td><code>component-mass-conservation</code></td>
+<td>byte-identical on 6/6 — never engages</td>
+</tr>
+<tr>
+<td><code>polya-three-prime</code></td>
+<td>+0.000108</td>
+</tr>
+<tr>
+<td><code>continuous-nested-guard</code></td>
+<td>helps only the broken pre-demotion baseline</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The junction-endpoint result generalises and is worth internalising.</strong> An
+information-ceiling analysis found that <strong>~73% of misassigned reads have the true
+source and the winning decoy scoring <em>identically</em>.</strong> Equal alignment score over
+the read's span implies indistinguishable sequence, hence indistinguishable exon
+structure — so <em>no</em> annotation-derived per-alignment feature can separate them,
+regardless of formulation. The other ~27% already score higher for the true
+source and lose to the abundance prior, where annotation is redundant. Reproduce
+with <code>juncprobe ceiling</code> before investing in any per-alignment signal.</p>
+<hr />
+<h2 id="6-open-items">6. Open items</h2>
+<ul>
+<li><strong><code>--model-unannotated-isoforms</code> recall is ~1%</strong> (89 of 9,720 genes) at
+  precision 1.000. Precision is not the weak point; recall is. The gates are
+  <code>--novel-min-misses</code>, <code>--novel-min-locus-reads</code> (default 5) and
+  <code>--novel-require-hits</code>.</li>
+<li><strong>The main EM does not converge at the shipped cap</strong> — 1,000 evaluations,
+  <code>converged: false</code>, at threshold 0.001, for <em>every</em> arm including <code>logistic</code>,
+  on 177k-transcript data. Surfaced incidentally; affects every configuration
+  and has never been investigated.</li>
+<li><strong><code>--coverage-model auto</code> now hard-errors.</strong> Nothing in <code>.github/</code>, <code>justfile</code>
+  or <code>scripts/*.sh</code> used it, but external workflows and the paper's methods were
+  not checkable from here.</li>
+<li><strong>Panel B accuracy validation for the unannotated-isoform feature is
+  genome-mode only</strong>; the transcriptome-BAM panel cannot exercise it.</li>
+<li>The original <code>origin50</code>-style holdout scripts from the July evaluation were
+  <strong>not preserved</strong>, so its holdouts can only be re-derived from their
+  description, not reproduced exactly. <code>make_holdout.py</code> re-derives them.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": [], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="../javascripts/mathjax.js"></script>
+      
+        <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

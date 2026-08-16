@@ -1,0 +1,3066 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../coverage-auto-rebenchmark-plan-2026-08-03/">
+      
+      
+        <link rel="next" href="../coverage-component-ablation-2026-07-20/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Re-benchmark of the auto coverage stack against logistic (2026-08-03) - Documentation for oarfish</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#re-benchmark-of-the-auto-coverage-stack-against-logistic-2026-08-03" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Documentation for oarfish" class="md-header__button md-logo" aria-label="Documentation for oarfish" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Documentation for oarfish
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Re-benchmark of the auto coverage stack against logistic (2026-08-03)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Documentation for oarfish" class="md-nav__button md-logo" aria-label="Documentation for oarfish" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Documentation for oarfish
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    oarfish: transcript quantification from long-read RNA-seq data
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../accuracy-refinement-2026-07-23/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Single-sample accuracy refinement (2026-07-23)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adaptive-coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Adaptive coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../annotation-omission-evaluation-2026-07-25/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluating the annotation-omission model (2026-07-25)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchmarking-handoff-2026-08-15/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    oarfish coverage benchmarking — handoff (2026-08-15)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../competing-risk-degradation-evaluation-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Competing-risk degradation evaluation: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-auto-defaults-review-2026-08-03/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review of --coverage-model auto defaults (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-auto-rebenchmark-plan-2026-08-03/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plan: re-benchmark the auto coverage stack against logistic (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Re-benchmark of the auto coverage stack against logistic (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Re-benchmark of the auto coverage stack against logistic (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-of-the-measurement-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation of the measurement path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#method" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Method
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#panels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Panels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#results-panel-b-exact-truth-per-sample-spearman" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results: Panel B (exact truth) — per sample, Spearman
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#results-panel-a-longbench-matched-illumina-mean-spearman-by-family" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results: Panel A (LongBench, matched Illumina) — mean Spearman by family
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#results-panel-a-sirv-and-spike-ins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results: Panel A (SIRV and spike-ins)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-the-panels-disagree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why the panels disagree
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#follow-up-is-rank-blending-salvageable-by-fixing-the-warm-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Follow-up: is rank blending salvageable by fixing the warm-up?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#follow-up-can-the-adaptive-kernel-be-salvaged" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Follow-up: can the adaptive kernel be salvaged?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-remaining-headroom-is-panel-b-exact-truth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the remaining headroom is (Panel B, exact truth)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cost-panel-b-serial-idle-node-16-threads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost (Panel B, serial, idle node, 16 threads)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cross-branch-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-branch control
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision-rules-applied-as-written" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision rules, applied as written
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Decision rules, applied as written">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#rule-1-a-feature-is-an-auto-default-only-if-it-beats-logistic-with-no-dataset-family-regressing-more-than-001-spearman" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule 1 — a feature is an auto default only if it beats logistic, with no dataset family regressing more than 0.01 Spearman
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rule-2-rank-blending-and-dominance-pruning-stay-demoted-unless-they-clear-rule-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule 2 — rank blending and dominance pruning stay demoted unless they clear rule 1
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rule-3-alignment-calibration-and-censoring-are-on-probation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule 3 — alignment calibration and censoring are on probation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rule-4-if-adaptive-bare-does-not-beat-logistic-on-the-union-auto-should-not-be-a-default-at-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule 4 — if adaptive-bare does not beat logistic on the union, auto should not be a default at all
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rule-5-if-the-panels-disagree-prefer-panel-b-and-report-the-disagreement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule 5 — if the panels disagree, prefer Panel B and report the disagreement
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommendations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#does-anything-contradict-the-committed-demotion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does anything contradict the committed demotion?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deliverables-and-provenance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deliverables and provenance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Deliverables and provenance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#caveats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Caveats
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-component-ablation-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-component ablation: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-default-benchmark-expansion-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-default benchmark expansion: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-model evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-kernel-retirement-2026-08-03/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retiring the non-logistic coverage models (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-next-round-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage and inference refinement round (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-outer-validation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-model outer validation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-profile-refinement-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-profile refinement study (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-signal-review-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-signal review (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../degradation-kernel-challengers-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Degradation-kernel challenger study: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../degradation-model-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Degradation-aware coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation-results-2026-07-18/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluation checkpoint: EM acceleration and endpoint model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inference and coverage evaluation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hybrid-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hybrid coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kinnex-coverage-refinement-and-em-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kinnex coverage refinement and EM optimizer study (2026-07-20)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kinnex-fig2-coverage-benchmark-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kinnex Figure 2 coverage-model benchmark (2026-07-20)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../longbench-coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LongBench coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pacbio-physical-endpoint-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PacBio physical endpoint model (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rank-preserving-inference-2026-07-22/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rank-preserving adaptive inference evaluation (2026-07-22)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime-profile-optimization-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime profile and allocation pass (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../score-prob-denom-recalibration-2026-08-03/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Recalibrating --score-prob-denom (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../single-sample-inference-refinement-2026-07-22/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Single-sample inference refinement (2026-07-22)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../unannotated-isoform-port-validation-2026-08-04/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Validating the ported annotation-omission model (2026-08-04)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../unannotated-isoforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Modeling unannotated isoforms (--model-unannotated-isoforms)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validation-of-the-measurement-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validation of the measurement path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#method" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Method
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#panels" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Panels
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#results-panel-b-exact-truth-per-sample-spearman" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results: Panel B (exact truth) — per sample, Spearman
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#results-panel-a-longbench-matched-illumina-mean-spearman-by-family" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results: Panel A (LongBench, matched Illumina) — mean Spearman by family
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#results-panel-a-sirv-and-spike-ins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Results: Panel A (SIRV and spike-ins)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-the-panels-disagree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why the panels disagree
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#follow-up-is-rank-blending-salvageable-by-fixing-the-warm-up" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Follow-up: is rank blending salvageable by fixing the warm-up?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#follow-up-can-the-adaptive-kernel-be-salvaged" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Follow-up: can the adaptive kernel be salvaged?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#where-the-remaining-headroom-is-panel-b-exact-truth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Where the remaining headroom is (Panel B, exact truth)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cost-panel-b-serial-idle-node-16-threads" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cost (Panel B, serial, idle node, 16 threads)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cross-branch-control" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cross-branch control
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#decision-rules-applied-as-written" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decision rules, applied as written
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Decision rules, applied as written">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#rule-1-a-feature-is-an-auto-default-only-if-it-beats-logistic-with-no-dataset-family-regressing-more-than-001-spearman" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule 1 — a feature is an auto default only if it beats logistic, with no dataset family regressing more than 0.01 Spearman
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rule-2-rank-blending-and-dominance-pruning-stay-demoted-unless-they-clear-rule-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule 2 — rank blending and dominance pruning stay demoted unless they clear rule 1
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rule-3-alignment-calibration-and-censoring-are-on-probation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule 3 — alignment calibration and censoring are on probation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rule-4-if-adaptive-bare-does-not-beat-logistic-on-the-union-auto-should-not-be-a-default-at-all" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule 4 — if adaptive-bare does not beat logistic on the union, auto should not be a default at all
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rule-5-if-the-panels-disagree-prefer-panel-b-and-report-the-disagreement" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rule 5 — if the panels disagree, prefer Panel B and report the disagreement
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recommendations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommendations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#does-anything-contradict-the-committed-demotion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does anything contradict the committed demotion?
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deliverables-and-provenance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deliverables and provenance
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Deliverables and provenance">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#caveats" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Caveats
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="re-benchmark-of-the-auto-coverage-stack-against-logistic-2026-08-03">Re-benchmark of the <code>auto</code> coverage stack against <code>logistic</code> (2026-08-03)</h1>
+<h2 id="summary">Summary</h2>
+<p>Every arm, including <code>logistic</code>, was run on both panels specified in
+<code>docs/coverage-auto-rebenchmark-plan-2026-08-03.md</code>. 448 runs, zero failures.</p>
+<p>The headline results:</p>
+<ul>
+<li><strong>The demotion of rank blending and dominance pruning is confirmed.</strong> Both
+  fail decision rule 1 decisively, and they fail it on the panel with exact
+  truth. Rank blending costs up to <strong>-0.0878</strong> Spearman on a dataset family and
+  dominance pruning up to <strong>-0.0437</strong>. Neither should be an <code>auto</code> default.</li>
+<li><strong><code>auto</code> should not be a default at all.</strong> <code>adaptive-bare</code> does not beat
+  <code>logistic</code> on Panel B (-0.0003, i.e. a tie), and the full <code>auto-new</code> default
+  is also at parity (-0.0007) while costing <strong>23% more wall time</strong> than
+  <code>logistic</code> on the same branch. This satisfies decision rule 4.</li>
+<li><strong>Alignment calibration and censoring pass rule 1 on the letter, but their
+  effects are below the noise floor of the experiment.</strong> The same <code>--model-coverage</code>
+  differs by up to 0.0053 Spearman between <code>main</code> and the branch under test;
+  the measured effects of calibration (+0.0009) and censoring (+0.0042) are of
+  that order or smaller.</li>
+<li><strong>The two panels disagree completely and systematically</strong>, and this is the
+  most important structural finding. Decision rule 5 is invoked: Panel B is
+  preferred, and the disagreement is reported rather than averaged away.</li>
+</ul>
+<h2 id="validation-of-the-measurement-path">Validation of the measurement path</h2>
+<p>Before any conclusion, the pipeline was checked against numbers produced by a
+different harness. It reproduces every add-one ablation figure in
+<code>docs/coverage-auto-defaults-review-2026-08-03.md</code> on NanoSim NA12878 1D-cDNA:</p>
+<table>
+<thead>
+<tr>
+<th>arm</th>
+<th>this run (Spearman / MARD)</th>
+<th>review doc</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>none</code></td>
+<td>0.8392 / 0.0873</td>
+<td>0.8391 / 0.0873</td>
+</tr>
+<tr>
+<td><code>logistic</code> (dev)</td>
+<td>0.8867 / 0.0582</td>
+<td>0.8867 / —</td>
+</tr>
+<tr>
+<td><code>logistic</code> (main)</td>
+<td>0.8850</td>
+<td>0.8850 / 0.0590</td>
+</tr>
+<tr>
+<td><code>adaptive-bare</code></td>
+<td>0.8846 / 0.0593</td>
+<td>0.8846 / 0.0593</td>
+</tr>
+<tr>
+<td><code>auto-new</code></td>
+<td>0.8824 / 0.0600</td>
+<td>0.8824 / 0.0600</td>
+</tr>
+<tr>
+<td><code>auto-old</code></td>
+<td>0.7677 / 0.1576</td>
+<td>0.7677 / 0.1576</td>
+</tr>
+<tr>
+<td><code>+calib</code></td>
+<td>0.8842 / 0.0594</td>
+<td>0.8842 / 0.0594</td>
+</tr>
+<tr>
+<td><code>+censor</code></td>
+<td>0.8827 / 0.0599</td>
+<td>0.8827 / 0.0599</td>
+</tr>
+<tr>
+<td><code>+prune</code></td>
+<td>0.8564 / 0.0713</td>
+<td>0.8564 / 0.0713</td>
+</tr>
+<tr>
+<td><code>+rank</code></td>
+<td>0.7879 / 0.1426</td>
+<td>0.7879 / 0.1426</td>
+</tr>
+</tbody>
+</table>
+<p>RMSE for <code>none</code> matches to 227.4453 vs 227.4457. Kendall tau-b was
+cross-validated against scipy over 200 randomised tie-heavy trials (0
+mismatches).</p>
+<h2 id="method">Method</h2>
+<p>Nine arms as specified in the plan, <code>--filter-group no-filters</code> on every run,
+<code>--seq-tech</code> passed on every run (<code>bulk.rs</code> gates the PacBio physical-endpoint
+kernel on it, and the original selection harness passed it too). Metrics are
+Spearman, Kendall tau-b, Pearson on log1p, CCC on log1p, RMSE and MARD, with
+wall time and peak RSS from <code>/usr/bin/time -v</code>.</p>
+<p><strong>Identical reference transcriptome per comparison.</strong> Each sample's evaluation
+universe is the reference transcriptome shared by the run and its truth, and
+the runner hashes every arm's <code>.quant</code> key set and aborts if two compared arms
+differ. All 28 LongBench samples resolve to one identical 251,488-transcript
+reference (<code>md5 9afd4f42be9d</code>); Panel B resolves to 177,816. This matters: the
+naive union of truth and estimate keys would have scored ~134,000 transcripts
+that the matched-Illumina reference never contained as truth = 0, penalising
+arms for an annotation gap rather than a quantification error.</p>
+<p><strong>Truth handling.</strong> Accession versions are stripped (<code>\.\d+$</code>) before an outer
+join filled with 0. Two format details the plan did not anticipate: TKSM truth
+files carry a header row and versioned accessions (NanoSim's are headerless and
+unversioned), and SIRV truth is a concentration table whose column is selected
+by the manifest <code>mix</code>. Panel A estimates are rescaled to the truth total
+(required: matched Illumina is a different protocol at different depth); Panel B
+estimates are not (truth and estimate are both simulated read counts).</p>
+<p><strong>SIRV E0 is equal-molar.</strong> Every spike-in has concentration exactly 1, so truth
+variance is 0 and Spearman, Kendall, Pearson and CCC are all undefined for those
+six samples. They are reported as <code>NA</code>, not 0.0 — scoring them as 0.0 would have
+averaged six undefined samples into every arm's panel mean and read as a large
+false regression. For E0 the informative metrics are MARD and estimate
+dispersion.</p>
+<h2 id="panels">Panels</h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Panel A (LongBench)</th>
+<th>Panel A (SIRV/spike-in)</th>
+<th>Panel B (simulations)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>samples</td>
+<td>28</td>
+<td>12</td>
+<td>6</td>
+</tr>
+<tr>
+<td>truth</td>
+<td>matched Illumina</td>
+<td>SIRV concentrations; 2x exact counts</td>
+<td>exact simulated counts</td>
+</tr>
+<tr>
+<td>universe</td>
+<td>251,488 / 71,220</td>
+<td>69 / 385,659</td>
+<td>177,816</td>
+</tr>
+<tr>
+<td>absolute Spearman</td>
+<td>0.21-0.43</td>
+<td>0.82-0.99 (E0 undefined)</td>
+<td>0.84-0.95</td>
+</tr>
+</tbody>
+</table>
+<h2 id="results-panel-b-exact-truth-per-sample-spearman">Results: Panel B (exact truth) — per sample, Spearman</h2>
+<table>
+<thead>
+<tr>
+<th>sample</th>
+<th>none</th>
+<th>logistic</th>
+<th>adaptive-bare</th>
+<th>auto-new</th>
+<th>auto-old</th>
+<th>+calib</th>
+<th>+censor</th>
+<th>+prune</th>
+<th>+rank</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>nanosim-H9-cdna</td>
+<td>0.8739</td>
+<td><strong>0.9084</strong></td>
+<td>0.9077</td>
+<td>0.9075</td>
+<td>0.8099</td>
+<td>0.9076</td>
+<td>0.9076</td>
+<td>0.8820</td>
+<td>0.8315</td>
+</tr>
+<tr>
+<td>nanosim-H9-drna</td>
+<td>0.9113</td>
+<td><strong>0.9363</strong></td>
+<td>0.9350</td>
+<td>0.9350</td>
+<td>0.8736</td>
+<td>0.9350</td>
+<td>0.9351</td>
+<td>0.8877</td>
+<td>0.9350</td>
+</tr>
+<tr>
+<td>nanosim-NA12878-cdna</td>
+<td>0.8392</td>
+<td><strong>0.8867</strong></td>
+<td>0.8846</td>
+<td>0.8824</td>
+<td>0.7677</td>
+<td>0.8842</td>
+<td>0.8827</td>
+<td>0.8564</td>
+<td>0.7879</td>
+</tr>
+<tr>
+<td>nanosim-NA12878-drna</td>
+<td>0.8723</td>
+<td><strong>0.9192</strong></td>
+<td>0.9168</td>
+<td>0.9170</td>
+<td>0.8724</td>
+<td>0.9171</td>
+<td>0.9168</td>
+<td>0.8805</td>
+<td>0.9168</td>
+</tr>
+<tr>
+<td>tksm-RSII</td>
+<td>0.9289</td>
+<td>0.9354</td>
+<td>0.9380</td>
+<td>0.9378</td>
+<td>0.8959</td>
+<td>0.9374</td>
+<td><strong>0.9384</strong></td>
+<td>0.8966</td>
+<td>0.9380</td>
+</tr>
+<tr>
+<td>tksm-SQ2</td>
+<td>0.9480</td>
+<td>0.9459</td>
+<td>0.9481</td>
+<td>0.9480</td>
+<td>0.9183</td>
+<td>0.9479</td>
+<td><strong>0.9482</strong></td>
+<td>0.9186</td>
+<td>0.9481</td>
+</tr>
+</tbody>
+</table>
+<p>Panel B, per sample, MARD (lower is better):</p>
+<table>
+<thead>
+<tr>
+<th>sample</th>
+<th>none</th>
+<th>logistic</th>
+<th>adaptive-bare</th>
+<th>auto-new</th>
+<th>auto-old</th>
+<th>+calib</th>
+<th>+censor</th>
+<th>+prune</th>
+<th>+rank</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>nanosim-H9-cdna</td>
+<td>0.0797</td>
+<td><strong>0.0568</strong></td>
+<td>0.0575</td>
+<td>0.0577</td>
+<td>0.1403</td>
+<td>0.0575</td>
+<td>0.0577</td>
+<td>0.0696</td>
+<td>0.1241</td>
+</tr>
+<tr>
+<td>nanosim-H9-drna</td>
+<td>0.0418</td>
+<td><strong>0.0318</strong></td>
+<td>0.0324</td>
+<td>0.0323</td>
+<td>0.0529</td>
+<td>0.0323</td>
+<td>0.0323</td>
+<td>0.0479</td>
+<td>0.0324</td>
+</tr>
+<tr>
+<td>nanosim-NA12878-cdna</td>
+<td>0.0873</td>
+<td><strong>0.0582</strong></td>
+<td>0.0593</td>
+<td>0.0600</td>
+<td>0.1576</td>
+<td>0.0594</td>
+<td>0.0599</td>
+<td>0.0713</td>
+<td>0.1426</td>
+</tr>
+<tr>
+<td>nanosim-NA12878-drna</td>
+<td>0.0595</td>
+<td><strong>0.0370</strong></td>
+<td>0.0382</td>
+<td>0.0381</td>
+<td>0.0538</td>
+<td>0.0381</td>
+<td>0.0382</td>
+<td>0.0508</td>
+<td>0.0382</td>
+</tr>
+<tr>
+<td>tksm-RSII</td>
+<td>0.0613</td>
+<td>0.0567</td>
+<td>0.0545</td>
+<td>0.0547</td>
+<td>0.0785</td>
+<td>0.0549</td>
+<td><strong>0.0542</strong></td>
+<td>0.0778</td>
+<td>0.0545</td>
+</tr>
+<tr>
+<td>tksm-SQ2</td>
+<td>0.0871</td>
+<td>0.0872</td>
+<td>0.0846</td>
+<td>0.0848</td>
+<td>0.1103</td>
+<td>0.0849</td>
+<td><strong>0.0845</strong></td>
+<td>0.1101</td>
+<td>0.0846</td>
+</tr>
+</tbody>
+</table>
+<h2 id="results-panel-a-longbench-matched-illumina-mean-spearman-by-family">Results: Panel A (LongBench, matched Illumina) — mean Spearman by family</h2>
+<table>
+<thead>
+<tr>
+<th>family</th>
+<th>n</th>
+<th>none</th>
+<th>logistic</th>
+<th>adaptive-bare</th>
+<th>auto-new</th>
+<th>auto-old</th>
+<th>+calib</th>
+<th>+censor</th>
+<th>+prune</th>
+<th>+rank</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ont-cdna</td>
+<td>8</td>
+<td>0.2291</td>
+<td>0.2201</td>
+<td>0.2207</td>
+<td>0.2216</td>
+<td><strong>0.2348</strong></td>
+<td>0.2210</td>
+<td>0.2214</td>
+<td>0.2217</td>
+<td>0.2313</td>
+</tr>
+<tr>
+<td>ont-drna</td>
+<td>8</td>
+<td>0.2980</td>
+<td>0.2921</td>
+<td>0.2915</td>
+<td>0.2927</td>
+<td><strong>0.3032</strong></td>
+<td>0.2917</td>
+<td>0.2924</td>
+<td>0.2923</td>
+<td>0.3002</td>
+</tr>
+<tr>
+<td>pac-bio</td>
+<td>11</td>
+<td>0.3404</td>
+<td>0.3370</td>
+<td>0.3384</td>
+<td>0.3393</td>
+<td><strong>0.3444</strong></td>
+<td>0.3386</td>
+<td>0.3391</td>
+<td>0.3410</td>
+<td>0.3408</td>
+</tr>
+<tr>
+<td>synthetic-drna</td>
+<td>1</td>
+<td>0.8207</td>
+<td>0.8254</td>
+<td>0.8258</td>
+<td>0.8244</td>
+<td>0.8253</td>
+<td>0.8257</td>
+<td>0.8245</td>
+<td>0.8183</td>
+<td><strong>0.8319</strong></td>
+</tr>
+</tbody>
+</table>
+<p><code>auto-old</code> — the exact pre-demotion configuration — is the best arm on 25 of 28
+LongBench samples, and <code>logistic</code> is the <em>lowest</em> arm on most of them. MARD on
+this panel does not discriminate at all (every arm within 0.001 of 0.45).</p>
+<h2 id="results-panel-a-sirv-and-spike-ins">Results: Panel A (SIRV and spike-ins)</h2>
+<p>Mean by family; E0 rank metrics are undefined (equal-molar truth).</p>
+<table>
+<thead>
+<tr>
+<th>family</th>
+<th>n</th>
+<th>metric</th>
+<th>none</th>
+<th>logistic</th>
+<th>adaptive-bare</th>
+<th>auto-new</th>
+<th>auto-old</th>
+<th>+calib</th>
+<th>+censor</th>
+<th>+prune</th>
+<th>+rank</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>sirv-E0</td>
+<td>6</td>
+<td>MARD</td>
+<td>0.2919</td>
+<td>0.2916</td>
+<td>0.2800</td>
+<td>0.2649</td>
+<td><strong>0.2573</strong></td>
+<td>0.2774</td>
+<td>0.2669</td>
+<td>0.2614</td>
+<td>0.2801</td>
+</tr>
+<tr>
+<td>sirv-E2</td>
+<td>4</td>
+<td>Spearman</td>
+<td>0.8157</td>
+<td>0.8176</td>
+<td>0.8162</td>
+<td>0.8528</td>
+<td><strong>0.8844</strong></td>
+<td>0.8186</td>
+<td>0.8491</td>
+<td>0.8574</td>
+<td>0.8162</td>
+</tr>
+<tr>
+<td>independent-sim</td>
+<td>2</td>
+<td>Spearman</td>
+<td>0.9634</td>
+<td>0.9775</td>
+<td>0.9834</td>
+<td>0.9835</td>
+<td><strong>0.9852</strong></td>
+<td>0.9835</td>
+<td>0.9835</td>
+<td>0.9852</td>
+<td>0.9835</td>
+</tr>
+</tbody>
+</table>
+<p>These 12 samples side with Panel A, not Panel B: <code>auto-old</code> is best on all three
+families.</p>
+<p><strong>Caveat on <code>independent-sim</code>.</strong> These two samples have exact counts truth, but
+their truth is nearly degenerate: 100,000 reads spread over ~82,000 transcripts,
+with a maximum of 6 reads on any transcript and 81% of transcripts at exactly 1
+read. There are only six distinct truth values, so rank metrics there measure
+detection rather than abundance estimation. Panel B, by contrast, averages
+320-338 reads per expressed transcript across several orders of magnitude. On
+the expressed-only universe used by the original harness, this run reproduces
+that harness's published values (<code>none</code> 0.6827 vs 0.667849 reported;
+<code>logistic</code> 0.7043 vs <code>auto</code> 0.710010 reported).</p>
+<h2 id="why-the-panels-disagree">Why the panels disagree</h2>
+<p>This was investigated rather than assumed. One hypothesis — that rank blending
+compresses the dynamic range of the estimate — was tested and <strong>rejected</strong>: all
+arms have essentially identical global dispersion on Panel B (CV ~25.0 against a
+truth CV of 25.0).</p>
+<p>What the data do show, on NanoSim NA12878 1D-cDNA:</p>
+<p><strong>1. Global Spearman on Panel B is dominated by truth-zero transcripts.</strong> 83.0%
+of Panel B's universe (147,537 of 177,816) has exactly zero true reads. The
+number of those an arm gives non-zero mass to orders the arms almost perfectly:</p>
+<table>
+<thead>
+<tr>
+<th>arm</th>
+<th>truth-zero transcripts given non-zero mass</th>
+<th>mass on zeros</th>
+<th>global Spearman</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>logistic</td>
+<td>2,931</td>
+<td>17,871</td>
+<td>0.8867</td>
+</tr>
+<tr>
+<td>adaptive-bare</td>
+<td>3,079</td>
+<td>22,171</td>
+<td>0.8845</td>
+</tr>
+<tr>
+<td>auto-new</td>
+<td>3,287</td>
+<td>26,453</td>
+<td>0.8824</td>
+</tr>
+<tr>
+<td>+prune</td>
+<td>5,343</td>
+<td>48,986</td>
+<td>0.8563</td>
+</tr>
+<tr>
+<td>none</td>
+<td>8,261</td>
+<td>19,999</td>
+<td>0.8391</td>
+</tr>
+<tr>
+<td>+rank</td>
+<td>18,143</td>
+<td>24,378</td>
+<td>0.7879</td>
+</tr>
+<tr>
+<td>auto-old</td>
+<td>21,077</td>
+<td>79,392</td>
+<td>0.7676</td>
+</tr>
+</tbody>
+</table>
+<p><strong>2. Among genuinely expressed transcripts, <code>auto-old</code> is the best arm in every
+abundance stratum.</strong> Stratified Spearman over the 30,279 expressed transcripts:</p>
+<table>
+<thead>
+<tr>
+<th>arm</th>
+<th>low (&lt;=10 reads)</th>
+<th>mid (&lt;=59)</th>
+<th>high</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>none</td>
+<td>0.5419</td>
+<td>0.6915</td>
+<td>0.9279</td>
+</tr>
+<tr>
+<td>logistic</td>
+<td>0.5423</td>
+<td>0.7066</td>
+<td>0.9467</td>
+</tr>
+<tr>
+<td>auto-new</td>
+<td>0.5401</td>
+<td>0.7098</td>
+<td>0.9484</td>
+</tr>
+<tr>
+<td><strong>auto-old</strong></td>
+<td><strong>0.5576</strong></td>
+<td><strong>0.7148</strong></td>
+<td><strong>0.9532</strong></td>
+</tr>
+</tbody>
+</table>
+<p>So the demoted features do not harm abundance accuracy among expressed
+transcripts — they harm the model's ability to leave unexpressed transcripts at
+zero, and that is what the global metric measures. Panel A's Illumina truth is
+52.9% zero versus Panel B's 83.0%, and SIRV E2 has no zeros at all, which is
+consistent with those panels favouring <code>auto-old</code>. This is a coherent
+explanation supported on one sample; it is not established as the sole cause.</p>
+<p><strong>Both readings are legitimate, but they answer different questions.</strong> If the
+metric of record is genome-wide rank fidelity over the full annotation — which
+is what every table in this evaluation series reports — <code>logistic</code> wins and the
+demoted features are harmful. If the question is abundance accuracy restricted
+to expressed transcripts, <code>auto-old</code> is better. The published metric is the
+former, so the recommendations below follow it.</p>
+<h2 id="follow-up-is-rank-blending-salvageable-by-fixing-the-warm-up">Follow-up: is rank blending salvageable by fixing the warm-up?</h2>
+<p>The plan lists "rank blending blends toward a non-converged EM" as a defect to
+fix regardless of the benchmark. That was tested directly on NanoSim NA12878
+1D-cDNA by sweeping <code>--coverage-warmup-iterations</code>.</p>
+<p>The warm-up does converge, at <strong>17,926 evaluations</strong> — 179x the default cap of
+100.</p>
+<table>
+<thead>
+<tr>
+<th><code>+rank</code> config</th>
+<th>Spearman</th>
+<th>MARD</th>
+<th>truth-zero FPs</th>
+<th>warm-up</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>logistic</code> (baseline)</td>
+<td><strong>0.8867</strong></td>
+<td><strong>0.0582</strong></td>
+<td><strong>2,931</strong></td>
+<td>-</td>
+</tr>
+<tr>
+<td><code>adaptive-bare</code></td>
+<td>0.8846</td>
+<td>0.0593</td>
+<td>3,079</td>
+<td>-</td>
+</tr>
+<tr>
+<td>warmup = 100 (<strong>default</strong>)</td>
+<td>0.7879</td>
+<td>0.1426</td>
+<td>18,143</td>
+<td>not converged</td>
+</tr>
+<tr>
+<td>warmup = 1,000</td>
+<td>0.8378</td>
+<td>0.0906</td>
+<td>8,811</td>
+<td>not converged</td>
+</tr>
+<tr>
+<td>warmup = 5,000</td>
+<td>0.8386</td>
+<td>0.0890</td>
+<td>8,497</td>
+<td>not converged</td>
+</tr>
+<tr>
+<td>warmup = 20,000</td>
+<td>0.8388</td>
+<td>0.0887</td>
+<td>8,458</td>
+<td><strong>converged @ 17,926</strong></td>
+</tr>
+<tr>
+<td>warmup = 100,000</td>
+<td>0.8388</td>
+<td>0.0887</td>
+<td>8,458</td>
+<td><strong>converged @ 17,926</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Two conclusions:</p>
+<p><strong>The truncation defect is real and accounts for about half the damage.</strong>
+Spearman recovers 0.7879 -&gt; 0.8388 and false positives halve, 18,143 -&gt; 8,458.
+The false-positive count and the Spearman deficit move together, which supports
+the account in the previous section. Nearly all of the recovery arrives by 1,000
+iterations; full convergence adds only a further +0.0010.</p>
+<p><strong>Fixing it does not rehabilitate the feature.</strong> Fully converged, rank blending
+is still 0.0479 below <code>logistic</code> and 0.0458 below <code>adaptive-bare</code> — about five
+times the rule 1 tolerance — and still carries 2.9x logistic's false positives.
+It also costs 224.9 s of warm-up on a run that otherwise takes ~146 s.</p>
+<p>The residual deficit is therefore intrinsic to the design rather than to the
+truncation: blending 20% of a coverage-<em>free</em> estimate into a
+coverage-<em>corrected</em> one reintroduces the bias the coverage model exists to
+remove. Iterating the warm-up longer cannot fix that, and the measurements show
+it does not.</p>
+<p><strong>Caveat.</strong> The main EM does not converge either — <code>em_evaluations: 1000,
+em_converged: false</code> at threshold 0.001 for <em>every</em> arm on this data, including
+<code>logistic</code>. The problem is therefore not "converged versus truncated" in
+absolute terms; it is that the warm-up was given a 10x smaller iteration budget
+than the estimate it is blended against. The general non-convergence of the main
+EM at the shipped cap is a separate issue worth its own investigation.</p>
+<h2 id="follow-up-can-the-adaptive-kernel-be-salvaged">Follow-up: can the adaptive kernel be salvaged?</h2>
+<p>The kernel has a genuine advantage that the headline metric hides, so three
+salvage routes were tested. None of them yields a default.</p>
+<p><strong>Finding 0: <code>auto</code> is not one kernel, it is three.</strong> The technology dispatch
+selects a different model per <code>--seq-tech</code>:</p>
+<table>
+<thead>
+<tr>
+<th>technology</th>
+<th>kernel</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ont-cdna</td>
+<td><code>cross_fitted_adaptive_endpoint</code></td>
+</tr>
+<tr>
+<td>ont-drna</td>
+<td><code>ont_drna_competing_risks</code></td>
+</tr>
+<tr>
+<td>pac-bio, pac-bio-hifi</td>
+<td><code>pacbio_guarded_physical_endpoint</code></td>
+</tr>
+</tbody>
+</table>
+<p>Every result reported as "<code>auto</code> versus X" is therefore an average over three
+distinct algorithms, and they do not behave alike. This alone is a reason to
+stop reporting <code>auto</code> as a single arm.</p>
+<p><strong>Route 1: the expressed-transcript gain is real.</strong> Over all 6 Panel B samples,
+restricted to transcripts the truth actually expresses:</p>
+<table>
+<thead>
+<tr>
+<th>arm</th>
+<th>global</th>
+<th>expressed-only</th>
+<th>low</th>
+<th>mid</th>
+<th>high</th>
+<th>FP zeros</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>logistic</code></td>
+<td><strong>0.9220</strong></td>
+<td>0.9452</td>
+<td>0.6187</td>
+<td>0.7948</td>
+<td>0.9609</td>
+<td><strong>1,812</strong></td>
+</tr>
+<tr>
+<td><code>adaptive-bare</code></td>
+<td>0.9217</td>
+<td><strong>0.9488</strong></td>
+<td><strong>0.6211</strong></td>
+<td><strong>0.8005</strong></td>
+<td><strong>0.9660</strong></td>
+<td>1,931</td>
+</tr>
+<tr>
+<td><code>auto-new</code></td>
+<td>0.9213</td>
+<td>0.9501</td>
+<td>0.6229</td>
+<td>0.8023</td>
+<td>0.9672</td>
+<td>1,998</td>
+</tr>
+</tbody>
+</table>
+<p>The bare kernel beats <code>logistic</code> on expressed transcripts in all three
+abundance strata and on 5 of 6 samples (+0.0036 mean; TKSM RSII +0.0104,
+SQ2 +0.0085). Its false-positive penalty is only +119 transcripts (+6.6%), and
+that is enough to cancel the gain.</p>
+<p><strong>Route 2: equalise the zero handling — fails.</strong> Applying the same post-hoc
+threshold to every arm (zeroing estimates below t) and recomputing global
+Spearman, mean over the 6 Panel B samples:</p>
+<table>
+<thead>
+<tr>
+<th>arm</th>
+<th>t=0</th>
+<th>t=0.25</th>
+<th>t=0.5</th>
+<th>t=1</th>
+<th>t=2</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>logistic</code></td>
+<td>0.9220</td>
+<td>0.9244</td>
+<td>0.9246</td>
+<td>0.9245</td>
+<td>0.9078</td>
+</tr>
+<tr>
+<td><code>adaptive-bare</code></td>
+<td>0.9217</td>
+<td>0.9244</td>
+<td>0.9247</td>
+<td>0.9245</td>
+<td>0.9081</td>
+</tr>
+<tr>
+<td>delta</td>
+<td>-0.0003</td>
+<td>+0.0000</td>
+<td>+0.0001</td>
+<td>+0.0000</td>
+<td>+0.0002</td>
+</tr>
+</tbody>
+</table>
+<p>The gap stays at +0.0001 at every threshold. The expressed-transcript advantage
+does not transfer to the metric of record: with 83% of the universe at truth
+zero, a +0.0036 gain over 17% of the transcripts is worth ~+0.0001 globally.</p>
+<p>Incidentally, a threshold of 0.5 improves <em>every</em> arm by ~+0.0026 (<code>logistic</code>
+0.9220 -&gt; 0.9246) — more than the entire adaptive stack contributes. Cheap,
+orthogonal to coverage modelling, and worth investigating separately.</p>
+<p><strong>Route 3: a PacBio-conditional default — fails on the right baseline.</strong> The
+kernel beats <code>logistic</code> on <strong>13 of 13</strong> PacBio samples across both panels
+(+0.0016 mean), which is the only cross-panel-consistent signal in the whole
+evaluation. But measured against <code>none</code>:</p>
+<table>
+<thead>
+<tr>
+<th>arm</th>
+<th>mean d vs <code>none</code> (PacBio, n=13)</th>
+<th>wins</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>+rank</code></td>
+<td>+0.0011</td>
+<td>6/13</td>
+</tr>
+<tr>
+<td><code>auto-new</code></td>
+<td>-0.0002</td>
+<td>4/13</td>
+</tr>
+<tr>
+<td><code>adaptive-bare</code></td>
+<td>-0.0009</td>
+<td>5/13</td>
+</tr>
+<tr>
+<td><code>logistic</code></td>
+<td><strong>-0.0025</strong></td>
+<td><strong>4/13</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The 13/13 sweep is "<code>logistic</code> underperforms on PacBio", not "the kernel helps
+on PacBio". No coverage model reliably beats doing nothing there. <strong>That
+<code>logistic</code> loses to <code>none</code> on PacBio (-0.0025, 4/13) is an independent finding
+worth its own investigation.</strong></p>
+<p>The exception is Panel B PacBio under exact truth, where <code>adaptive-bare</code> beats
+<code>none</code> by +0.0091 on RSII and ties on SQ2 (+0.0001), and beats <code>logistic</code> on
+both. That is the one place the kernel clears both baselines — but n=2 is far
+too thin to set a default, and Panel A's 11 PacBio samples point the other way.</p>
+<p><strong>Conclusion.</strong> The adaptive kernel is not salvageable as a default on the
+current evidence. Its one genuine advantage is confined to expressed transcripts
+and is worth ~+0.0001 under the metric of record. The PacBio lead is real enough
+to be worth testing properly, and the required experiment is well defined:
+more PacBio samples with exact read-level truth, scored against <code>none</code> as well
+as <code>logistic</code>.</p>
+<h2 id="where-the-remaining-headroom-is-panel-b-exact-truth">Where the remaining headroom is (Panel B, exact truth)</h2>
+<p>All numbers below are measured on the saved Panel B quantifications, not
+projected. Several promising ideas were tested and killed; they are recorded so
+they are not re-proposed.</p>
+<p><strong>The problem is ambiguity, not coverage.</strong> 89.5% (ONT cDNA) to 95.1% (PacBio
+HiFi) of assigned read mass is ambiguous. Unique reads alone give Spearman
+0.5559 / 0.4733; the EM lifts that to 0.8867 / 0.9459. Coverage modelling is a
+second-order correction (<code>logistic</code> buys +0.0264 over <code>none</code>) on top of a
+first-order ambiguity-resolution problem.</p>
+<p><strong>Error decomposition for <code>logistic</code></strong> (mean over 6 Panel B samples):</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Spearman</th>
+<th>headroom</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>logistic</code> as shipped</td>
+<td>0.9220</td>
+<td>-</td>
+</tr>
+<tr>
+<td>+ perfect <strong>detection</strong> (truth-zeros forced to 0)</td>
+<td>0.9481</td>
+<td><strong>+0.0261</strong></td>
+</tr>
+<tr>
+<td>+ perfect <strong>abundance</strong> (expressed set to truth)</td>
+<td>0.9765</td>
+<td>+0.0545</td>
+</tr>
+</tbody>
+</table>
+<p>1,812 false-positive transcripts carrying only <strong>0.156%</strong> of the read mass cost
+<strong>0.026 Spearman</strong> — as much as the entire benefit of coverage modelling. This
+is the largest identified single lever, and it is orthogonal to the coverage
+model.</p>
+<p><strong>Ideas tested and rejected:</strong></p>
+<table>
+<thead>
+<tr>
+<th>idea</th>
+<th>measured result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>length / effective-length correction</td>
+<td><strong>oracle</strong> gain -0.0001 Spearman, -0.0019 MARD</td>
+</tr>
+<tr>
+<td>ambiguity-gated coverage correction</td>
+<td>0.0000 at every gate threshold</td>
+</tr>
+<tr>
+<td>naive detection thresholds</td>
+<td>+0.0026 of the +0.0261 available (10%)</td>
+</tr>
+<tr>
+<td>aggressive detection (no unique read &amp; est&lt;5, &lt;20)</td>
+<td><strong>-0.0361, -0.1138</strong></td>
+</tr>
+</tbody>
+</table>
+<p>The length-dependent residual is real and large — mean log2(est/truth) runs
+-0.21 (short) to -0.68 (long) on ONT cDNA, and <code>logistic</code> <em>worsens</em> the long end
+(-0.68 -&gt; -0.75) — but it is nearly rank-preserving, so correcting it perfectly
+buys nothing under rank metrics. It would matter for a metric of record that
+weights absolute abundance.</p>
+<p><strong>Why naive detection fails, and what would work.</strong> The two classes are
+separable in bulk but overlap exactly where the false positives live:</p>
+<table>
+<thead>
+<tr>
+<th>group</th>
+<th>median est. reads</th>
+<th>p90</th>
+<th>fraction with no unique read</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>truly expressed (26,196)</td>
+<td>30.68</td>
+<td>429.45</td>
+<td>0.617</td>
+</tr>
+<tr>
+<td>false positive (2,931)</td>
+<td>1.32</td>
+<td>15.38</td>
+<td><strong>0.987</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Of transcripts with est &lt;= 1 and no unique read, 65.0% are truly zero — but 35%
+are real. At est &lt;= 5 the split is 40.8% / 59.2%. So a hard cutoff necessarily
+trades true positives for false positives, which is why the aggressive rules
+lose 0.04-0.11 Spearman. The discriminating information exists (a 23x median
+separation, and 98.7% versus 61.7% on unique-read presence); it needs a
+probabilistic presence/absence component, not a threshold.</p>
+<p><strong>Ranked proposals, by measured headroom:</strong></p>
+<ol>
+<li><strong>A presence/absence (zero-inflated or spike-and-slab) component in the EM.</strong>
+   Up to +0.0261 Spearman, roughly ten times what the entire adaptive stack
+   delivers, and independent of which coverage kernel is used. Should emit a
+   per-transcript probability of presence rather than a hard call.</li>
+<li><strong>An empirical endpoint mixture in place of the fixed inverse-logistic
+   shape.</strong> The physical-endpoint diagnostics show large, learnable, and highly
+   variable structure across libraries — TKSM SQ2 fits 2.7% intact / 54.2%
+   3'-truncated, while LongBench H69 fits 26.6% intact / 26.0% 3'-truncated. A
+   single fixed curve cannot express that range. This is what the PacBio kernel
+   already does, and it is the one kernel that beats <code>logistic</code> consistently.</li>
+<li><strong>A cheap immediate win: a 0.5-read floor.</strong> Applied post-EM it gains +0.0026
+   on every arm — more than the whole adaptive stack — at no cost. It captures
+   only 10% of the detection headroom, so it is a stopgap, not the fix.</li>
+</ol>
+<h2 id="cost-panel-b-serial-idle-node-16-threads">Cost (Panel B, serial, idle node, 16 threads)</h2>
+<table>
+<thead>
+<tr>
+<th>arm</th>
+<th>mean wall (s)</th>
+<th>mean peak RSS (GB)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>none</td>
+<td>112.0</td>
+<td>3.21</td>
+</tr>
+<tr>
+<td>logistic</td>
+<td>113.9</td>
+<td>3.33</td>
+</tr>
+<tr>
+<td>adaptive-bare</td>
+<td>139.7</td>
+<td>3.42</td>
+</tr>
+<tr>
+<td>auto-new</td>
+<td>140.1</td>
+<td>3.42</td>
+</tr>
+<tr>
+<td>auto-old</td>
+<td>140.7</td>
+<td>3.42</td>
+</tr>
+<tr>
+<td>+prune</td>
+<td>146.7</td>
+<td>3.42</td>
+</tr>
+<tr>
+<td>+rank</td>
+<td>146.1</td>
+<td>3.42</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The reported "1.8x faster" belongs to the branch, not to <code>auto</code>.</strong> On the same
+branch, <code>auto-new</code> is <strong>23% slower</strong> than <code>logistic</code> (140.1 s vs 113.9 s) and
+uses slightly more memory. The speedup in the review doc came from comparing dev
+<code>auto</code> against <em>main</em> <code>logistic</code>; main <code>logistic</code> averages 269.9 s on Panel B,
+so demote <code>logistic</code> is 2.4x faster than main and demote <code>auto</code> is 1.9x faster.
+Choosing <code>auto</code> over <code>logistic</code> on the current branch costs time, it does not
+save it.</p>
+<h2 id="cross-branch-control">Cross-branch control</h2>
+<p><code>--model-coverage</code> reproduces across branches, but not exactly:</p>
+<table>
+<thead>
+<tr>
+<th>panel</th>
+<th>max abs delta vs <code>main</code></th>
+<th>direction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>B</td>
+<td>0.0053</td>
+<td>demote higher on all 6</td>
+</tr>
+<tr>
+<td>A</td>
+<td>0.0021</td>
+<td>main higher on 24/28</td>
+</tr>
+</tbody>
+</table>
+<p><strong>This sets the noise floor for the whole experiment.</strong> Any effect smaller than
+~0.005 Spearman cannot be distinguished from branch-level drift in the logistic
+path itself. Alignment calibration (+0.0009) and censoring (+0.0042) are both
+inside that floor.</p>
+<h2 id="decision-rules-applied-as-written">Decision rules, applied as written</h2>
+<h3 id="rule-1-a-feature-is-an-auto-default-only-if-it-beats-logistic-with-no-dataset-family-regressing-more-than-001-spearman">Rule 1 — a feature is an <code>auto</code> default only if it beats <code>logistic</code>, with no dataset family regressing more than 0.01 Spearman</h3>
+<table>
+<thead>
+<tr>
+<th>feature</th>
+<th>arm</th>
+<th>union mean d</th>
+<th>worst family d</th>
+<th>verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>rank blending</td>
+<td><code>+rank</code></td>
+<td>+0.0009</td>
+<td><strong>-0.0878</strong> (nanosim-cdna)</td>
+<td><strong>FAILS</strong></td>
+</tr>
+<tr>
+<td>dominance pruning</td>
+<td><code>+prune</code></td>
+<td>+0.0004</td>
+<td><strong>-0.0437</strong> (nanosim-drna)</td>
+<td><strong>FAILS</strong></td>
+</tr>
+<tr>
+<td>alignment calibration</td>
+<td><code>+calib</code></td>
+<td>+0.0009</td>
+<td>-0.0017 (nanosim-drna)</td>
+<td>passes</td>
+</tr>
+<tr>
+<td>censoring</td>
+<td><code>+censor</code></td>
+<td>+0.0042</td>
+<td>-0.0024 (nanosim-cdna)</td>
+<td>passes</td>
+</tr>
+</tbody>
+</table>
+<h3 id="rule-2-rank-blending-and-dominance-pruning-stay-demoted-unless-they-clear-rule-1">Rule 2 — rank blending and dominance pruning stay demoted unless they clear rule 1</h3>
+<p>Neither clears it. <strong>They stay demoted.</strong> The activation-gate re-derivation
+contemplated by rule 2 is therefore not required.</p>
+<h3 id="rule-3-alignment-calibration-and-censoring-are-on-probation">Rule 3 — alignment calibration and censoring are on probation</h3>
+<p>Both are positive on Panel A LongBench (<code>+calib</code> +0.0008, <code>+censor</code> +0.0012), so
+they survive probation on the letter of the rule. But both are inside the
+0.005 noise floor established by the cross-branch control, on both panels. The
+honest statement is that this experiment <strong>cannot resolve</strong> whether either helps.</p>
+<h3 id="rule-4-if-adaptive-bare-does-not-beat-logistic-on-the-union-auto-should-not-be-a-default-at-all">Rule 4 — if <code>adaptive-bare</code> does not beat <code>logistic</code> on the union, <code>auto</code> should not be a default at all</h3>
+<table>
+<thead>
+<tr>
+<th></th>
+<th><code>adaptive-bare</code> vs <code>logistic</code></th>
+<th><code>auto-new</code> vs <code>logistic</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>union (46 samples)</td>
+<td>+0.0005</td>
+<td>+0.0048</td>
+</tr>
+<tr>
+<td>Panel B only</td>
+<td><strong>-0.0003</strong></td>
+<td><strong>-0.0007</strong></td>
+</tr>
+<tr>
+<td>Panel A LongBench</td>
+<td>+0.0006</td>
+<td>+0.0015</td>
+</tr>
+</tbody>
+</table>
+<p>The union is positive only because Panel A contributes 40 of 46 samples. On the
+panel with exact truth, <code>adaptive-bare</code> does not beat <code>logistic</code> — it ties, well
+inside the noise floor. Under rule 5 the Panel B reading governs. <strong>Rule 4 is
+satisfied: <code>auto</code> should not be the default.</strong></p>
+<h3 id="rule-5-if-the-panels-disagree-prefer-panel-b-and-report-the-disagreement">Rule 5 — if the panels disagree, prefer Panel B and report the disagreement</h3>
+<p>They disagree on every arm, in sign, systematically:</p>
+<table>
+<thead>
+<tr>
+<th>arm</th>
+<th>Panel A (all 40)</th>
+<th>Panel B</th>
+<th>agree?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>none</td>
+<td>+0.0055</td>
+<td>-0.0264</td>
+<td>no</td>
+</tr>
+<tr>
+<td>adaptive-bare</td>
+<td>+0.0006</td>
+<td>-0.0003</td>
+<td>no</td>
+</tr>
+<tr>
+<td>auto-new</td>
+<td>+0.0015</td>
+<td>-0.0007</td>
+<td>no</td>
+</tr>
+<tr>
+<td>auto-old</td>
+<td><strong>+0.0103</strong></td>
+<td><strong>-0.0657</strong></td>
+<td>no</td>
+</tr>
+<tr>
+<td>+calib</td>
+<td>+0.0008</td>
+<td>-0.0005</td>
+<td>no</td>
+</tr>
+<tr>
+<td>+censor</td>
+<td>+0.0012</td>
+<td>-0.0006</td>
+<td>no</td>
+</tr>
+<tr>
+<td>+prune</td>
+<td>+0.0019</td>
+<td>-0.0350</td>
+<td>no</td>
+</tr>
+<tr>
+<td>+rank</td>
+<td><strong>+0.0072</strong></td>
+<td><strong>-0.0291</strong></td>
+<td>no</td>
+</tr>
+</tbody>
+</table>
+<p>Panel A ranks <code>none</code> above <code>logistic</code> (+0.0055, 24 wins / 4 losses). A panel on
+which "no coverage model" outperforms the shipping coverage model has little
+power to select coverage-model features, which is a plausible account of how
+these features were selected in the first place.</p>
+<h2 id="recommendations">Recommendations</h2>
+<p><strong>1. Rank blending — keep opt-in, and consider removing it outright.</strong>
+Rule 1: fails, worst family -0.0878 on NanoSim 1D-cDNA, nearly nine times the
+0.01 tolerance. MARD on that family degrades from 0.0582 to 0.1426, 2.4x worse.
+Confirmed on the only panel with exact truth at realistic depth. The committed
+demotion stands. The follow-up above additionally shows that the feature is not
+salvageable by fixing the non-converged warm-up: with a fully converged warm-up
+it still fails rule 1 by ~5x while costing 224.9 s of extra EM. Since its
+best-achievable configuration still loses decisively to both <code>logistic</code> and
+<code>adaptive-bare</code>, "remove" is defensible and "opt-in" is the conservative floor.</p>
+<p><strong>2. Dominance pruning — keep opt-in (do not revert the demotion).</strong>
+Rule 1: fails, worst family -0.0437, more than four times the tolerance, plus
+the largest wall-time cost of any single feature (+5.0% over <code>adaptive-bare</code>).
+The committed demotion stands.</p>
+<p><strong>3. Alignment calibration — make it opt-in.</strong>
+Rule 1 passes on the letter (+0.0009 union, worst family -0.0017), but rule 3
+put it on probation and the measured effect is five times smaller than the
+0.0053 cross-branch reproduction spread. There is no evidence it improves on
+<code>logistic</code>; there is also no evidence it harms. A default that cannot be shown
+to do anything should not be a default, and it is currently <code>Auto</code> in
+<code>prog_opts.rs</code>. Demote to <code>none</code> and keep it reachable.</p>
+<p><strong>4. Censoring — make it opt-in.</strong>
+Same reasoning. Its +0.0042 union mean is the largest of the two survivors, but
+it is driven by SIRV E2 (+0.0315 across 4 samples of 69 transcripts with 4
+concentration levels) and is negative on Panel B (-0.0006). Inside the noise
+floor. It is currently <code>Auto</code>; demote to <code>none</code>.</p>
+<p><strong>5. Beyond the four features: <code>auto</code> should not be the default coverage model.</strong>
+Rule 4 is satisfied. <code>--model-coverage</code> (logistic) wins outright on 4 of 6
+Panel B samples, ties on the other 2, has the best MARD on 4 of 6, and is 23%
+faster than <code>auto-new</code> on the same branch. Ship <code>--model-coverage</code> as the
+default and keep <code>--coverage-model auto</code> opt-in until it can be shown to beat
+logistic on exact truth.</p>
+<h2 id="does-anything-contradict-the-committed-demotion">Does anything contradict the committed demotion?</h2>
+<p><strong>No.</strong> Panel B confirms the demotion strongly and reproduces the review doc's
+numbers exactly. Nothing here recommends reverting it.</p>
+<p>Two findings do complicate the surrounding narrative, and are stated plainly:</p>
+<ul>
+<li><strong>The demotion is correct but not sufficient.</strong> The same evidence that
+  demotes rank blending and dominance pruning also shows that the remaining
+  <code>auto</code> stack does not beat <code>logistic</code> on exact truth. Stopping at the
+  demotion leaves a default that is slower and no more accurate.</li>
+<li><strong>40 of the 46 samples in this benchmark favour the pre-demotion
+  configuration.</strong> That is not a reason to revert — those panels are proxy
+  truth, equal-molar controls with undefined rank metrics, or near-degenerate
+  truth with six distinct values — but it should be recorded that the
+  conclusion rests on 6 samples out of 46, chosen on the pre-registered grounds
+  of truth quality rather than on count.</li>
+</ul>
+<h2 id="deliverables-and-provenance">Deliverables and provenance</h2>
+<ul>
+<li>Per-sample machine-readable results: <code>coverage-rebenchmark-2026-08-03.tsv</code>
+  (448 rows; arm x sample x metric, plus wall time, peak RSS, evaluation
+  universe size, reference md5, and the activated-feature diagnostics).</li>
+<li>Harness: <code>scripts/rebench-2026-08-03/</code> in this repo (<code>run_arms.py</code>,
+  <code>metrics.py</code>, <code>analyze.py</code>, <code>make_deliverable.py</code>, <code>panelB_manifest.tsv</code>,
+  <code>panelA_sirv_manifest.tsv</code>). Copied out of node-local scratch deliberately —
+  the plan notes that <code>/scratch1</code> is neither shared nor backed up.</li>
+<li>Raw run outputs (<code>.quant</code>, <code>.meta_info.json</code>, <code>/usr/bin/time -v</code> logs) remain
+  under <code>/scratch1/rob/long-read-ecosystem/rebench-2026-08-03/</code>, which is not
+  durable storage.</li>
+<li>Binaries: <code>fix/demote-rank-blend-and-dominance-pruning</code> at <code>af8f3eb</code> and
+  <code>origin/main</code>, both oarfish 0.10.3, built into separate target dirs.</li>
+<li>Panel B was copied from <code>/fs/cbcb-lab/rob/students/zahra/</code> — that NFS export
+  is mounted directly on the benchmark host, so the <code>nexuscbcb01</code> hop in the
+  plan was unnecessary (and that host rejects the available key).</li>
+</ul>
+<h3 id="caveats">Caveats</h3>
+<ul>
+<li>Panel A's absolute Spearman (0.21-0.43) is low because matched-Illumina truth
+  is a cross-protocol proxy. Arm-to-arm comparison within a sample is still
+  valid — every arm is scored over an identical, hash-verified reference — but
+  Panel A and Panel B absolute values are not comparable to each other.</li>
+<li>All runs used oarfish defaults outside the arm definitions. The default EM
+  accelerator is <code>None</code> and the EM reports <code>converged=false</code> at the evaluation
+  cap on the LongBench samples, for every arm equally.</li>
+<li>Rank-metric conclusions for SIRV E0 are impossible by construction; those six
+  samples contribute only MARD and dispersion.</li>
+<li>The mechanism proposed for the panel disagreement (zero-transcript
+  discrimination) was verified on one Panel B sample, not all six.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": [], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="../javascripts/mathjax.js"></script>
+      
+        <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

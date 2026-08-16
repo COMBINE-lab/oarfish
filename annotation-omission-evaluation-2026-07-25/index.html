@@ -1,0 +1,2146 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../adaptive-coverage-evaluation-2026-07-19/">
+      
+      
+        <link rel="next" href="../benchmarking-handoff-2026-08-15/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Evaluating the annotation-omission model (2026-07-25) - Documentation for oarfish</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#evaluating-the-annotation-omission-model-2026-07-25" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Documentation for oarfish" class="md-header__button md-logo" aria-label="Documentation for oarfish" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Documentation for oarfish
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Evaluating the annotation-omission model (2026-07-25)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Documentation for oarfish" class="md-nav__button md-logo" aria-label="Documentation for oarfish" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Documentation for oarfish
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    oarfish: transcript quantification from long-read RNA-seq data
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../accuracy-refinement-2026-07-23/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Single-sample accuracy refinement (2026-07-23)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../adaptive-coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Adaptive coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluating the annotation-omission model (2026-07-25)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluating the annotation-omission model (2026-07-25)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-the-original-evidence-was-diluted-not-absent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. The original evidence was diluted, not absent
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-the-mechanism-is-the-claimed-one-over-attribution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. The mechanism is the claimed one (over-attribution)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-dose-response-holds-to-extreme-incompleteness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Dose-response holds to extreme incompleteness
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-detection-is-the-stronger-claim-high-precision-very-low-recall" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Detection is the stronger claim: high precision, very low recall
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Detection is the stronger claim: high precision, very low recall">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recall-is-not-limited-by-the-annotation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recall is not limited by the annotation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-where-the-reads-actually-go" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Where the reads actually go
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-three-arm-comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Three-arm comparison
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-the-similarity-threshold-is-inert-negative-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. The similarity threshold is inert (negative result)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-the-junction-tolerances-are-the-real-filter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. The junction tolerances are the real filter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-final-decomposition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Final decomposition
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-this-means-for-the-paper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What this means for the paper
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Code state
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deferred" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deferred
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../benchmarking-handoff-2026-08-15/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    oarfish coverage benchmarking — handoff (2026-08-15)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../competing-risk-degradation-evaluation-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Competing-risk degradation evaluation: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-auto-defaults-review-2026-08-03/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Review of --coverage-model auto defaults (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-auto-rebenchmark-plan-2026-08-03/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plan: re-benchmark the auto coverage stack against logistic (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-auto-rebenchmark-results-2026-08-03/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Re-benchmark of the auto coverage stack against logistic (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-component-ablation-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-component ablation: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-default-benchmark-expansion-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-default benchmark expansion: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-model evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-kernel-retirement-2026-08-03/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Retiring the non-logistic coverage models (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-next-round-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage and inference refinement round (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-outer-validation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-model outer validation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-profile-refinement-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-profile refinement study (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../coverage-signal-review-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Coverage-signal review (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../degradation-kernel-challengers-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Degradation-kernel challenger study: 2026-07-20
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../degradation-model-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Degradation-aware coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation-results-2026-07-18/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Evaluation checkpoint: EM acceleration and endpoint model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../evaluation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inference and coverage evaluation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hybrid-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Hybrid coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kinnex-coverage-refinement-and-em-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kinnex coverage refinement and EM optimizer study (2026-07-20)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kinnex-fig2-coverage-benchmark-2026-07-20/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kinnex Figure 2 coverage-model benchmark (2026-07-20)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../longbench-coverage-evaluation-2026-07-19/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LongBench coverage evaluation: 2026-07-19
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pacbio-physical-endpoint-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PacBio physical endpoint model (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rank-preserving-inference-2026-07-22/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rank-preserving adaptive inference evaluation (2026-07-22)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime-profile-optimization-2026-07-21/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime profile and allocation pass (2026-07-21)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../score-prob-denom-recalibration-2026-08-03/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Recalibrating --score-prob-denom (2026-08-03)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../single-sample-inference-refinement-2026-07-22/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Single-sample inference refinement (2026-07-22)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../unannotated-isoform-port-validation-2026-08-04/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Validating the ported annotation-omission model (2026-08-04)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../unannotated-isoforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Modeling unannotated isoforms (--model-unannotated-isoforms)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-the-original-evidence-was-diluted-not-absent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. The original evidence was diluted, not absent
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-the-mechanism-is-the-claimed-one-over-attribution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. The mechanism is the claimed one (over-attribution)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-dose-response-holds-to-extreme-incompleteness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Dose-response holds to extreme incompleteness
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-detection-is-the-stronger-claim-high-precision-very-low-recall" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Detection is the stronger claim: high precision, very low recall
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Detection is the stronger claim: high precision, very low recall">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recall-is-not-limited-by-the-annotation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recall is not limited by the annotation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-where-the-reads-actually-go" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Where the reads actually go
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-three-arm-comparison" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Three-arm comparison
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-the-similarity-threshold-is-inert-negative-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. The similarity threshold is inert (negative result)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-the-junction-tolerances-are-the-real-filter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. The junction tolerances are the real filter
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-final-decomposition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Final decomposition
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-this-means-for-the-paper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What this means for the paper
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#code-state" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Code state
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deferred" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deferred
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="evaluating-the-annotation-omission-model-2026-07-25">Evaluating the annotation-omission model (2026-07-25)</h1>
+<p>All runs: ONT cDNA, 2M simulated reads (<code>cdna_s1_reads_shuffled.2M.fastq</code>), genome read
+mode (spliced genome alignment → bramble projection), <code>--filter-group no-filters</code>,
+16 threads, GRCh38.p14 + <code>GCF.pc_lncrna.matched.gtf</code>.</p>
+<p>Holdout GTFs follow TranSigner: transcripts are deleted from the set reads were
+actually simulated <em>from</em>, not from the catalogue at large (deleting unexpressed
+transcripts orphans no reads and measures nothing).</p>
+<blockquote>
+<p><strong>Caveat on cross-table comparison.</strong> Each table computes metrics over the set of
+transcripts common to the arms <em>in that table</em>. The three-arm table intersects with
+the transcriptome-mode quant, so its transcript set — and therefore its absolute CCC
+— differs from the deep-sweep table. Compare within a table, not across tables.</p>
+</blockquote>
+<hr />
+<h2 id="1-the-original-evidence-was-diluted-not-absent">1. The original evidence was diluted, not absent</h2>
+<p>Global CCC over ~20k transcripts, when the model touches ~50 loci, makes a 4th-decimal
+delta arithmetically inevitable. Restricting to transcripts that are members of a
+flagged locus:</p>
+<table>
+<thead>
+<tr>
+<th>design</th>
+<th>n txps</th>
+<th>mean |log2 err| full → omission</th>
+<th>change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>dominant25</td>
+<td>143</td>
+<td>1.1203 → 1.0064</td>
+<td><strong>−10.2%</strong></td>
+</tr>
+<tr>
+<td>origin25</td>
+<td>131</td>
+<td>1.0982 → 0.9585</td>
+<td><strong>−12.7%</strong></td>
+</tr>
+<tr>
+<td>origin50</td>
+<td>179</td>
+<td>1.2255 → 1.0512</td>
+<td><strong>−14.2%</strong></td>
+</tr>
+<tr>
+<td>minor25</td>
+<td>30</td>
+<td>0.5993 → 0.6931</td>
+<td>+15.7% (worse)</td>
+</tr>
+<tr>
+<td>minor50</td>
+<td>29</td>
+<td>0.6158 → 0.7561</td>
+<td>+22.8% (worse)</td>
+</tr>
+<tr>
+<td>locus25</td>
+<td>17</td>
+<td>0.3965 → 0.5632</td>
+<td>+42.0% (worse)</td>
+</tr>
+</tbody>
+</table>
+<p><code>locus*</code> deletes <em>every</em> isoform of a gene, so no survivor exists to correct — flagging
+there is harmful by construction. <code>minor*</code> (keep only the dominant isoform) also
+regresses, on small n. <strong>These are real limitations, not noise to be explained away.</strong></p>
+<p>An intermediate restriction — all surviving transcripts at <em>affected genes</em> — is still
+~10× too coarse (4,770 affected genes vs 409 acted-on loci) and shows almost nothing:</p>
+<table>
+<thead>
+<tr>
+<th>design</th>
+<th>group</th>
+<th>n</th>
+<th>mean |log2| full → omission</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>origin50</td>
+<td>surviving @ affected genes</td>
+<td>6,347</td>
+<td>0.9391 → 0.9348</td>
+</tr>
+<tr>
+<td>origin50</td>
+<td>surviving @ unaffected genes</td>
+<td>5,558</td>
+<td>0.5735 → 0.5703</td>
+</tr>
+</tbody>
+</table>
+<h2 id="2-the-mechanism-is-the-claimed-one-over-attribution">2. The mechanism is the claimed one (over-attribution)</h2>
+<p>Signed error at acted-on loci; positive = over-attributed.</p>
+<table>
+<thead>
+<tr>
+<th>design</th>
+<th>median log2(est/truth)</th>
+<th>% inflated &gt;2×</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>dominant25</td>
+<td>+0.0942 → +0.1249</td>
+<td>28.0% → 28.7%</td>
+</tr>
+<tr>
+<td>origin25</td>
+<td>+0.2023 → +0.1910</td>
+<td>31.3% → 26.0%</td>
+</tr>
+<tr>
+<td>origin50</td>
+<td><strong>+0.4329 → +0.2909</strong></td>
+<td><strong>39.1% → 33.0%</strong></td>
+</tr>
+</tbody>
+</table>
+<h2 id="3-dose-response-holds-to-extreme-incompleteness">3. Dose-response holds to extreme incompleteness</h2>
+<p>New holdouts at 75% and 90%. Global CCC, and error reduction on acted-on loci.</p>
+<table>
+<thead>
+<tr>
+<th>design</th>
+<th>orphaned mass</th>
+<th>CCC full</th>
+<th>CCC omission</th>
+<th>delta</th>
+<th>flagged loci</th>
+<th>acted-on error reduction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>dominant50</td>
+<td>21.5%</td>
+<td>0.85642</td>
+<td>0.85722</td>
+<td>+0.00080</td>
+<td>70</td>
+<td>−13.6% (n=196)</td>
+</tr>
+<tr>
+<td>dominant75</td>
+<td>31.2%</td>
+<td>0.84173</td>
+<td>0.84309</td>
+<td>+0.00136</td>
+<td>98</td>
+<td>−17.4% (n=270)</td>
+</tr>
+<tr>
+<td>dominant90</td>
+<td>40.0%</td>
+<td>0.83083</td>
+<td>0.83243</td>
+<td>+0.00160</td>
+<td>112</td>
+<td>−17.2% (n=311)</td>
+</tr>
+<tr>
+<td>origin75</td>
+<td>76.0%</td>
+<td>0.83310</td>
+<td>0.83515</td>
+<td>+0.00205</td>
+<td>78</td>
+<td>−16.2% (n=104)</td>
+</tr>
+<tr>
+<td>origin90</td>
+<td><strong>87.6%</strong></td>
+<td>0.78673</td>
+<td>0.78925</td>
+<td><strong>+0.00252</strong></td>
+<td>53</td>
+<td><strong>−19.0%</strong> (n=37)</td>
+</tr>
+</tbody>
+</table>
+<p>Monotone in incompleteness — the effect roughly triples from 21.5% to 87.6% orphaned.</p>
+<h2 id="4-detection-is-the-stronger-claim-high-precision-very-low-recall">4. Detection is the stronger claim: high precision, very low recall</h2>
+<p>Treating "is this locus incomplete?" as classification against holdout truth. A locus is
+a true positive if any member transcript's gene lost an expressed isoform.</p>
+<p><strong>origin50</strong> (7,969 genes lost ≥1 expressed isoform):</p>
+<table>
+<thead>
+<tr>
+<th>min flagged reads</th>
+<th>loci</th>
+<th>precision</th>
+<th>genes found</th>
+<th>recall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>161</td>
+<td>0.913</td>
+<td>155</td>
+<td>0.0195</td>
+</tr>
+<tr>
+<td>2</td>
+<td>104</td>
+<td>0.971</td>
+<td>110</td>
+<td>0.0138</td>
+</tr>
+<tr>
+<td>3</td>
+<td>89</td>
+<td><strong>1.000</strong></td>
+<td>98</td>
+<td>0.0123</td>
+</tr>
+<tr>
+<td>5</td>
+<td>75</td>
+<td><strong>1.000</strong></td>
+<td>82</td>
+<td>0.0103</td>
+</tr>
+<tr>
+<td>10</td>
+<td>55</td>
+<td><strong>1.000</strong></td>
+<td>60</td>
+<td>0.0075</td>
+</tr>
+<tr>
+<td>50</td>
+<td>27</td>
+<td><strong>1.000</strong></td>
+<td>31</td>
+<td>0.0039</td>
+</tr>
+</tbody>
+</table>
+<p><strong>origin25</strong> (4,770 affected): precision 0.787 → 1.000 over the same sweep, recall
+0.0180 → 0.0031. <strong>dominant25</strong> (1,413 affected): precision 0.522 → 0.944, recall
+0.0354 → 0.0127.</p>
+<p>Recall <strong>saturates at 2–3.5%</strong> even at the most permissive threshold: signal-limited,
+not threshold-limited.</p>
+<h3 id="recall-is-not-limited-by-the-annotation">Recall is not limited by the annotation</h3>
+<p>Is the deleted transcript's junction set a subset of some surviving sibling's (hence
+undetectable in principle)?</p>
+<table>
+<thead>
+<tr>
+<th>design</th>
+<th>lost txps</th>
+<th>single-exon</th>
+<th>juncs ⊆ survivor</th>
+<th>detectable ceiling</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>origin25</td>
+<td>5,952</td>
+<td>78</td>
+<td>283</td>
+<td><strong>93.9%</strong></td>
+</tr>
+<tr>
+<td>dominant25</td>
+<td>1,413</td>
+<td>2</td>
+<td>104</td>
+<td><strong>92.5%</strong></td>
+</tr>
+<tr>
+<td>origin50</td>
+<td>11,904</td>
+<td>206</td>
+<td>349</td>
+<td><strong>95.3%</strong></td>
+</tr>
+</tbody>
+</table>
+<p>93–95% are distinguishable in principle; we recover 2–4%.</p>
+<h2 id="5-where-the-reads-actually-go">5. Where the reads actually go</h2>
+<p>Junction-evidence accounting from the projection stage:</p>
+<table>
+<thead>
+<tr>
+<th>annotation</th>
+<th>reads projected</th>
+<th>junction-informative</th>
+<th>disagree with <strong>every</strong> candidate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>full</td>
+<td>1,356,492</td>
+<td>900,174 (66.4%)</td>
+<td>7,876 (0.87%)</td>
+</tr>
+<tr>
+<td>origin25</td>
+<td>1,160,521</td>
+<td>750,580 (64.7%)</td>
+<td>13,135 (1.75%)</td>
+</tr>
+<tr>
+<td>origin50</td>
+<td>871,411</td>
+<td>525,168 (60.3%)</td>
+<td>16,350 (3.11%)</td>
+</tr>
+</tbody>
+</table>
+<p>Reads vanishing from projection entirely vs the full annotation: <strong>195,971</strong> (origin25),
+<strong>485,081</strong> (origin50). The junction-mismatch channel the model consumes grows by only
+<strong>5,259</strong> and <strong>8,474</strong> over its full-annotation floor — 37× and 57× smaller.</p>
+<p>The 0.87% all-mismatch rate under the <em>correct</em> annotation is the false-positive floor
+(alignment/projection error). Signal rises to 1.75%/3.11% — only a 2–3.5× enrichment,
+which caps how aggressive the novel state can safely be.</p>
+<h2 id="6-three-arm-comparison">6. Three-arm comparison</h2>
+<table>
+<thead>
+<tr>
+<th>design</th>
+<th>arm</th>
+<th>CCC</th>
+<th>MARD</th>
+<th>reads assigned</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>origin25</td>
+<td>transcriptome (no compatibility filter)</td>
+<td>0.86916</td>
+<td>0.3217</td>
+<td>1,214,436</td>
+</tr>
+<tr>
+<td></td>
+<td>genome: filter only</td>
+<td>0.87772</td>
+<td>0.3090</td>
+<td>1,142,652</td>
+</tr>
+<tr>
+<td></td>
+<td>genome: filter + model</td>
+<td>0.87818</td>
+<td>0.3087</td>
+<td>1,140,903</td>
+</tr>
+<tr>
+<td>origin50</td>
+<td>transcriptome</td>
+<td>0.83729</td>
+<td>0.3640</td>
+<td>957,195</td>
+</tr>
+<tr>
+<td></td>
+<td>genome: filter only</td>
+<td>0.86512</td>
+<td>0.3289</td>
+<td>833,605</td>
+</tr>
+<tr>
+<td></td>
+<td>genome: filter + model</td>
+<td>0.86630</td>
+<td>0.3282</td>
+<td>830,166</td>
+</tr>
+<tr>
+<td>origin90</td>
+<td>transcriptome</td>
+<td>0.76788</td>
+<td>0.4273</td>
+<td>351,302</td>
+</tr>
+<tr>
+<td></td>
+<td>genome: filter only</td>
+<td>0.82558</td>
+<td>0.3661</td>
+<td>282,305</td>
+</tr>
+<tr>
+<td></td>
+<td>genome: filter + model</td>
+<td>0.82764</td>
+<td>0.3648</td>
+<td>281,285</td>
+</tr>
+</tbody>
+</table>
+<p>Genome-vs-transcriptome gap: +0.00856 / +0.02783 / +0.05770. <strong>Confounded</strong> — the arms
+differ in aligner (direct transcriptome mapping vs spliced genome alignment +
+projection), not only in filtering. Sections 7–8 remove that confound.</p>
+<h2 id="7-the-similarity-threshold-is-inert-negative-result">7. The similarity threshold is inert (negative result)</h2>
+<p>Exposed <code>similarity_threshold</code> on bramble's <code>ProjectionConfig</code> and as oarfish's hidden
+<code>--projection-similarity-threshold</code>. Sweeping it on origin25:</p>
+<table>
+<thead>
+<tr>
+<th>threshold</th>
+<th>CCC</th>
+<th>reads assigned</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0.60 (long-read default)</td>
+<td>0.878672</td>
+<td>1,142,806</td>
+</tr>
+<tr>
+<td>0.30</td>
+<td>0.878285</td>
+<td>1,142,838</td>
+</tr>
+<tr>
+<td>0.05</td>
+<td>0.878073</td>
+<td>1,142,847</td>
+</tr>
+</tbody>
+</table>
+<p>A 12× reduction admits <strong>41 more reads out of 1.14M</strong> (0.004%) and moves CCC by −0.0006.</p>
+<p><strong>The similarity threshold accounts for essentially none of oarfish's robustness to
+annotation incompleteness.</strong> Reads orphaned by a deleted isoform do not produce
+low-similarity candidates that get filtered — they produce <em>no viable exon-chain match
+at all</em>, so structural matching rejects them before similarity is ever evaluated.</p>
+<h2 id="8-the-junction-tolerances-are-the-real-filter">8. The junction tolerances are the real filter</h2>
+<p>Exposed <code>max_clip</code>, <code>max_junc_ins</code>, <code>max_junc_gap</code>, <code>max_error_exon</code>. Sweeping the
+junction triple (<code>max_clip</code> left at its default so the intervention targets splice
+disagreement specifically):</p>
+<table>
+<thead>
+<tr>
+<th>design</th>
+<th>tolerance</th>
+<th>reads</th>
+<th>CCC</th>
+<th>MARD</th>
+<th>vs default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>origin25</td>
+<td>40/40/35 (default)</td>
+<td>1,142,806</td>
+<td>0.87867</td>
+<td>0.3080</td>
+<td>—</td>
+</tr>
+<tr>
+<td></td>
+<td>120/120/120</td>
+<td>1,155,507</td>
+<td>0.87557</td>
+<td>0.3118</td>
+<td>+12,701 reads, CCC −0.00311</td>
+</tr>
+<tr>
+<td></td>
+<td>255/255/255</td>
+<td>1,160,352</td>
+<td>0.87341</td>
+<td>0.3136</td>
+<td>+17,546 reads, CCC −0.00527</td>
+</tr>
+<tr>
+<td>origin50</td>
+<td>40/40/35</td>
+<td>833,792</td>
+<td>0.86543</td>
+<td>0.3288</td>
+<td>—</td>
+</tr>
+<tr>
+<td></td>
+<td>120/120/120</td>
+<td>853,473</td>
+<td>0.85889</td>
+<td>0.3368</td>
+<td>+19,681 reads, CCC −0.00654</td>
+</tr>
+<tr>
+<td></td>
+<td>255/255/255</td>
+<td>864,613</td>
+<td>0.85403</td>
+<td>0.3419</td>
+<td>+30,821 reads, CCC −0.01140</td>
+</tr>
+<tr>
+<td>origin90</td>
+<td>40/40/35</td>
+<td>282,305</td>
+<td>0.82558</td>
+<td>0.3661</td>
+<td>—</td>
+</tr>
+<tr>
+<td></td>
+<td>120/120/120</td>
+<td>303,290</td>
+<td>0.80941</td>
+<td>0.3875</td>
+<td>+20,984 reads, CCC −0.01617</td>
+</tr>
+<tr>
+<td></td>
+<td>255/255/255</td>
+<td>309,105</td>
+<td>0.80402</td>
+<td>0.3961</td>
+<td>+26,800 reads, CCC −0.02157</td>
+</tr>
+</tbody>
+</table>
+<h2 id="9-final-decomposition">9. Final decomposition</h2>
+<table>
+<thead>
+<tr>
+<th>mechanism</th>
+<th>origin25</th>
+<th>origin50</th>
+<th>origin90</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>junction tolerance (40/40/35)</td>
+<td><strong>+0.00527</strong></td>
+<td><strong>+0.01140</strong></td>
+<td><strong>+0.02157</strong></td>
+</tr>
+<tr>
+<td>annotation-omission novel state</td>
+<td>+0.00046</td>
+<td>+0.00118</td>
+<td>+0.00206</td>
+</tr>
+<tr>
+<td>similarity threshold (0.60)</td>
+<td>~0 (41 reads)</td>
+<td>—</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<p>The tolerance filter beats the novel-state model by a consistent <strong>~10:1</strong> at every
+level of incompleteness, and both grow monotonically with it.</p>
+<p><strong>Most exclusion is unbridgeable, not tunable.</strong> At maximal permissiveness (255, the
+<code>u8</code> ceiling) only 17.5k–30.8k extra reads are admitted, against ~196k (origin25) and
+~485k (origin50) reads lost relative to the full annotation. So &gt;90% of orphaned reads
+have no viable exon chain in <em>any</em> surviving transcript — skipped exons are kb-scale
+while tolerances cap at 255 nt. That dominant term is structural, not a filter setting.</p>
+<p>The tolerance filter explains 62% / 41% / 37% of the genome-vs-transcriptome gap in §6;
+the remainder is the aligner/mode difference plus that structural term. Note also that
+relaxing tolerance can change which transcript wins for reads that <em>already</em> projected,
+so this is not purely an "admit extra reads" experiment — but it is same-aligner,
+same-mode, which was the confound it was designed to remove.</p>
+<hr />
+<h2 id="what-this-means-for-the-paper">What this means for the paper</h2>
+<p>The honest headline is <strong>not</strong> "the novel state improves accuracy" — that is a
+4th-decimal global effect on top of an already-robust baseline. It is:</p>
+<ol>
+<li><strong>Genome-projection mode is intrinsically robust to annotation incompleteness</strong>,
+   because structurally incompatible reads are excluded rather than misattributed.
+   Holding CCC 0.826 with 87.6% of library mass orphaned is a strong result by itself.</li>
+<li><strong>The annotation-omission model contributes reporting</strong> — near-perfect precision on
+   <em>which</em> loci are incomplete, a capability no competing tool offers — plus a 10–19%
+   error reduction on the loci it acts on.</li>
+</ol>
+<p>Recall (2–4%) is the honest weak point and should be stated as such.</p>
+<h2 id="code-state">Code state</h2>
+<ul>
+<li>bramble <code>ProjectionConfig</code> gained <code>similarity_threshold</code>, <code>max_clip</code>, <code>max_junc_ins</code>,
+  <code>max_junc_gap</code>, <code>max_error_exon</code> (all <code>Option</code>, <code>None</code> = existing presets); passed
+  through at the single <code>ReadEvaluator</code> construction site in <code>src/api.rs</code>.</li>
+<li>oarfish gained five matching hidden <code>--projection-*</code> flags.</li>
+<li><strong>Control:</strong> the default path is unchanged to last-ULP. The byte-identity gate did
+  <em>not</em> pass as written — 160 of 65,268 entries differ — but max absolute difference is
+  <strong>1.8e-12</strong> on values of order 10⁶, with column sums exactly equal. That is
+  accumulation-order nondeterminism in the 16-thread run; a read being admitted or
+  excluded moves mass by O(1), not 10⁻¹².</li>
+<li>All uncommitted. The bramble <strong>path dependency</strong> in <code>oarfish/Cargo.toml</code> remains the
+  outstanding release blocker.</li>
+</ul>
+<h2 id="deferred">Deferred</h2>
+<p>Tag loci with non-trivial unprojectable reads → local transcript discovery/assembly →
+re-quantify overlapping annotated and novel transcripts. Recorded separately; deserves
+its own push.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": [], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+        <script src="../javascripts/mathjax.js"></script>
+      
+        <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
