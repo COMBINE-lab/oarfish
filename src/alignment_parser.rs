@@ -543,6 +543,10 @@ fn project_and_add_group(
     query_name: &str,
     records_for_read: &[RecordBuf],
     dump: Option<&mut crate::util::projection::ProjectionDumpWriter>,
+    // (--model-unannotated-isoforms, --novel-from-failures): track
+    // projection-failed reads' locus overlap; additionally keep the
+    // per-read overlapped-transcript sets as novel-locus evidence.
+    track_failures: (bool, bool),
 ) -> anyhow::Result<bool> {
     // build GenomicAlignments and a parallel vector of their alignment scores
     // (the BAM `AS` tag, if present) used by the score/combined prob sources.
@@ -573,6 +577,26 @@ fn project_and_add_group(
         dw.write_group(query_name, &projected, &diags, &src_scores, read_len)?;
     }
     if projected.is_empty() {
+        // Projection-failed read: under --model-unannotated-isoforms attribute
+        // it to the loci its genomic alignments overlap (parity with the
+        // genome-reads path), and under --novel-from-failures additionally
+        // retain the overlapped-transcript set as novel-locus evidence.
+        if track_failures.0 {
+            store.unprojectable_reads += 1;
+            let overlaps = crate::util::projection::overlapping_transcripts(&alns, g2t);
+            if overlaps.is_empty() {
+                store.unprojectable_intergenic += 1;
+            } else {
+                for tid in &overlaps {
+                    if let Some(slot) = store.unprojectable_per_txp.get_mut(*tid as usize) {
+                        *slot += 1;
+                    }
+                }
+                if track_failures.1 {
+                    store.add_failed_novel_read(overlaps);
+                }
+            }
+        }
         return Ok(false);
     }
     let recs = projected_to_records(&projected, &src_scores);
@@ -600,6 +624,7 @@ pub fn parse_genome_alignments<R: io::BufRead>(
     check_order_thresh: usize,
     quiet: bool,
     mut dump: Option<&mut crate::util::projection::ProjectionDumpWriter>,
+    track_failures: (bool, bool),
 ) -> anyhow::Result<()> {
     use rustc_hash::FxHashSet;
 
@@ -672,6 +697,7 @@ pub fn parse_genome_alignments<R: io::BufRead>(
                     &prev_read,
                     &records_for_read,
                     dump.as_deref_mut(),
+                    track_failures,
                 )?
             {
                 add_read_name(&records_for_read);
@@ -712,6 +738,7 @@ pub fn parse_genome_alignments<R: io::BufRead>(
             &prev_read,
             &records_for_read,
             dump.as_deref_mut(),
+            track_failures,
         )?
     {
         add_read_name(&records_for_read);

@@ -146,10 +146,15 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                             accel: crate::prog_opts::EmAccel::None,
                             count_floor: args.count_floor,
                             convergence_l1_thresh: args.convergence_l1_thresh,
+                            presence_model: crate::prog_opts::PresenceModel::None,
+                            presence_warmup: args.presence_warmup,
+                            presence_period: args.presence_period,
+                            presence_rho: args.presence_rho,
                             init_abundances: None,
                             kde_model: None,
                             novel_locus: Vec::new(),
                             novel_loci: 0,
+                            novel_base_mass: Vec::new(),
                             novel_odds_per_miss: 1.0,
                         };
                         // run the EM for this cell

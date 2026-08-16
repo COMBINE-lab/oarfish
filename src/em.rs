@@ -306,6 +306,172 @@ pub struct EMResult {
     pub counts: Vec<f64>,
     pub evaluations: u32,
     pub converged: bool,
+    /// Per-transcript presence probability `q_t` when `--presence-model` is
+    /// active; `None` otherwise. Indexed like `counts` (novel states pinned
+    /// at 1.0).
+    pub presence: Option<Vec<f64>>,
+}
+
+/// Spike-and-slab presence machinery (`--presence-model spike-slab`).
+///
+/// Each transcript carries a Bernoulli presence posterior `q_t`. The M-step
+/// sees the *effective* abundance `q_t * counts[t]`, which is the standard
+/// zero-inflated EM update: a transcript with low presence probability
+/// competes for shared reads at a discount and its ambiguous mass drains to
+/// its supported competitors, while reads unique to a transcript always keep
+/// it (their evidence drives `q_t -> 1`). `q` is refreshed every
+/// `period` evaluations (after `warmup`) from a leave-one-out evidence pass:
+///
+///   delta_t = sum over reads touching t of
+///               m_r * ln( (rest_r + slab_t·w) / rest_r ),
+///   q_t     = sigmoid( delta_t + logit(rho) ),
+///
+/// where `rest_r` is the read's denominator without t and `slab_t =
+/// counts[t]/max(q_t, 1e-3)` (the abundance conditional on presence).
+///
+/// `delta_t` is a leave-one-out log-likelihood *gain* and is therefore always
+/// >= 0 (adding a mixture component never lowers a read's likelihood), so the
+/// prior `rho` must act as a fixed penalty: an empirical-Bayes update of the
+/// form `rho = mean(q)` only ratchets upward and suppresses nothing. `rho`
+/// is a fixed prior (`--presence-rho`, default 0.05, logit ~= -2.94). The
+/// units are interpretable: for a transcript holding small posterior shares,
+/// `delta_t ~= sum of its read shares ~= its assigned read count`, so the
+/// default demands roughly three effective exclusive reads for q > 0.5 —
+/// smoothly, and self-reinforcing through the q-discounted M-step in both
+/// directions (a suppressed transcript's shares shrink, a supported one's
+/// grow).
+struct PresenceState {
+    q: Vec<f64>,
+    eff: Vec<f64>,
+    delta: Vec<f64>,
+    touched: Vec<bool>,
+    rho: f64,
+    calls: u32,
+    warmup: u32,
+    period: u32,
+    n_txps: usize,
+}
+
+impl PresenceState {
+    fn new(n_txps: usize, n_states: usize, warmup: u32, period: u32, rho: f64) -> Self {
+        Self {
+            q: vec![1.0; n_states],
+            eff: vec![0.0; n_states],
+            delta: vec![0.0; n_txps],
+            touched: vec![false; n_txps],
+            rho,
+            calls: 0,
+            warmup,
+            period: period.max(1),
+            n_txps,
+        }
+    }
+
+    /// Per-read clamp on the log-evidence term (a single unique read saturates
+    /// here) and overall clamp on delta before the sigmoid.
+    const READ_LOG_CAP: f64 = 50.0;
+    const DELTA_CAP: f64 = 40.0;
+    const EPS: f64 = 1e-100;
+
+    fn update_q(
+        &mut self,
+        classes: &[PreparedEq],
+        weights: &[f64],
+        novel: &[NovelSlot],
+        counts: &[f64],
+    ) {
+        self.delta.fill(0.0);
+        let modelling_novel = !novel.is_empty();
+        for (index, class) in classes.iter().enumerate() {
+            let m = class.multiplicity as f64;
+            let ws = &weights[class.weight_start..class.weight_start + class.alignments.len()];
+            let mut denom = 0.0;
+            for (a, w) in class.alignments.iter().zip(ws) {
+                let t = a.ref_id as usize;
+                denom += self.q[t] * counts[t] * w;
+            }
+            if modelling_novel {
+                let slot = novel[index];
+                if slot.id != usize::MAX {
+                    denom += counts[slot.id] * slot.weight;
+                }
+            }
+            // Per-tid leave-one-out: contribution of t at slab strength vs
+            // its current effective contribution. Candidate lists are short,
+            // so the quadratic-in-duplicates handling below (skip repeated
+            // tids) costs nothing in practice.
+            for (i, (a, w)) in class.alignments.iter().zip(ws).enumerate() {
+                let t = a.ref_id as usize;
+                if class.alignments[..i].iter().any(|b| b.ref_id == a.ref_id) {
+                    continue; // this tid already handled for this class
+                }
+                self.touched[t] = true;
+                // summed weight of t's alignments in this class
+                let mut w_sum = *w;
+                for (b, wb) in class.alignments.iter().zip(ws).skip(i + 1) {
+                    if b.ref_id == a.ref_id {
+                        w_sum += wb;
+                    }
+                }
+                let eff_contrib = self.q[t] * counts[t] * w_sum;
+                let rest = (denom - eff_contrib).max(0.0);
+                let slab = counts[t] / self.q[t].max(1e-3);
+                let term = ((rest + slab * w_sum + Self::EPS) / (rest + Self::EPS))
+                    .ln()
+                    .min(Self::READ_LOG_CAP);
+                self.delta[t] += m * term;
+            }
+        }
+        let logit_rho = (self.rho / (1.0 - self.rho)).ln();
+        for t in 0..self.n_txps {
+            if !self.touched[t] {
+                continue;
+            }
+            let d = self.delta[t].clamp(0.0, Self::DELTA_CAP);
+            self.q[t] = 1.0 / (1.0 + (-(d + logit_rho)).exp());
+        }
+    }
+}
+
+/// Run the EM driver, optionally wrapping the fixed point with the
+/// spike-and-slab presence model. `classes`/`weights`/`novel` are the same
+/// prepared structures the fixed point iterates; they are needed again for
+/// the leave-one-out evidence pass.
+fn drive_with_presence(
+    em_info: &EMInfo,
+    classes: &[PreparedEq],
+    weights: &[f64],
+    novel: &[NovelSlot],
+    mut inner: impl FnMut(&[f64], &mut [f64]),
+    do_log: bool,
+    allow_presence: bool,
+) -> EMResult {
+    use crate::prog_opts::PresenceModel;
+    if !allow_presence || em_info.presence_model == PresenceModel::None {
+        return run_driver(em_info, &mut inner, do_log);
+    }
+    let n_txps = em_info.txp_info.len();
+    let n_states = n_txps + em_info.novel_loci;
+    let mut st = PresenceState::new(
+        n_txps,
+        n_states,
+        em_info.presence_warmup,
+        em_info.presence_period,
+        em_info.presence_rho,
+    );
+    let mut wrapped = |src: &[f64], dst: &mut [f64]| {
+        st.calls += 1;
+        if st.calls > st.warmup && (st.calls - st.warmup).is_multiple_of(st.period) {
+            st.update_q(classes, weights, novel, src);
+        }
+        for i in 0..src.len() {
+            st.eff[i] = st.q[i] * src[i];
+        }
+        inner(&st.eff, dst);
+    };
+    let mut result = run_driver(em_info, &mut wrapped, do_log);
+    result.presence = Some(std::mem::take(&mut st.q));
+    result
 }
 
 fn convergence_distance(previous: &[f64], current: &[f64]) -> f64 {
@@ -471,6 +637,7 @@ fn run_driver(
         counts: next,
         evaluations,
         converged,
+        presence: None,
     }
 }
 
@@ -486,17 +653,23 @@ pub fn em(em_info: &EMInfo, _nthreads: usize) -> EMResult {
     let (eq_iterates, weights, novel) = prepare_equivalence_classes(em_info, true);
     // Dispatch once, outside the fixed point, so the hot loop is monomorphic.
     if em_info.novel_loci > 0 {
-        let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
+        let n_txps = em_info.txp_info.len();
+        let fixed_point = |src: &[f64], dst: &mut [f64]| {
             dst.fill(0.0);
             m_step_prepared::<true>(&eq_iterates, &weights, &novel, src, dst);
+            // Projection-failed reads are deterministic single-candidate
+            // reads of their locus's novel state (--novel-from-failures).
+            for (locus, mass) in em_info.novel_base_mass.iter().enumerate() {
+                dst[n_txps + locus] += mass;
+            }
         };
-        run_driver(em_info, &mut fixed_point, true)
+        drive_with_presence(em_info, &eq_iterates, &weights, &novel, fixed_point, true, true)
     } else {
-        let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
+        let fixed_point = |src: &[f64], dst: &mut [f64]| {
             dst.fill(0.0);
             m_step_prepared::<false>(&eq_iterates, &weights, &novel, src, dst);
         };
-        run_driver(em_info, &mut fixed_point, true)
+        drive_with_presence(em_info, &eq_iterates, &weights, &novel, fixed_point, true, true)
     }
 }
 
@@ -567,15 +740,25 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> EMResult {
     let mut shards = vec![vec![0.0; n_states]; shard_count];
     // Dispatch once, outside the fixed point, so the hot loop is monomorphic.
     if em_info.novel_loci > 0 {
-        let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
+        let n_txps = em_info.txp_info.len();
+        let fixed_point = |src: &[f64], dst: &mut [f64]| {
             m_step_par::<true>(&eq_iterates, &weights, &novel, src, dst, &mut shards);
+            // Projection-failed reads are deterministic single-candidate
+            // reads of their locus's novel state (--novel-from-failures).
+            for (locus, mass) in em_info.novel_base_mass.iter().enumerate() {
+                dst[n_txps + locus] += mass;
+            }
         };
-        pool.install(|| run_driver(em_info, &mut fixed_point, true))
+        pool.install(|| {
+            drive_with_presence(em_info, &eq_iterates, &weights, &novel, fixed_point, true, true)
+        })
     } else {
-        let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
+        let fixed_point = |src: &[f64], dst: &mut [f64]| {
             m_step_par::<false>(&eq_iterates, &weights, &novel, src, dst, &mut shards);
         };
-        pool.install(|| run_driver(em_info, &mut fixed_point, true))
+        pool.install(|| {
+            drive_with_presence(em_info, &eq_iterates, &weights, &novel, fixed_point, true, true)
+        })
     }
 }
 

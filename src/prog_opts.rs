@@ -26,6 +26,18 @@ pub enum EmAccel {
     Daarem,
 }
 
+/// Presence/absence component for the bulk EM.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
+pub enum PresenceModel {
+    /// No presence modelling (historical behavior).
+    #[default]
+    None,
+    /// Spike-and-slab: per-transcript Bernoulli presence posterior with an
+    /// empirical-Bayes prior; the M-step sees presence-discounted abundances
+    /// (zero-inflated EM).
+    SpikeSlab,
+}
+
 /// Coverage evidence included in bulk read-assignment likelihoods.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
 pub enum CoverageModel {
@@ -608,6 +620,14 @@ pub struct Args {
     /// mistaken for novel isoforms
     #[arg(long, help_heading = "coverage model")]
     pub novel_require_hits: bool,
+    /// count reads that FAIL projection entirely (an aligned segment outside
+    /// every annotated exon, or every candidate eliminated) as novel-isoform
+    /// evidence at the loci their genomic alignments overlap. These reads are
+    /// the majority of a missing isoform's reads (~55% vs the ~2% that project
+    /// with junction mismatches) and currently vanish before any signal is
+    /// recorded. Requires --model-unannotated-isoforms.
+    #[arg(long, help_heading = "unannotated isoforms")]
+    pub novel_from_failures: bool,
     /// if using the coverage model, use this as the value of `k` in the logistic equation
     #[arg(
         short = 'k',
@@ -693,6 +713,28 @@ pub struct Args {
     /// transcripts.
     #[arg(long, help_heading = "EM", default_value_t = 1e-5)]
     pub count_floor: f64,
+
+    /// presence/absence model: each transcript carries a Bernoulli presence
+    /// posterior that discounts its effective abundance during the EM
+    /// (zero-inflated EM). Suppresses low-evidence false-positive transcripts
+    /// probabilistically instead of by threshold; posteriors are written to
+    /// `<prefix>.presence.tsv`.
+    #[arg(long, help_heading = "EM", value_enum, default_value_t = PresenceModel::None)]
+    pub presence_model: PresenceModel,
+
+    /// evaluations before the first presence update
+    #[arg(long, hide = true, default_value_t = 50)]
+    pub presence_warmup: u32,
+
+    /// evaluations between presence updates
+    #[arg(long, hide = true, default_value_t = 10)]
+    pub presence_period: u32,
+
+    /// presence prior probability (fixed penalty; logit(rho) is subtracted
+    /// from each transcript's leave-one-out log-evidence). Roughly the number
+    /// of effective exclusive reads demanded for presence is -logit(rho).
+    #[arg(long, hide = true, default_value_t = 0.05)]
+    pub presence_rho: f64,
 
     /// number of cores that oarfish will use during different phases
     /// of quantification. Note: This value will be at least 2 for bulk

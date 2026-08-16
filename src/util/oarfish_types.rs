@@ -518,6 +518,17 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     /// when `sum |delta count| / sum count` between successive iterates falls
     /// below this value. 0 disables (per-transcript criterion only).
     pub convergence_l1_thresh: f64,
+    /// Presence/absence component (`--presence-model`). When active, each
+    /// transcript carries a Bernoulli presence posterior that discounts its
+    /// effective abundance in the M-step (zero-inflated EM); the posterior is
+    /// written to `<prefix>.presence.tsv`.
+    pub presence_model: crate::prog_opts::PresenceModel,
+    /// Evaluations before the first presence update.
+    pub presence_warmup: u32,
+    /// Evaluations between presence updates.
+    pub presence_period: u32,
+    /// Initial presence prior (re-estimated by empirical Bayes).
+    pub presence_rho: f64,
     /// Per-read index of a *novel* (unannotated-isoform) latent state, or -1.
     ///
     /// A read whose splice structure disagrees with every annotated candidate is
@@ -528,6 +539,13 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     pub novel_locus: Vec<i32>,
     /// Number of distinct novel states (loci) addressed by `novel_locus`.
     pub novel_loci: usize,
+    /// Per novel locus: constant mass contributed by projection-*failed*
+    /// reads (`--novel-from-failures`). These reads have no annotated
+    /// candidates, so their EM contribution is exactly one deterministic read
+    /// to their locus's novel state; adding it as a constant each M-step is
+    /// equivalent to carrying them as single-candidate reads. Empty when the
+    /// feature is off.
+    pub novel_base_mass: Vec<f64>,
     /// Odds multiplier per unmatched internal junction favouring the novel
     /// state over the best annotated candidate.
     pub novel_odds_per_miss: f64,
@@ -669,6 +687,15 @@ pub struct InMemoryAlignmentStore<'h> {
     /// to loci without claiming which transcript it came from. Empty unless
     /// `--model-unannotated-isoforms` is set.
     pub unprojectable_per_txp: Vec<u32>,
+    /// Per projection-*failed* read (`--novel-from-failures`): the annotated
+    /// transcripts whose exons the read's genomic alignments overlap (deduped,
+    /// capped). These reads never enter the alignment store — they are the
+    /// 55% of missing-isoform reads whose projection fails outright — but they
+    /// carry locus-level evidence for the unannotated-isoform model: they join
+    /// the ambiguity components of their overlapped transcripts, count toward
+    /// the novel-locus read gate, and contribute constant mass to the novel
+    /// latent state.
+    pub failed_novel_txps: Vec<Vec<u32>>,
     /// Per *read*: the smallest number of internal junction mismatches achieved
     /// by any candidate. Zero means some annotated transcript explains the
     /// read's splice structure, so the read is not evidence of an annotation
@@ -743,6 +770,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
             unprojectable_reads: 0,
             unprojectable_intergenic: 0,
             unprojectable_per_txp: Vec::new(),
+            failed_novel_txps: Vec::new(),
             min_junc_misses: vec![],
             max_junc_hits: vec![],
             coverage_probabilities: vec![],
@@ -868,6 +896,16 @@ impl<'h> InMemoryAlignmentStore<'h> {
     }
 
     #[inline(always)]
+    /// Record a projection-failed read's overlapped transcripts as
+    /// novel-locus evidence (`--novel-from-failures`). Capped so a read
+    /// overlapping a dense locus stack cannot bloat memory; the first entries
+    /// suffice for component assignment.
+    pub fn add_failed_novel_read(&mut self, mut txps: Vec<u32>) {
+        const MAX_FAILED_TXPS: usize = 16;
+        txps.truncate(MAX_FAILED_TXPS);
+        self.failed_novel_txps.push(txps);
+    }
+
     pub fn inc_unique_alignments(&mut self) {
         self.num_unique_alignments += 1;
     }

@@ -91,6 +91,11 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
     // attribution that only projection produces; in transcriptome mode there is
     // no splice structure to disagree with, so the flag would silently do
     // nothing.
+    if args.novel_from_failures && !args.model_unannotated_isoforms {
+        anyhow::bail!(
+            "--novel-from-failures extends --model-unannotated-isoforms and requires it."
+        );
+    }
     if args.model_unannotated_isoforms && args.genome.is_none() && args.genome_alignments.is_none()
     {
         anyhow::bail!(

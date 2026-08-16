@@ -110,6 +110,7 @@ fn get_json_info(
 /// on a multi-candidate read are their own singleton component.
 fn ambiguity_components<'a>(
     groups: impl Iterator<Item = &'a [AlnInfo]>,
+    extra_groups: &[Vec<u32>],
     num_txps: usize,
 ) -> Vec<usize> {
     let mut parent: Vec<usize> = (0..num_txps).collect();
@@ -130,6 +131,21 @@ fn ambiguity_components<'a>(
         let first = find(&mut parent, alns[0].ref_id as usize);
         for aln in &alns[1..] {
             let other = find(&mut parent, aln.ref_id as usize);
+            if other != first {
+                parent[other] = first;
+            }
+        }
+    }
+    // Extra co-occurrence groups (e.g. the overlapped-transcript sets of
+    // projection-failed reads): a read spanning several transcripts' exons
+    // links them exactly as a shared ambiguous alignment would.
+    for set in extra_groups {
+        if set.len() < 2 {
+            continue;
+        }
+        let first = find(&mut parent, set[0] as usize);
+        for t in &set[1..] {
+            let other = find(&mut parent, *t as usize);
             if other != first {
                 parent[other] = first;
             }
@@ -221,8 +237,15 @@ fn perform_inference_and_write_output(
     let mut novel_loci = 0usize;
     // locus id -> (member transcript ids, flagged read count), for the report.
     let mut novel_members: Vec<(Vec<u32>, usize)> = Vec::new();
+    // locus id -> projection-failed read count (--novel-from-failures); also
+    // the constant mass injected into the locus's novel state in the EM.
+    let mut novel_base_mass: Vec<f64> = Vec::new();
     if args.models_unannotated_isoforms() && !store.min_junc_misses.is_empty() {
-        let components = ambiguity_components(store.iter().map(|(alns, _, _)| alns), txps.len());
+        let components = ambiguity_components(
+            store.iter().map(|(alns, _, _)| alns),
+            &store.failed_novel_txps,
+            txps.len(),
+        );
         let mut dense: std::collections::HashMap<usize, i32> = std::collections::HashMap::new();
         novel_locus = vec![-1; store.len()];
         for (read_index, slot) in novel_locus.iter_mut().enumerate() {
@@ -246,11 +269,28 @@ fn perform_inference_and_write_output(
             let id = *dense.entry(root).or_insert(next);
             *slot = id;
         }
+        // Projection-failed reads (--novel-from-failures) are locus-level
+        // novel evidence too — and the majority of it: a read from a missing
+        // isoform usually fails projection outright rather than projecting
+        // with junction mismatches. They can create a locus on their own.
+        let mut failed_per_locus: Vec<usize> = Vec::new();
+        for set in &store.failed_novel_txps {
+            let Some(&t0) = set.first() else { continue };
+            let root = components[t0 as usize];
+            let next = dense.len() as i32;
+            let id = *dense.entry(root).or_insert(next) as usize;
+            if failed_per_locus.len() <= id {
+                failed_per_locus.resize(id + 1, 0);
+            }
+            failed_per_locus[id] += 1;
+        }
+        failed_per_locus.resize(dense.len(), 0);
         // Drop loci that accumulated too little evidence, and re-densify. A
         // handful of disagreeing reads at a locus is alignment noise; a real
-        // unannotated isoform accumulates many.
+        // unannotated isoform accumulates many. Flagged (junction-mismatch)
+        // and projection-failed reads count jointly toward the gate.
         if args.novel_min_locus_reads > 1 {
-            let mut per_locus = vec![0usize; dense.len()];
+            let mut per_locus = failed_per_locus.clone();
             for &id in &novel_locus {
                 if id >= 0 {
                     per_locus[id as usize] += 1;
@@ -277,8 +317,15 @@ fn perform_inference_and_write_output(
                 *v = remap[*v as usize];
             }
             novel_loci = next as usize;
+            novel_base_mass = vec![0.0; novel_loci];
+            for (old_id, count) in failed_per_locus.iter().enumerate() {
+                if remap[old_id] >= 0 {
+                    novel_base_mass[remap[old_id] as usize] = *count as f64;
+                }
+            }
         } else {
             novel_loci = dense.len();
+            novel_base_mass = failed_per_locus.iter().map(|c| *c as f64).collect();
         }
         // Members of each surviving locus, so the report can name it. There is
         // no gene label to key on: bramble carries transcript names only, and a
@@ -304,18 +351,22 @@ fn perform_inference_and_write_output(
             }
         }
         let flagged = novel_locus.iter().filter(|v| **v >= 0).count();
+        let failed_total: f64 = novel_base_mass.iter().sum();
         info!(
             novel_loci,
             flagged_reads = flagged,
+            failed_reads = failed_total,
             odds_per_miss = args.novel_odds_per_miss,
             min_misses = args.novel_min_misses,
             min_locus_reads = args.novel_min_locus_reads,
             require_hits = args.novel_require_hits,
+            from_failures = args.novel_from_failures,
             "annotation-omission model: novel latent states created"
         );
         coverage_diagnostics["annotation_omission"] = json!({
             "novel_loci": novel_loci,
             "flagged_reads": flagged,
+            "failed_reads": failed_total,
             "odds_per_miss": args.novel_odds_per_miss,
         });
     }
@@ -330,10 +381,15 @@ fn perform_inference_and_write_output(
         accel: args.em_accel,
         count_floor: args.count_floor,
         convergence_l1_thresh: args.convergence_l1_thresh,
+        presence_model: args.presence_model,
+        presence_warmup: args.presence_warmup,
+        presence_period: args.presence_period,
+        presence_rho: args.presence_rho,
         init_abundances,
         kde_model: kde_opt,
         novel_locus,
         novel_loci,
+        novel_base_mass,
         novel_odds_per_miss: args.novel_odds_per_miss,
     };
 
@@ -361,7 +417,11 @@ fn perform_inference_and_write_output(
     let em_time = em_start.elapsed();
     let total: f64 = em_result.counts.iter().sum();
     if total > 0.0 {
-        let scale = store.num_aligned_reads() as f64 / total;
+        // Projection-failed reads injected into novel states
+        // (--novel-from-failures) are real reads: include them in the library
+        // size so annotated counts keep their scale.
+        let failed_mass: f64 = emi.novel_base_mass.iter().sum();
+        let scale = (store.num_aligned_reads() as f64 + failed_mass) / total;
         em_result
             .counts
             .iter_mut()
@@ -384,7 +444,7 @@ fn perform_inference_and_write_output(
         use std::io::Write;
         writeln!(
             w,
-            "locus\tgene\tn_transcripts\tflagged_reads\tunprojectable_reads\tunexplained_mass\tannotated_mass\tunexplained_fraction\ttranscripts"
+            "locus\tgene\tn_transcripts\tflagged_reads\tfailed_reads\tunprojectable_reads\tunexplained_mass\tannotated_mass\tunexplained_fraction\ttranscripts"
         )?;
         let n_txps = txps.len();
         let mut reported = 0usize;
@@ -426,11 +486,12 @@ fn perform_inference_and_write_output(
                 .unwrap_or(0);
             writeln!(
                 w,
-                "{}\t{}\t{}\t{}\t{}\t{:.3}\t{:.3}\t{:.4}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{:.3}\t{:.3}\t{:.4}\t{}",
                 id,
                 gene,
                 members.len(),
                 flagged,
+                emi.novel_base_mass.get(id).copied().unwrap_or(0.0) as u64,
                 unprojectable,
                 unexplained,
                 annotated,
@@ -483,6 +544,34 @@ fn perform_inference_and_write_output(
     let counts = &em_result.counts;
 
     let aux_txp_counts = crate::util::aux_counts::get_aux_counts(store, txps)?;
+
+    // Presence posteriors (--presence-model): one row per transcript with the
+    // Bernoulli presence probability and the evidence a reader needs to judge
+    // it (unique reads, estimated reads).
+    if let Some(presence) = &em_result.presence {
+        let mut path = args.output.as_ref().expect("output prefix").clone();
+        let mut name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        name.push_str(".presence.tsv");
+        path.set_file_name(name);
+        let mut w = std::io::BufWriter::new(std::fs::File::create(&path)?);
+        use std::io::Write;
+        writeln!(w, "tname\tlen\tpresence_prob\tunique_reads\test_reads")?;
+        for (i, name) in txps_name.iter().enumerate() {
+            writeln!(
+                w,
+                "{}\t{}\t{:.6}\t{}\t{:.3}",
+                name,
+                txps[i].len,
+                presence.get(i).copied().unwrap_or(1.0),
+                aux_txp_counts[i].unique_count,
+                counts.get(i).copied().unwrap_or(0.0),
+            )?;
+        }
+        info!(path = %path.display(), "wrote presence posteriors");
+    }
 
     // prepare the JSON object we'll write
     // to meta_info.json
@@ -635,6 +724,9 @@ pub fn quantify_genome_alignments_from_bam<R: BufRead>(
     // the store keys alignments by transcript, so it lives over the
     // transcriptome header.
     let mut store = InMemoryAlignmentStore::new(filter_opts, txp_header);
+    if args.models_unannotated_isoforms() {
+        store.unprojectable_per_txp = vec![0; txps.len()];
+    }
     let mut proj_dump = args
         .projection_dump
         .as_deref()
@@ -654,6 +746,10 @@ pub fn quantify_genome_alignments_from_bam<R: BufRead>(
         args.sort_check_num,
         args.quiet,
         proj_dump.as_mut(),
+        (
+            args.models_unannotated_isoforms(),
+            args.novel_from_failures,
+        ),
     )?;
     if let Some(dw) = proj_dump.take() {
         dw.finish()?;
@@ -832,6 +928,12 @@ pub fn quantify_genome_raw_reads(
                 } else {
                     Vec::new()
                 });
+            // --novel-from-failures: per-failed-read overlapped-transcript
+            // sets, appended by mapper workers. Contention is negligible:
+            // failures are a small fraction of reads and each append is tiny.
+            let keep_failed_sets = args.novel_from_failures;
+            let failed_novel_sets: std::sync::Arc<std::sync::Mutex<Vec<Vec<u32>>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
             // Mapper threads: align each read to the genome, then project its
             // mappings onto the transcriptome and filter.
             let consumers: Vec<_> = (0..map_threads)
@@ -846,6 +948,7 @@ pub fn quantify_genome_raw_reads(
                     let loc_unprojectable = n_unprojectable.clone();
                     let loc_unprojectable_intergenic = n_unprojectable_intergenic.clone();
                     let loc_unprojectable_per_txp = unprojectable_per_txp.clone();
+                    let loc_failed_novel_sets = failed_novel_sets.clone();
                     let n_genome_mapped = std::sync::Arc::clone(&n_genome_mapped);
                     let n_projected = std::sync::Arc::clone(&n_projected);
 
@@ -926,15 +1029,23 @@ pub fn quantify_genome_raw_reads(
                                             loc_unprojectable_intergenic
                                                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                         }
-                                        for tid in overlaps {
+                                        for tid in &overlaps {
                                             if let Some(slot) =
-                                                loc_unprojectable_per_txp.get(tid as usize)
+                                                loc_unprojectable_per_txp.get(*tid as usize)
                                             {
                                                 slot.fetch_add(
                                                     1,
                                                     std::sync::atomic::Ordering::Relaxed,
                                                 );
                                             }
+                                        }
+                                        if keep_failed_sets && !overlaps.is_empty() {
+                                            let mut sets = loc_failed_novel_sets
+                                                .lock()
+                                                .expect("failed-set mutex poisoned");
+                                            let mut o = overlaps;
+                                            o.truncate(16);
+                                            sets.push(o);
                                         }
                                     }
                                     continue;
@@ -1129,6 +1240,11 @@ pub fn quantify_genome_raw_reads(
                     .iter()
                     .map(|c| c.load(std::sync::atomic::Ordering::Relaxed))
                     .collect();
+                if keep_failed_sets {
+                    store.failed_novel_txps = std::mem::take(
+                        &mut *failed_novel_sets.lock().expect("failed-set mutex poisoned"),
+                    );
+                }
                 let attributed = store.unprojectable_reads - store.unprojectable_intergenic;
                 info!(
                     "unprojectable reads: {} ({} attributable to an annotated locus, {} intergenic) -- reported, not quantified",
@@ -1570,7 +1686,7 @@ mod ambiguity_component_tests {
     }
 
     fn components_of(groups: &[Vec<AlnInfo>], n: usize) -> Vec<usize> {
-        ambiguity_components(groups.iter().map(|g| g.as_slice()), n)
+        ambiguity_components(groups.iter().map(|g| g.as_slice()), &[], n)
     }
 
     #[test]
