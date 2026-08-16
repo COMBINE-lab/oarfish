@@ -514,6 +514,10 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     /// their mass redistributed by one final fixed-point evaluation.  Values
     /// at or below `MIN_READ_THRESH` reproduce the historical behavior.
     pub count_floor: f64,
+    /// Secondary, mass-weighted convergence criterion: declare convergence
+    /// when `sum |delta count| / sum count` between successive iterates falls
+    /// below this value. 0 disables (per-transcript criterion only).
+    pub convergence_l1_thresh: f64,
     /// Per-read index of a *novel* (unannotated-isoform) latent state, or -1.
     ///
     /// A read whose splice structure disagrees with every annotated candidate is

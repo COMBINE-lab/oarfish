@@ -329,6 +329,7 @@ fn perform_inference_and_write_output(
         convergence_thresh: args.convergence_thresh,
         accel: args.em_accel,
         count_floor: args.count_floor,
+        convergence_l1_thresh: args.convergence_l1_thresh,
         init_abundances,
         kde_model: kde_opt,
         novel_locus,

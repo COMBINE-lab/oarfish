@@ -374,13 +374,30 @@ fn run_driver(
     // step so --max-em-iter is a strict total M-step budget.
     let iteration_budget = em_info.max_iter.saturating_sub(1);
 
+    // Combined stopping rule. The per-transcript L-infinity criterion demands
+    // that every active transcript's relative change fall below the threshold;
+    // at ~200k transcripts there is essentially always some low-count
+    // transcript in slow geometric decay (~0.1-1%/iteration), so that bar is
+    // unreachable within any practical budget even under acceleration, while
+    // the aggregate estimate is long since stable. The mass-weighted
+    // relative-L1 (sum |delta| / sum counts) captures the latter: when it
+    // falls below `convergence_l1_thresh`, total count movement per iteration
+    // is a negligible fraction of the library and we declare convergence.
+    let l1_thresh = em_info.convergence_l1_thresh;
+    let distance = |p: &[f64], c: &[f64]| -> f64 {
+        if l1_thresh > 0.0 && relative_l1(p, c) < l1_thresh {
+            return 0.0;
+        }
+        convergence_distance(p, c)
+    };
+
     let converged = match em_info.accel {
         crate::prog_opts::EmAccel::None => {
             let mut done = false;
             while evaluations < iteration_budget {
                 fixed_point(&counts, &mut next);
                 evaluations += 1;
-                let d = convergence_distance(&counts, &next);
+                let d = distance(&counts, &next);
                 std::mem::swap(&mut counts, &mut next);
                 if do_log && evaluations.is_multiple_of(10) {
                     if evaluations.is_multiple_of(100) {
@@ -416,7 +433,7 @@ fn run_driver(
             MIN_EVAL.min(iteration_budget),
             &mut evaluations,
             em_info.convergence_thresh,
-            convergence_distance,
+            &distance,
         ),
         crate::prog_opts::EmAccel::Daarem => crate::em_accel::daarem(
             &mut fixed_point,
@@ -426,7 +443,7 @@ fn run_driver(
             MIN_EVAL.min(iteration_budget),
             &mut evaluations,
             em_info.convergence_thresh,
-            convergence_distance,
+            &distance,
         ),
     };
 

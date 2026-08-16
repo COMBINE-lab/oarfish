@@ -671,6 +671,17 @@ pub struct Args {
     #[arg(long, help_heading = "EM", default_value_t = 1e-3)]
     pub convergence_thresh: f64,
 
+    /// secondary, mass-weighted convergence criterion: stop when the total
+    /// absolute count change between successive EM iterations falls below
+    /// this fraction of the library size. Complements --convergence-thresh
+    /// (a per-transcript relative criterion that low-count transcripts in
+    /// slow decay can hold above threshold indefinitely, so the EM otherwise
+    /// runs to --max-em-iter on large transcriptomes). 0 (default) disables;
+    /// 1e-6 is a validated setting (Panel B: converges most arms in 400-900
+    /// evaluations, |delta Spearman| <= 0.0018, mixed sign).
+    #[arg(long, help_heading = "EM", default_value_t = 0.0)]
+    pub convergence_l1_thresh: f64,
+
     /// convergence accelerator for bulk EM and bootstrap replicates
     #[arg(long, help_heading = "EM", value_enum, default_value_t = EmAccel::None)]
     pub em_accel: EmAccel,
