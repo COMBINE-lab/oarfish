@@ -736,6 +736,14 @@ pub struct Args {
     #[arg(long, hide = true, default_value_t = 0.05)]
     pub presence_rho: f64,
 
+    /// weight of endpoint-gap positional evidence in the presence posterior:
+    /// each assigned read contributes its log-likelihood ratio of sitting
+    /// where this library's unique reads typically sit (length-stratified
+    /// left/right relative-gap model) vs a uniform reference. False-positive
+    /// transcripts collect reads at atypical positions. 0 disables.
+    #[arg(long, hide = true, default_value_t = 0.0)]
+    pub presence_endpoint_alpha: f64,
+
     /// number of cores that oarfish will use during different phases
     /// of quantification. Note: This value will be at least 2 for bulk
     /// quantification and at least 3 for single-cell quantification due to

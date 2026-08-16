@@ -529,6 +529,9 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     pub presence_period: u32,
     /// Initial presence prior (re-estimated by empirical Bayes).
     pub presence_rho: f64,
+    /// Weight of the endpoint-gap positional log-LR evidence in the presence
+    /// posterior (0 disables; see `PositionalModel` in em.rs).
+    pub presence_endpoint_alpha: f64,
     /// Per-read index of a *novel* (unannotated-isoform) latent state, or -1.
     ///
     /// A read whose splice structure disagrees with every annotated candidate is

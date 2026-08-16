@@ -382,6 +382,7 @@ fn perform_inference_and_write_output(
         count_floor: args.count_floor,
         convergence_l1_thresh: args.convergence_l1_thresh,
         presence_model: args.presence_model,
+        presence_endpoint_alpha: args.presence_endpoint_alpha,
         presence_warmup: args.presence_warmup,
         presence_period: args.presence_period,
         presence_rho: args.presence_rho,

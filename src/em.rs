@@ -340,10 +340,78 @@ pub struct EMResult {
 /// smoothly, and self-reinforcing through the q-discounted M-step in both
 /// directions (a suppressed transcript's shares shrink, a supported one's
 /// grow).
+const POS_BINS: usize = 40;
+const POS_STRATA: [f64; 3] = [750.0, 1250.0, 2000.0];
+
+/// Length-stratified endpoint-gap model fitted from unique reads: per stratum,
+/// binned distributions of the relative left/right alignment gaps
+/// (start/len, (len-end)/len). Stored as `ln(p_bin * POS_BINS)` so each value
+/// is a log-likelihood ratio against a uniform positional reference: positive
+/// = the endpoint sits where this library's reads typically sit, negative =
+/// atypical placement. Measured (F4.1, zone-sep): the per-transcript
+/// responsibility-weighted sum of these terms separates truly-expressed
+/// overlap-zone transcripts from false positives at AUC 0.76-0.85 across all
+/// six Panel B samples.
+struct PositionalModel {
+    log_lr: [[[f64; POS_BINS]; 2]; 4],
+}
+
+impl PositionalModel {
+    fn stratum(tlen: f64) -> usize {
+        POS_STRATA.iter().filter(|b| tlen >= **b).count()
+    }
+
+    fn fit(em_info: &EMInfo) -> Self {
+        let mut hist = [[[1.0f64; POS_BINS]; 2]; 4]; // +1 smoothing
+        for (alns, _, _) in em_info.eq_map.iter() {
+            if alns.len() != 1 {
+                continue;
+            }
+            let a = &alns[0];
+            let tlen = em_info.txp_info[a.ref_id as usize].lenf;
+            if tlen <= 0.0 {
+                continue;
+            }
+            let st = Self::stratum(tlen);
+            let lg = ((a.start.saturating_sub(1)) as f64 / tlen).clamp(0.0, 1.0);
+            let rg = ((tlen - a.end as f64).max(0.0) / tlen).clamp(0.0, 1.0);
+            hist[st][0][((lg * POS_BINS as f64) as usize).min(POS_BINS - 1)] += 1.0;
+            hist[st][1][((rg * POS_BINS as f64) as usize).min(POS_BINS - 1)] += 1.0;
+        }
+        let mut log_lr = [[[0.0f64; POS_BINS]; 2]; 4];
+        for st in 0..4 {
+            for side in 0..2 {
+                let tot: f64 = hist[st][side].iter().sum();
+                for bin in 0..POS_BINS {
+                    log_lr[st][side][bin] = (hist[st][side][bin] / tot * POS_BINS as f64).ln();
+                }
+            }
+        }
+        Self { log_lr }
+    }
+
+    #[inline]
+    fn read_log_lr(&self, aln: &AlnInfo, tlen: f64) -> f64 {
+        if tlen <= 0.0 {
+            return 0.0;
+        }
+        let st = Self::stratum(tlen);
+        let lg = ((aln.start.saturating_sub(1)) as f64 / tlen).clamp(0.0, 1.0);
+        let rg = ((tlen - aln.end as f64).max(0.0) / tlen).clamp(0.0, 1.0);
+        self.log_lr[st][0][((lg * POS_BINS as f64) as usize).min(POS_BINS - 1)]
+            + self.log_lr[st][1][((rg * POS_BINS as f64) as usize).min(POS_BINS - 1)]
+    }
+}
+
 struct PresenceState {
     q: Vec<f64>,
     eff: Vec<f64>,
     delta: Vec<f64>,
+    /// Responsibility-weighted positional log-LR accumulator (endpoint-gap
+    /// plausibility evidence), scaled by `endpoint_alpha` into `delta`.
+    pos: Vec<f64>,
+    positional: Option<PositionalModel>,
+    endpoint_alpha: f64,
     touched: Vec<bool>,
     rho: f64,
     calls: u32,
@@ -353,11 +421,22 @@ struct PresenceState {
 }
 
 impl PresenceState {
-    fn new(n_txps: usize, n_states: usize, warmup: u32, period: u32, rho: f64) -> Self {
+    fn new(
+        n_txps: usize,
+        n_states: usize,
+        warmup: u32,
+        period: u32,
+        rho: f64,
+        positional: Option<PositionalModel>,
+        endpoint_alpha: f64,
+    ) -> Self {
         Self {
             q: vec![1.0; n_states],
             eff: vec![0.0; n_states],
             delta: vec![0.0; n_txps],
+            pos: vec![0.0; n_txps],
+            positional,
+            endpoint_alpha,
             touched: vec![false; n_txps],
             rho,
             calls: 0,
@@ -379,8 +458,10 @@ impl PresenceState {
         weights: &[f64],
         novel: &[NovelSlot],
         counts: &[f64],
+        txp_lens: &[f64],
     ) {
         self.delta.fill(0.0);
+        self.pos.fill(0.0);
         let modelling_novel = !novel.is_empty();
         for (index, class) in classes.iter().enumerate() {
             let m = class.multiplicity as f64;
@@ -394,6 +475,19 @@ impl PresenceState {
                 let slot = novel[index];
                 if slot.id != usize::MAX {
                     denom += counts[slot.id] * slot.weight;
+                }
+            }
+            // Positional plausibility: responsibility-weighted endpoint-gap
+            // log-LR against a uniform reference (see PositionalModel).
+            if denom > 0.0
+                && let Some(pm) = &self.positional
+            {
+                for (a, w) in class.alignments.iter().zip(ws) {
+                    let t = a.ref_id as usize;
+                    let gam = self.q[t] * counts[t] * w / denom * m;
+                    if gam > 1e-9 {
+                        self.pos[t] += gam * pm.read_log_lr(a, txp_lens[t]);
+                    }
                 }
             }
             // Per-tid leave-one-out: contribution of t at slab strength vs
@@ -427,7 +521,10 @@ impl PresenceState {
             if !self.touched[t] {
                 continue;
             }
-            let d = self.delta[t].clamp(0.0, Self::DELTA_CAP);
+            // Leave-one-out gain is >= 0; the positional term is signed
+            // (typical placements add evidence, atypical placements subtract).
+            let d = (self.delta[t].max(0.0) + self.endpoint_alpha * self.pos[t])
+                .clamp(-Self::DELTA_CAP, Self::DELTA_CAP);
             self.q[t] = 1.0 / (1.0 + (-(d + logit_rho)).exp());
         }
     }
@@ -452,17 +549,22 @@ fn drive_with_presence(
     }
     let n_txps = em_info.txp_info.len();
     let n_states = n_txps + em_info.novel_loci;
+    let endpoint_alpha = em_info.presence_endpoint_alpha;
+    let positional = (endpoint_alpha != 0.0).then(|| PositionalModel::fit(em_info));
+    let txp_lens: Vec<f64> = em_info.txp_info.iter().map(|t| t.lenf).collect();
     let mut st = PresenceState::new(
         n_txps,
         n_states,
         em_info.presence_warmup,
         em_info.presence_period,
         em_info.presence_rho,
+        positional,
+        endpoint_alpha,
     );
     let mut wrapped = |src: &[f64], dst: &mut [f64]| {
         st.calls += 1;
         if st.calls > st.warmup && (st.calls - st.warmup).is_multiple_of(st.period) {
-            st.update_q(classes, weights, novel, src);
+            st.update_q(classes, weights, novel, src, &txp_lens);
         }
         for i in 0..src.len() {
             st.eff[i] = st.q[i] * src[i];
