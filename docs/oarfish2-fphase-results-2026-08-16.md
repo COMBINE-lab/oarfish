@@ -96,3 +96,46 @@ the projection track's live feature per the ceiling analysis (Arms S/X cut).
 4. Bootstrap consistency (presence + novel states) in one change.
 5. Precision work for novel detection: strand-aware overlap and per-locus
    background-rate normalization are the two obvious levers.
+
+## F4 — positional plausibility & boundary endpoints (added later on 2026-08-16)
+
+Question posed: can a coverage-plausibility model supply the "new evidence"
+for the overlap zone, and does penalizing alignments terminating at internal
+exon boundaries (especially sibling-terminal ones) help?
+
+**F4.1 measurement (juncprobe `zone-sep`, all six Panel B samples).** In the
+overlap zone (no unique reads, 0 < est ≤ 5):
+
+- Boundary-coincidence statistics are **uninformative**: endpoint-within-W-of-
+  internal-boundary AUC 0.51–0.52; the sibling-terminal-conditioned variant
+  0.49–0.54 even restricted to transcripts where it can fire. The archived
+  per-read LR (9.9×) does not survive per-transcript aggregation in the zone.
+- **Endpoint-gap surprisal does separate**: reads on false-positive
+  transcripts sit at atypical positions under a length-stratified positional
+  model fitted from unique reads (AUC 0.72 left-gap alone). A 5-feature
+  logistic model (surprisal L/R, log length, candidate density, soft reads)
+  fit on NA12878-cdna and **frozen** scores AUC 0.76–0.85 on all six samples
+  (est ≤ 1 sub-zone: 0.55–0.71). FPs also skew long (length AUC 0.74).
+- Limit found: presence-suppressed transcripts with est ≈ 0 have no assigned
+  reads, hence no positional evidence — post-EM positional statistics cannot
+  rescue the TKSM suppressed-real set (frozen-score AUC 0.52 there).
+
+**F4.2/F4.3 integration**: `--presence-endpoint-alpha` — each assigned read
+adds its responsibility-weighted log-LR of sitting where unique reads sit
+(vs uniform) to the transcript's presence evidence. Panel B, logistic arm,
+α = 1:
+
+| family | presence Δ vs baseline | presence+endpoint Δ vs baseline | endpoint Δ vs presence |
+|---|---|---|---|
+| NanoSim (4) | +0.0058 | **+0.0062** | +0.0004 |
+| TKSM (2) | −0.0029 | **−0.0020** | +0.0011 |
+| all (6) | +0.0029 | **+0.0035** | +0.0007 |
+
+Improves **every sample** (6/6) over presence-alone and shrinks the PacBio
+regression (α = 2 helps TKSM further but costs ONT; α = 1 is the balanced
+point). Against the pre-registered gates: TKSM-shrink met; the NanoSim
+≥ +0.002-over-presence bar not met (+0.0004) — consistency without magnitude,
+so the term stays **opt-in** alongside the presence flag it extends.
+
+Net position on the ONT/NanoSim family: baseline 0.9136 → 0.9198 with
+presence+endpoint, ~23% of the +0.0273 detection ceiling captured.
