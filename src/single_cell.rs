@@ -144,6 +144,7 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                             max_iter: args.max_em_iter,
                             convergence_thresh: args.convergence_thresh,
                             accel: crate::prog_opts::EmAccel::None,
+                            count_floor: args.count_floor,
                             init_abundances: None,
                             kde_model: None,
                             novel_locus: Vec::new(),

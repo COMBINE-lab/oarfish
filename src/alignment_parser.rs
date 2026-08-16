@@ -542,7 +542,8 @@ fn project_and_add_group(
     pctx: &mut ProjectionContext,
     query_name: &str,
     records_for_read: &[RecordBuf],
-) -> bool {
+    dump: Option<&mut crate::util::projection::ProjectionDumpWriter>,
+) -> anyhow::Result<bool> {
     // build GenomicAlignments and a parallel vector of their alignment scores
     // (the BAM `AS` tag, if present) used by the score/combined prob sources.
     let mut alns: Vec<GenomicAlignment> = Vec::with_capacity(records_for_read.len());
@@ -554,7 +555,7 @@ fn project_and_add_group(
         }
     }
     if alns.is_empty() {
-        return false;
+        return Ok(false);
     }
     // the query length is the same across a read's records; take the first with
     // a recorded sequence/length.
@@ -565,11 +566,17 @@ fn project_and_add_group(
         .unwrap_or(0);
 
     let projected = project_group_with(&alns, g2t, proj_config, pctx);
+    // The dump must see the group even (especially) when nothing projected:
+    // eliminated candidates and strand failures are the diagnostic payload.
+    if let Some(dw) = dump {
+        let diags = pctx.take_diagnostics();
+        dw.write_group(query_name, &projected, &diags, &src_scores, read_len)?;
+    }
     if projected.is_empty() {
-        return false;
+        return Ok(false);
     }
     let recs = projected_to_records(&projected, &src_scores);
-    store.add_projected_group(txps, &recs, read_len, beta, prob_source)
+    Ok(store.add_projected_group(txps, &recs, read_len, beta, prob_source))
 }
 
 /// Parse a name-collated, genome-aligned BAM, projecting each read's alignments
@@ -592,6 +599,7 @@ pub fn parse_genome_alignments<R: io::BufRead>(
     txps: &mut [TranscriptInfo],
     check_order_thresh: usize,
     quiet: bool,
+    mut dump: Option<&mut crate::util::projection::ProjectionDumpWriter>,
 ) -> anyhow::Result<()> {
     use rustc_hash::FxHashSet;
 
@@ -605,6 +613,9 @@ pub fn parse_genome_alignments<R: io::BufRead>(
     // reused across all read groups (avoids per-read allocation of bramble's
     // projection scratch / ksw2 aligner).
     let mut pctx = ProjectionContext::new();
+    if dump.is_some() {
+        pctx.enable_diagnostics();
+    }
 
     let pb = if quiet {
         indicatif::ProgressBar::hidden()
@@ -660,7 +671,8 @@ pub fn parse_genome_alignments<R: io::BufRead>(
                     &mut pctx,
                     &prev_read,
                     &records_for_read,
-                )
+                    dump.as_deref_mut(),
+                )?
             {
                 add_read_name(&records_for_read);
                 if records_for_read.len() == 1 {
@@ -699,7 +711,8 @@ pub fn parse_genome_alignments<R: io::BufRead>(
             &mut pctx,
             &prev_read,
             &records_for_read,
-        )
+            dump.as_deref_mut(),
+        )?
     {
         add_read_name(&records_for_read);
         if records_for_read.len() == 1 {

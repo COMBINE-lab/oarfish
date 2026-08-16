@@ -328,6 +328,7 @@ fn perform_inference_and_write_output(
         max_iter: args.max_em_iter,
         convergence_thresh: args.convergence_thresh,
         accel: args.em_accel,
+        count_floor: args.count_floor,
         init_abundances,
         kde_model: kde_opt,
         novel_locus,
@@ -633,6 +634,11 @@ pub fn quantify_genome_alignments_from_bam<R: BufRead>(
     // the store keys alignments by transcript, so it lives over the
     // transcriptome header.
     let mut store = InMemoryAlignmentStore::new(filter_opts, txp_header);
+    let mut proj_dump = args
+        .projection_dump
+        .as_deref()
+        .map(|p| crate::util::projection::ProjectionDumpWriter::create(p, txps_name))
+        .transpose()?;
     let read_aln_start = std::time::SystemTime::now();
     alignment_parser::parse_genome_alignments(
         &mut store,
@@ -646,7 +652,11 @@ pub fn quantify_genome_alignments_from_bam<R: BufRead>(
         txps,
         args.sort_check_num,
         args.quiet,
+        proj_dump.as_mut(),
     )?;
+    if let Some(dw) = proj_dump.take() {
+        dw.finish()?;
+    }
     let read_aln_time = read_aln_start.elapsed()?;
     info!(
         "Parsing and projection of genome alignments took: {}",

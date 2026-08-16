@@ -417,3 +417,111 @@ pub fn mapping_to_genomic_alignment(
         read_len,
     })
 }
+
+/// Streaming TSV writer backing `--projection-dump` (the projection
+/// ceiling/oracle analysis). One row per (input alignment x candidate
+/// transcript) outcome — kept, eliminated with a reason, or a whole-strand
+/// failure — carrying the signals bramble computes but quantification
+/// normally discards. A `<path>.tnames` sidecar maps dense tid (row index) to
+/// transcript name.
+pub struct ProjectionDumpWriter {
+    w: BufWriter<File>,
+}
+
+impl ProjectionDumpWriter {
+    pub fn create(path: &Path, txps_name: &[String]) -> anyhow::Result<Self> {
+        let mut tn = BufWriter::new(
+            File::create(path.with_extension("tnames"))
+                .with_context(|| format!("failed to create {}.tnames", path.display()))?,
+        );
+        for n in txps_name {
+            writeln!(tn, "{n}")?;
+        }
+        tn.flush()?;
+        let mut w = BufWriter::new(
+            File::create(path)
+                .with_context(|| format!("failed to create {}", path.display()))?,
+        );
+        writeln!(
+            w,
+            "read\tinput_idx\ttid\tstatus\tsim_score\traw_cov\traw_ops\tjunc_hits\tjunc_misses\tclip_score\tleft_clip\tright_clip\tgenome_as\ttstart\ttend\tqalen\tread_len"
+        )?;
+        Ok(Self { w })
+    }
+
+    pub fn write_group(
+        &mut self,
+        read: &str,
+        projected: &[ProjectedAlignment],
+        diags: &[bramble_rs::ProjectionDiagnostics],
+        src_scores: &[i32],
+        read_len: usize,
+    ) -> anyhow::Result<()> {
+        use bramble_rs::ElimReason;
+        // per-input-alignment clip lengths, for the kept rows
+        let clip_of = |idx: usize| -> (u32, u32) {
+            diags
+                .iter()
+                .find(|d| d.input_index == idx)
+                .map(|d| (d.left_clip_bases, d.right_clip_bases))
+                .unwrap_or((0, 0))
+        };
+        for p in projected {
+            let gas = src_scores.get(p.input_index).copied().unwrap_or(0);
+            let (lc, rc) = clip_of(p.input_index);
+            writeln!(
+                self.w,
+                "{read}\t{}\t{}\tkept\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{lc}\t{rc}\t{gas}\t{}\t{}\t{}\t{read_len}",
+                p.input_index,
+                p.transcript_id,
+                p.similarity_score,
+                p.total_coverage,
+                p.total_operations,
+                p.junc_hits,
+                p.junc_misses,
+                p.clip_score,
+                p.transcript_start,
+                p.transcript_end,
+                p.query_aligned_len
+            )?;
+        }
+        for d in diags {
+            let gas = src_scores.get(d.input_index).copied().unwrap_or(0);
+            for (tid, reason) in &d.eliminated {
+                let (tag, sim) = match reason {
+                    ElimReason::LowSimilarity(s) => ("elim:low_similarity", *s),
+                    ElimReason::SegmentOutsideTranscript => ("elim:segment_outside", -1.0),
+                    ElimReason::ExonSkip => ("elim:exon_skip", -1.0),
+                    ElimReason::DuplicateExon => ("elim:duplicate_exon", -1.0),
+                    ElimReason::NoCigar => ("elim:no_cigar", -1.0),
+                    ElimReason::BeyondTranscriptEnd => ("elim:beyond_end", -1.0),
+                };
+                writeln!(
+                    self.w,
+                    "{read}\t{}\t{tid}\t{tag}\t{sim:.6}\t\t\t\t\t\t{}\t{}\t{gas}\t\t\t\t{read_len}",
+                    d.input_index, d.left_clip_bases, d.right_clip_bases
+                )?;
+            }
+            for f in &d.strand_failures {
+                writeln!(
+                    self.w,
+                    "{read}\t{}\t-1\tstrandfail:{}:{}of{}:{}{}\t\t\t\t\t\t\t{}\t{}\t{gas}\t\t\t\t{read_len}",
+                    d.input_index,
+                    f.strand,
+                    f.segment_index + 1,
+                    f.segment_count,
+                    if f.terminal { "T" } else { "I" },
+                    if f.small_exon { "s" } else { "-" },
+                    d.left_clip_bases,
+                    d.right_clip_bases
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> anyhow::Result<()> {
+        self.w.flush()?;
+        Ok(())
+    }
+}

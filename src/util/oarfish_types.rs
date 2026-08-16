@@ -510,6 +510,10 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     pub convergence_thresh: f64,
     /// Optional fixed-point acceleration scheme.
     pub accel: crate::prog_opts::EmAccel,
+    /// Estimated counts below this value are zeroed after the EM loop and
+    /// their mass redistributed by one final fixed-point evaluation.  Values
+    /// at or below `MIN_READ_THRESH` reproduce the historical behavior.
+    pub count_floor: f64,
     /// Per-read index of a *novel* (unannotated-isoform) latent state, or -1.
     ///
     /// A read whose splice structure disagrees with every annotated candidate is

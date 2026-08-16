@@ -675,6 +675,14 @@ pub struct Args {
     #[arg(long, help_heading = "EM", value_enum, default_value_t = EmAccel::None)]
     pub em_accel: EmAccel,
 
+    /// estimated counts below this value are set to zero after the EM
+    /// completes (their mass is redistributed among the surviving
+    /// transcripts). The default only removes numerical dust; a value such
+    /// as 0.5 additionally suppresses low-abundance false-positive
+    /// transcripts.
+    #[arg(long, help_heading = "EM", default_value_t = 1e-5)]
+    pub count_floor: f64,
+
     /// number of cores that oarfish will use during different phases
     /// of quantification. Note: This value will be at least 2 for bulk
     /// quantification and at least 3 for single-cell quantification due to
@@ -698,6 +706,15 @@ pub struct Args {
     /// to validate that the input BAM is name collated.
     #[arg(long, hide = true, default_value_t = 100_000)]
     pub sort_check_num: usize,
+
+    /// (genome-BAM mode, diagnostic) write a per-(read x candidate) projection
+    /// outcome TSV — kept candidates with their raw similarity / junction /
+    /// clip-rescue signals, eliminated candidates with reasons, and
+    /// whole-strand projection failures — to this path, plus a `.tnames`
+    /// sidecar mapping dense tid to transcript name. Feeds the projection
+    /// ceiling/oracle analysis; no effect on quantification.
+    #[arg(long, hide = true)]
+    pub projection_dump: Option<PathBuf>,
 
     /// use a KDE model of the observed fragment length distribution
     #[arg(short, long, hide = true)]

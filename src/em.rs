@@ -309,12 +309,29 @@ pub struct EMResult {
 }
 
 fn convergence_distance(previous: &[f64], current: &[f64]) -> f64 {
+    // Symmetric denominator: dividing by the *current* value alone makes a
+    // geometrically decaying parameter (c = r·p) report a constant relative
+    // change (1-r)/r no matter how small it gets, so a single dying transcript
+    // can hold the whole EM above threshold until it crosses the active-count
+    // gate. max(p, c) bounds the ratio by 1 and decays with the parameter.
     previous
         .iter()
         .zip(current)
-        .filter(|(p, _)| **p > constants::MIN_READ_THRESH)
-        .map(|(p, c)| (c - p).abs() / c.abs().max(constants::EM_DENOM_THRESH))
+        .filter(|(p, c)| (**p).max(**c) >= constants::MIN_ACTIVE_COUNT)
+        .map(|(p, c)| (c - p).abs() / p.max(*c).max(constants::EM_DENOM_THRESH))
         .fold(0.0, f64::max)
+}
+
+/// Global relative L1 change between successive iterates, `Σ|Δc| / Σc`.
+/// Logged as a mass-weighted companion to the max-relative criterion.
+fn relative_l1(previous: &[f64], current: &[f64]) -> f64 {
+    let (num, den) = previous
+        .iter()
+        .zip(current)
+        .fold((0.0_f64, 0.0_f64), |(num, den), (p, c)| {
+            (num + (c - p).abs(), den + c)
+        });
+    num / den.max(constants::EM_DENOM_THRESH)
 }
 
 fn run_driver(
@@ -368,9 +385,10 @@ fn run_driver(
                 if do_log && evaluations.is_multiple_of(10) {
                     if evaluations.is_multiple_of(100) {
                         info!(
-                            "iteration {}; rel diff {}",
+                            "iteration {}; rel diff {}; rel l1 {}",
                             evaluations.to_formatted_string(&Locale::en),
-                            d
+                            d,
+                            relative_l1(&next, &counts)
                         );
                     } else {
                         trace!(
@@ -412,8 +430,14 @@ fn run_driver(
         ),
     };
 
+    // Zero out estimates below the count floor, then let one final fixed-point
+    // evaluation redistribute their mass.  The historical floor (1e-5) only
+    // removes numerical dust; a higher floor (e.g. 0.5 reads) additionally
+    // suppresses low-mass false-positive transcripts at the cost of the ~35%
+    // of such transcripts that are real.
+    let count_floor = em_info.count_floor.max(constants::MIN_READ_THRESH);
     counts.iter_mut().for_each(|x| {
-        if *x < constants::MIN_READ_THRESH {
+        if *x < count_floor {
             *x = 0.0;
         }
     });
