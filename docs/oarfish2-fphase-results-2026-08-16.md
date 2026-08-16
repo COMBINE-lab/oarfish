@@ -139,3 +139,39 @@ so the term stays **opt-in** alongside the presence flag it extends.
 
 Net position on the ONT/NanoSim family: baseline 0.9136 → 0.9198 with
 presence+endpoint, ~23% of the +0.0273 detection ceiling captured.
+
+## F5 — pre-EM candidate-level evidence (2026-08-16; gate not met)
+
+Question: can positional/tiling evidence computed over *candidate sets*
+(θ-independent, uniform-prior responsibilities) rescue the transcripts the
+EM zeroes before any post-EM evidence exists — the TKSM suppressed-real set?
+
+`zone-sep --resp-mode uniform --include-zero` adds candidate-level coverage
+**breadth** (occupied fraction of 20 coarse bins) and **occupancy entropy**,
+the tiling signature: a real transcript's candidate reads span it (different
+reads shared with different competitors) while a false positive's borrowed
+reads concentrate in its dominant sibling's shared region.
+
+Measured on the zeroed sets (est ≤ 0.01, ≥2 candidate reads; ~34k/45k
+transcripts, ~7–10% real):
+
+- Best single features: breadth 0.59–0.63, entropy 0.57–0.66 AUC — the
+  hypothesized mechanism is real but weak. Positional surprisal *inverts* at
+  candidate level (0.40–0.46): uniform responsibilities dilute every
+  candidate with the sibling's reads.
+- Frozen cross-sample combination: 0.672 (cdna, train) / **0.635 (SQ2)**;
+  on the full SQ2 presence-suppressed set (73k of 76k now covered, vs 1.7k
+  post-EM): **0.639**. Depth-stratified: cdna climbs to ~0.70 at ≥30
+  candidate reads, SQ2 flat at ~0.65 at any depth.
+
+**Gate (AUC ≥ 0.70) not met — not integrated.** The deadlock is now measured
+from both sides: post-EM the shadowed transcript has no reads (no evidence);
+pre-EM its profile is a mixture dominated by the sibling's reads (diluted
+evidence). Absolute tiling statistics cannot break it.
+
+The one untested formulation with a mechanistic reason to be sharper:
+**differential/competitor-aware tiling** (S4 proper) — does t's candidate
+set contain reads at positions its dominant competitor *cannot* explain,
+computed by projecting exon structures between candidate pairs. That is a
+substantially bigger build (pairwise structure projection) and is recorded
+as the follow-up, not attempted here.
