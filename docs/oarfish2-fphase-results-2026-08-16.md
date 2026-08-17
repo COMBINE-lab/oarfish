@@ -433,3 +433,30 @@ Findings:
    contrast attenuation (6–11% on switch sets), the full picture: the
    exogenous-only recommendation stands on principle, but the feature's
    failure modes are measured small in both directions.
+
+## F3 — PacBio physical endpoint model resurrected and gated (2026-08-17; Lead B closed)
+
+Ported from the archive as `--coverage-model pacbio-endpoint` (bare kernel:
+per-read endpoint simplex in the coverage substrate; containment guard
+applied at the source — nested-short candidates neutralize the read's
+endpoint term — instead of the archived post-EM clamp). Evaluated on four
+exact-truth PacBio samples (TKSM RSII/SQ2 + Leg-1 A1/B1):
+
+| sample | none | logistic | pacbio-endpoint |
+|---|---|---|---|
+| RSII (CLR) | 0.9328 | **0.9392** | 0.9310 |
+| SQ2 (HiFi) | **0.9501** | 0.9481 | 0.9489 |
+| Leg1-A1 (HiFi) | **0.9411** | 0.9401 | 0.9406 |
+| Leg1-B1 (HiFi) | **0.9383** | 0.9373 | 0.9382 |
+
+Pre-registered gate (beat BOTH none and logistic by ≥ +0.002): **not met.**
+The kernel edges logistic on every HiFi sample (+0.0005…+0.0009) but never
+beats `none`; on CLR it is harmful (learned mixture: 10.7% intact, 41%
+3'-truncated, tolerance at clamp — endpoint geometry is noise there).
+
+**Lead B disposition**: the reproducible "PacBio anomaly" is now explained on
+exact truth — it was never a missing better coverage model. On HiFi,
+positional/endpoint evidence simply does not pay; `--coverage-model none` is
+the best HiFi configuration (best arm on all three HiFi samples). Practical
+recommendation: per-technology coverage default of `none` for pac-bio-hifi,
+`logistic` for CLR/ONT. The flag ships opt-in with this documented negative.
