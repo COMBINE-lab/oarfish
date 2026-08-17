@@ -628,6 +628,109 @@ fn perform_inference_and_write_output(
 
     let aux_txp_counts = crate::util::aux_counts::get_aux_counts(store, txps)?;
 
+    // Identifiability sidecar (--write-identifiability): the structure a
+    // group-level (Terminus-style) downstream analysis needs to test at the
+    // resolution the data can identify — ambiguity components, unique-read
+    // support, presence posteriors, and each transcript's dominant shadow.
+    if args.write_identifiability {
+        let components = ambiguity_components(
+            store.iter().map(|(alns, _, _)| alns),
+            &store.failed_novel_txps,
+            txps.len(),
+        );
+        let mut comp_dense: std::collections::HashMap<usize, u32> =
+            std::collections::HashMap::new();
+        let mut comp_of: Vec<u32> = Vec::with_capacity(txps.len());
+        for root in &components {
+            let next = comp_dense.len() as u32;
+            comp_of.push(*comp_dense.entry(*root).or_insert(next));
+        }
+        let mut comp_size: Vec<u32> = vec![0; comp_dense.len()];
+        for c in &comp_of {
+            comp_size[*c as usize] += 1;
+        }
+        // Dominant shadow: for each multi-candidate read, the theta-argmax
+        // candidate "wins" it; every other candidate records that winner.
+        let mut cooc: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
+        for (alns, _, _) in store.iter() {
+            if alns.len() < 2 {
+                continue;
+            }
+            let mut winner = alns[0].ref_id;
+            let mut best = f64::MIN;
+            for a in alns {
+                let v = counts.get(a.ref_id as usize).copied().unwrap_or(0.0);
+                if v > best {
+                    best = v;
+                    winner = a.ref_id;
+                }
+            }
+            for a in alns {
+                if a.ref_id != winner {
+                    *cooc
+                        .entry(((a.ref_id as u64) << 32) | winner as u64)
+                        .or_insert(0) += 1;
+                }
+            }
+        }
+        let mut shadow: Vec<(u32, u32, u32)> = vec![(u32::MAX, 0, 0); txps.len()]; // (winner, best_count, total)
+        for (key, n) in &cooc {
+            let (t, wnr) = ((key >> 32) as usize, (key & 0xffff_ffff) as u32);
+            let s = &mut shadow[t];
+            s.2 += n;
+            if *n > s.1 {
+                s.1 = *n;
+                s.0 = wnr;
+            }
+        }
+        let mut path = args.output.as_ref().expect("output prefix").clone();
+        let mut name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        name.push_str(".identifiability.tsv");
+        path.set_file_name(name);
+        let mut w = std::io::BufWriter::new(std::fs::File::create(&path)?);
+        use std::io::Write;
+        writeln!(
+            w,
+            "tname\tcomponent\tcomponent_size\tunique_reads\test_reads\tpresence_prob\tshadow_tname\tshadow_share"
+        )?;
+        for (i, tname) in txps_name.iter().enumerate() {
+            let (wnr, bc, tot) = shadow[i];
+            let (sh_name, sh_share) = if wnr != u32::MAX && tot > 0 {
+                (
+                    txps_name
+                        .get(wnr as usize)
+                        .map(|s| s.as_str())
+                        .unwrap_or("NA"),
+                    format!("{:.4}", bc as f64 / tot as f64),
+                )
+            } else {
+                ("NA", "NA".to_string())
+            };
+            let q = em_result
+                .presence
+                .as_ref()
+                .and_then(|p| p.get(i))
+                .map(|q| format!("{q:.6}"))
+                .unwrap_or_else(|| "NA".to_string());
+            writeln!(
+                w,
+                "{}\t{}\t{}\t{}\t{:.3}\t{}\t{}\t{}",
+                tname,
+                comp_of[i],
+                comp_size[comp_of[i] as usize],
+                aux_txp_counts[i].unique_count,
+                counts.get(i).copied().unwrap_or(0.0),
+                q,
+                sh_name,
+                sh_share,
+            )?;
+        }
+        info!(path = %path.display(), "wrote identifiability sidecar");
+    }
+
     // Presence posteriors (--presence-model): one row per transcript with the
     // Bernoulli presence probability and the evidence a reader needs to judge
     // it (unique reads, estimated reads).

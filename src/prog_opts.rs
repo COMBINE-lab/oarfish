@@ -736,14 +736,30 @@ pub struct Args {
     #[arg(long, hide = true, default_value_t = 0.05)]
     pub presence_rho: f64,
 
-    /// per-transcript presence prior from a related sample: a `.presence.tsv`
-    /// sidecar written by a previous run (same annotation). Each transcript's
-    /// prior becomes `w*q_other + (1-w)*rho` (w = --presence-prior-weight),
-    /// so support in the other sample protects a transcript that this
-    /// sample's ambiguity structure cannot resolve, while absence elsewhere
-    /// never suppresses below the baseline prior. Requires --presence-model.
+    /// per-transcript presence prior from EXOGENOUS data: a `.presence.tsv`
+    /// sidecar from a sample OUTSIDE the experiment being analyzed (an atlas,
+    /// a pilot run, a reference sample; same annotation). Each transcript's
+    /// prior becomes `w*q_other + (1-w)*rho` (w = --presence-prior-weight);
+    /// support elsewhere protects a transcript this sample's ambiguity
+    /// structure cannot resolve, while absence elsewhere never suppresses
+    /// below the baseline prior. IMPORTANT: do NOT build the prior from
+    /// samples that will enter the same downstream differential test —
+    /// within-condition sharing correlates replicates and biases dispersion
+    /// estimates downward (anti-conservative tests); cross-condition sharing
+    /// attenuates true contrasts. For within-experiment uncertainty, use
+    /// --num-bootstraps (replicates are presence-aware) and
+    /// --write-identifiability instead. Requires --presence-model.
     #[arg(long, help_heading = "EM")]
     pub presence_prior_file: Option<PathBuf>,
+
+    /// write `<prefix>.identifiability.tsv`: each transcript's ambiguity
+    /// component (transcripts linked by shared multi-candidate reads),
+    /// component size, unique reads, presence posterior, and its dominant
+    /// shadow (the co-candidate that wins its reads) with the shadow's share.
+    /// Supports group-level downstream testing (Terminus-style) at the
+    /// resolution the data can actually identify.
+    #[arg(long, help_heading = "output")]
+    pub write_identifiability: bool,
 
     /// blend weight for --presence-prior-file (0 = ignore, 1 = adopt the
     /// other sample's posterior as this sample's prior)

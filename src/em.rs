@@ -197,34 +197,43 @@ fn m_step_prepared<const NOVEL: bool>(
 }
 
 #[inline]
-fn m_step_prepared_counts(
+fn m_step_prepared_counts<const NOVEL: bool>(
     eq_iterates: &[PreparedEq],
     weights: &[f64],
+    novel: &[NovelSlot],
     multiplicities: &[u32],
     prev_count: &[f64],
     curr_counts: &mut [f64],
 ) {
-    for (eq, &multiplicity) in eq_iterates.iter().zip(multiplicities) {
+    for (index, (eq, &multiplicity)) in eq_iterates.iter().zip(multiplicities).enumerate() {
         if multiplicity == 0 {
             continue;
         }
         let read_count = multiplicity as f64;
         let alns = eq.alignments;
-        if let [alignment] = alns {
+        let slot = if NOVEL { novel[index] } else { NO_NOVEL };
+        let has_novel = NOVEL && slot.id != usize::MAX;
+        if !has_novel && let [alignment] = alns {
             curr_counts[alignment.ref_id as usize] += read_count;
             continue;
         }
         let eq_weights = &weights[eq.weight_start..eq.weight_start + alns.len()];
-        let denom: f64 = alns
+        let mut denom: f64 = alns
             .iter()
             .zip(eq_weights)
             .map(|(a, weight)| prev_count[a.ref_id as usize] * weight)
             .sum();
+        if has_novel {
+            denom += prev_count[slot.id] * slot.weight;
+        }
         if denom > constants::EM_DENOM_THRESH {
             let scale = read_count / denom;
             for (a, weight) in alns.iter().zip(eq_weights) {
                 let target_id = a.ref_id as usize;
                 curr_counts[target_id] += prev_count[target_id] * weight * scale;
+            }
+            if has_novel {
+                curr_counts[slot.id] += prev_count[slot.id] * slot.weight * scale;
             }
         }
     }
@@ -471,12 +480,24 @@ impl PresenceState {
         novel: &[NovelSlot],
         counts: &[f64],
         txp_lens: &[f64],
+        mult: Option<&[u32]>,
     ) {
         self.delta.fill(0.0);
         self.pos.fill(0.0);
         let modelling_novel = !novel.is_empty();
         for (index, class) in classes.iter().enumerate() {
-            let m = class.multiplicity as f64;
+            // Bootstrap replicates re-weight reads by their resampled
+            // multiplicity, so the presence posterior is refit per replicate
+            // and presence uncertainty propagates into the replicates.
+            let m = match mult {
+                Some(mm) => {
+                    if mm[index] == 0 {
+                        continue;
+                    }
+                    mm[index] as f64
+                }
+                None => class.multiplicity as f64,
+            };
             let ws = &weights[class.weight_start..class.weight_start + class.alignments.len()];
             let mut denom = 0.0;
             for (a, w) in class.alignments.iter().zip(ws) {
@@ -553,6 +574,7 @@ fn drive_with_presence(
     mut inner: impl FnMut(&[f64], &mut [f64]),
     do_log: bool,
     allow_presence: bool,
+    mult: Option<&[u32]>,
 ) -> EMResult {
     use crate::prog_opts::PresenceModel;
     if !allow_presence || em_info.presence_model == PresenceModel::None {
@@ -576,7 +598,7 @@ fn drive_with_presence(
     let mut wrapped = |src: &[f64], dst: &mut [f64]| {
         st.calls += 1;
         if st.calls > st.warmup && (st.calls - st.warmup).is_multiple_of(st.period) {
-            st.update_q(classes, weights, novel, src, &txp_lens);
+            st.update_q(classes, weights, novel, src, &txp_lens, mult);
         }
         for i in 0..src.len() {
             st.eff[i] = st.q[i] * src[i];
@@ -777,13 +799,13 @@ pub fn em(em_info: &EMInfo, _nthreads: usize) -> EMResult {
                 dst[n_txps + locus] += mass;
             }
         };
-        drive_with_presence(em_info, &eq_iterates, &weights, &novel, fixed_point, true, true)
+        drive_with_presence(em_info, &eq_iterates, &weights, &novel, fixed_point, true, true, None)
     } else {
         let fixed_point = |src: &[f64], dst: &mut [f64]| {
             dst.fill(0.0);
             m_step_prepared::<false>(&eq_iterates, &weights, &novel, src, dst);
         };
-        drive_with_presence(em_info, &eq_iterates, &weights, &novel, fixed_point, true, true)
+        drive_with_presence(em_info, &eq_iterates, &weights, &novel, fixed_point, true, true, None)
     }
 }
 
@@ -791,17 +813,71 @@ fn do_bootstrap_prepared(
     em_info: &EMInfo,
     eq_iterates: &[PreparedEq],
     weights: &[f64],
+    novel: &[NovelSlot],
 ) -> Vec<f64> {
     let mut rng = trng();
     let n = em_info.eq_map.len();
     let inds = bootstrap::get_sample_inds(n, &mut rng);
     let mut multiplicities = vec![0_u32; n];
     inds.iter().for_each(|&index| multiplicities[index] += 1);
-    let mut fixed_point = |src: &[f64], dst: &mut [f64]| {
-        dst.fill(0.0);
-        m_step_prepared_counts(eq_iterates, weights, &multiplicities, src, dst);
-    };
-    run_driver(em_info, &mut fixed_point, false).counts
+    let n_txps = em_info.txp_info.len();
+    // Replicates quantify the SAME model as the point estimate: novel latent
+    // states are resampled with their reads, and the presence posterior is
+    // refit per replicate (multiplicity-weighted), so presence uncertainty at
+    // boundary transcripts shows up as inferential variance instead of being
+    // hidden. Projection-failed reads (novel base mass) live outside the
+    // resampled read universe and are carried unresampled -- a documented
+    // approximation that slightly understates novel-state variance.
+    if em_info.novel_loci > 0 {
+        let fixed_point = |src: &[f64], dst: &mut [f64]| {
+            dst.fill(0.0);
+            m_step_prepared_counts::<true>(
+                eq_iterates,
+                weights,
+                novel,
+                &multiplicities,
+                src,
+                dst,
+            );
+            for (locus, mass) in em_info.novel_base_mass.iter().enumerate() {
+                dst[n_txps + locus] += mass;
+            }
+        };
+        drive_with_presence(
+            em_info,
+            eq_iterates,
+            weights,
+            novel,
+            fixed_point,
+            false,
+            true,
+            Some(&multiplicities),
+        )
+        .counts
+    } else {
+        let fixed_point = |src: &[f64], dst: &mut [f64]| {
+            dst.fill(0.0);
+            m_step_prepared_counts::<false>(
+                eq_iterates,
+                weights,
+                novel,
+                &multiplicities,
+                src,
+                dst,
+            );
+        };
+        drive_with_presence(
+            em_info,
+            eq_iterates,
+            weights,
+            novel,
+            fixed_point,
+            false,
+            true,
+            Some(&multiplicities),
+        )
+        .counts
+    }
 }
 
 pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f64>> {
@@ -814,7 +890,7 @@ pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f6
         .num_threads(nthreads)
         .build()
         .unwrap();
-    let (eq_iterates, weights, _novel) = prepare_equivalence_classes(em_info, false);
+    let (eq_iterates, weights, novel) = prepare_equivalence_classes(em_info, false);
 
     pool.install(|| {
         (0..num_boot)
@@ -823,7 +899,7 @@ pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f6
                 let span = span!(tracing::Level::INFO, "bootstrap");
                 let _guard = span.enter();
                 info!("evaluating bootstrap replicate {}", i);
-                do_bootstrap_prepared(em_info, &eq_iterates, &weights)
+                do_bootstrap_prepared(em_info, &eq_iterates, &weights, &novel)
             })
             .collect()
     })
@@ -864,14 +940,14 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> EMResult {
             }
         };
         pool.install(|| {
-            drive_with_presence(em_info, &eq_iterates, &weights, &novel, fixed_point, true, true)
+            drive_with_presence(em_info, &eq_iterates, &weights, &novel, fixed_point, true, true, None)
         })
     } else {
         let fixed_point = |src: &[f64], dst: &mut [f64]| {
             m_step_par::<false>(&eq_iterates, &weights, &novel, src, dst, &mut shards);
         };
         pool.install(|| {
-            drive_with_presence(em_info, &eq_iterates, &weights, &novel, fixed_point, true, true)
+            drive_with_presence(em_info, &eq_iterates, &weights, &novel, fixed_point, true, true, None)
         })
     }
 }

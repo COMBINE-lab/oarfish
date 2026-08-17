@@ -302,3 +302,40 @@ Panel B *understates* the mechanism; two validations bracket it:
 **Cumulative ONT/NanoSim position**: baseline 0.9136 → presence + endpoint +
 cross-prior **0.9205** (+0.0069, ~25% of the +0.0273 detection ceiling), all
 opt-in, each component positive on every sample it touches.
+
+## F8 — inference-safe uncertainty infrastructure (2026-08-17)
+
+Response to the post-selection-inference analysis: within-experiment prior
+sharing correlates replicates and biases downstream dispersion estimation
+(anti-conservative); the design goal is per-sample-independent estimation
+with irreducible uncertainty propagated in forms downstream tests already
+handle. Three pieces:
+
+1. **Presence/novel-aware inferential replicates.** Bootstrap replicates now
+   quantify the SAME model as the point estimate: the resampled M-step
+   includes novel latent states, and the presence posterior is refit per
+   replicate (multiplicity-weighted leave-one-out pass). Measured on
+   NA12878-cdna (30 reps, presence stack): under the old combination
+   (presence point + presence-off replicates) **59% of replicates
+   contradicted** suppressed point estimates — pure model mismatch. With
+   aware replicates the contradiction rate halves to **27.6%**, and the
+   remainder is genuine bimodal presence uncertainty (replicates refit q and
+   flip at boundary transcripts), i.e. exactly what infRV-aware tests
+   (swish/fishpond) are designed to discount. 95% replicate-interval
+   coverage of truth on the boundary set: 0.891 vs 0.880. Known remaining
+   approximation: projection-failed novel-state base mass is carried
+   unresampled.
+2. **`--write-identifiability` sidecar.** Per transcript: ambiguity-component
+   id and size, unique reads, presence posterior, dominant shadow (the
+   θ-argmax co-candidate winning its reads) and shadow share — the structure
+   needed for Terminus-style group-level testing at the resolution the data
+   identifies. On the parity smoke: 71,220 rows, 21,840 in multi-transcript
+   components, 17,507 with a named shadow.
+3. **`--presence-prior-file` re-scoped to exogenous priors.** Help text now
+   warns explicitly: never build the prior from samples entering the same
+   downstream test (within-condition sharing → deflated dispersion,
+   anti-conservative; cross-condition → attenuated contrasts, measured at
+   6–11% relative spurious-mass inflation on the presence-switch sets).
+   Safe use: atlases, pilot samples, reference runs outside the tested
+   design. The F7 cross-sample numbers stand as *accuracy* results; the
+   feature's inferential use is exogenous-only.
