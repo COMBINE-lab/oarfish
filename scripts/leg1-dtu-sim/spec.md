@@ -70,3 +70,12 @@ parameters only); read-length distribution qualitatively matching real SQ2.
 
 `/scratch1/rob/long-read-ecosystem/oarfish-evaluation-data/leg1-dtu-sim/`
 (regenerable from this directory's scripts + seeds + models; ~100–150 GB).
+
+## Pilot outcome (2026-08-17)
+
+Gate PASSED after one adjustment: identity mean 99.15 (target 99.19 ±1pp);
+mean read length 1,580 vs real 1,572; per-read truth map 1,000,110/1,000,110
+matched (built from the shuffled MDF — transcribe emits depth-collapsed
+molecules that polyA expands, tid= survives the chain). PolyA tuned
+normal(30,7)→normal(19,7,min 5): crude tail rate 3.42% vs real SQ2 3.23%
+(same metric). Full generation launched with these parameters.

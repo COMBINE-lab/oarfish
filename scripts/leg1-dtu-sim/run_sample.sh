@@ -18,7 +18,7 @@ $TKSM transcribe -g "$GTF" -a "$ABUND" --use-whole-id --non-coding \
     -s $((SEED * 10 + 1)) -o "$W.molecules.mdf"
 echo "[$SAMPLE] polyA $(date '+%T')"
 $TKSM polyA -i "$W.molecules.mdf" -o "$W.polya.mdf" \
-    --normal 30,7 --min-length 10 -s $((SEED * 10 + 2))
+    --normal 19,7 --min-length 5 -s $((SEED * 10 + 2))
 echo "[$SAMPLE] truncate $(date '+%T')"
 $TKSM truncate -i "$W.polya.mdf" -o "$W.trunc.mdf" \
     --kde-model "$KDE" -s $((SEED * 10 + 3))
@@ -29,13 +29,15 @@ $TKSM sequence -i "$W.shuf.mdf" -r "$GENOME" -o "$W.fastq" \
     -t 16 --badread-error-model pacbio2016 --badread-qscore-model pacbio2016 \
     --badread-identity 99.19,99.99,2.09
 echo "[$SAMPLE] truth map + compress $(date '+%T')"
-# molecule -> tid from the transcribe mdf; uuid -> molecule from fastq headers
+# molecule -> tid from the FINAL (shuffled) mdf: transcribe emits
+# depth-collapsed molecules that polyA expands into per-copy ids (M_0 ->
+# M_0_0, M_0_1), and the tid= tag survives the whole chain.
 python3 - "$W" <<'EOF'
 import sys, gzip, re
 w = sys.argv[1]
 tid_re = re.compile(r'tid=([^;,\s]+)')
 m2t = {}
-for line in open(f'{w}.molecules.mdf'):
+for line in open(f'{w}.shuf.mdf'):
     if line.startswith('+'):
         f = line.split('\t')
         m = tid_re.search(f[2]) if len(f) > 2 else None
