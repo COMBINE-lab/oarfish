@@ -53,6 +53,7 @@ fn get_json_info(
     let prob = match args.coverage_model {
         crate::prog_opts::CoverageModel::None => "no_coverage",
         crate::prog_opts::CoverageModel::Logistic => "logistic_coverage",
+        crate::prog_opts::CoverageModel::PacbioEndpoint => "pacbio_endpoint",
     };
 
     let source = if args.alignments.is_some() {
@@ -196,6 +197,16 @@ fn perform_inference_and_write_output(
         logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
         //Normalize the probabilities for the records of each read
         normalize_read_probs(store, txps, &args.bin_width);
+    }
+    if args.coverage_model == crate::prog_opts::CoverageModel::PacbioEndpoint {
+        let diagnostics =
+            crate::util::pacbio_endpoint_probability::apply_physical_endpoint_probabilities(
+                store, txps,
+            );
+        info!(?diagnostics, "applied PacBio physical endpoint model");
+        coverage_diagnostics["physical_endpoint"] = serde_json::to_value(diagnostics)?;
+        // the EM consumes coverage_probabilities only when this flag is set
+        store.filter_opts.model_coverage = true;
     }
     if args.polya_three_prime {
         if store.polya_tail.len() != store.len() {

@@ -46,6 +46,12 @@ pub enum CoverageModel {
     None,
     /// Repaired version of oarfish's historical inverse-logistic model.
     Logistic,
+    /// PacBio physical endpoint model: four latent molecule states (intact /
+    /// 5'-truncated / 3'-truncated / broken) with per-sample-learned
+    /// nucleotide-scale end tolerances, fit from uniquely assigned reads,
+    /// with a containment guard neutralizing endpoint evidence where nested
+    /// isoforms make it unidentifiable. Intended for PacBio libraries.
+    PacbioEndpoint,
 }
 
 fn parse_pos_f64(arg: &str) -> anyhow::Result<f64> {
