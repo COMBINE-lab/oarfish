@@ -339,3 +339,44 @@ handle. Three pieces:
    Safe use: atlases, pilot samples, reference runs outside the tested
    design. The F7 cross-sample numbers stand as *accuracy* results; the
    feature's inferential use is exogenous-only.
+
+## Leg 2 — SIRV real-read demonstration (2026-08-17)
+
+Real ONT reads (E2 mix, 128-fold concentration range), Lexogen's deliberately
+incorrect annotation variants: C (correct, 69 isoforms), I (insufficient, 43
+— 26 real isoforms deleted across all 7 genes), O (over-annotated, 100 — 31
+fabricated isoforms with certain truth-zero). Genome mode against the 7-gene
+SIRV genome, full presence stack vs baseline. Assets:
+`oarfish-evaluation-data/sirv-annotations/` (downloaded set1_170612a + runs).
+
+**(a) Over-annotation → presence model, real reads, real truth-zeros.**
+Baseline places **9.06% of the library (17,391 reads) on the 31 fabricated
+isoforms**; the presence stack cuts this to **5.67%**, drops fabricated
+calls (est>0.5) from 18 to 13, and raises Spearman on the 69 real isoforms
+**0.7329 → 0.7604 (+0.0275)**. Posterior separation is crisp: fabricated
+median q = 0.050 (18/31 below 0.5) vs real median q = 1.000 (2/69 below).
+Control: under the correct annotation the presence stack is a perfect no-op
+(0.8257 = 0.8257) — every real isoform earns q = 1 and nothing changes.
+
+**(b) Insufficient annotation → novel-from-failures, real reads.**
+Under I, **20.8% of aligned reads (41,155) fail projection outright** (all
+attributable to annotated loci) — the real-data realization of the
+holdout-sim recall pool. Unexplained-mass accounting: junction-flag evidence
+alone reports 9.0%; `--novel-from-failures` reports **29.0%, vs a true E2
+molar share of the missing isoforms of 32.9%** — 88% of the truly-missing
+mass recovered and correctly attributed, on real reads. Caveat: at SIRV
+density all transcripts collapse into one ambiguity component, so per-locus
+resolution is trivial here (1 locus); fine-grained locus attribution was
+demonstrated at genome scale in the holdout evaluation (1,137 loci).
+
+**(c) Poly(A) census on real libraries.** Sequence-visible tails are scarce
+in these public SIRV libraries: dRNA 0.98% (2017-era dRNA basecalling rarely
+emits the tail — dRNA 3'-anchoring is structural, not sequence-visible),
+cDNA 5.05%. The polyA term is honestly near-inert on these particular
+libraries; its measured per-tail-read value (TKSM) stands, and modern
+cDNA/Kinnex libraries with higher tail retention remain its target.
+
+Net: Leg 2 delivers the two real-read headline demonstrations — presence
+suppression with certain truth-zeros (+0.0275 Spearman under
+over-annotation, no-op under correct annotation) and failure-driven
+unexplained-mass accounting within 4pp of truth under under-annotation.
