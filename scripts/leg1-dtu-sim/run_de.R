@@ -9,6 +9,11 @@ suppressMessages({
   library(edgeR)
   library(SummarizedExperiment)
 })
+## Input loading is isolated here: fishpond releases newer than the 2.16.0
+## available in this environment may ship a native oarfish loader (reading
+## .quant + .infreps.pq directly); when available, replace the
+## tximport-over-converted-salmon-dirs block below with it. The converted
+## salmon dirs remain required for edgeR::catchSalmon either way.
 args <- commandArgs(trailingOnly = TRUE)
 base <- args[1]
 outp <- args[2]
