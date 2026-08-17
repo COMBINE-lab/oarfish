@@ -380,3 +380,56 @@ Net: Leg 2 delivers the two real-read headline demonstrations — presence
 suppression with certain truth-zeros (+0.0275 Spearman under
 over-annotation, no-op under correct annotation) and failure-driven
 unexplained-mass accounting within 4pp of truth under under-annotation.
+
+## Leg 1 — designed TKSM experiment: end-to-end inference results (2026-08-17)
+
+Dataset built per the pre-registered spec (`scripts/leg1-dtu-sim/spec.md`):
+2 conditions × 4 replicates × 10M reads, SQ2-like HiFi (identity 99.15, tail
+rate 3.4%, lengths matching real SQ2), exact per-read truth (10.0M reads per
+sample, 0 unmatched), truth sets: 2,000 DTE / 400+400 presence switches /
+400 DTU swaps / ~52k expressed nulls. 104 GB under
+`oarfish-evaluation-data/leg1-dtu-sim/`; fully regenerable from committed
+scripts + seeds. Both quantification arms (presence stack / plain) with 30
+presence-aware bootstraps; converted to salmon format by
+`oarfish2salmon.py` (fishpond ≤2.16 has no native oarfish loader — verified
+in sources; swap point marked in `run_de.R`).
+
+### Production DE over oarfish inferential replicates (q/FDR ≤ 0.05)
+
+| arm/method | DTE power | pres-off | pres-on | DTU | empirical FDR |
+|---|---|---|---|---|---|
+| pres / swish | 0.390 | 0.909 | 0.948 | 0.438 | **0.041** |
+| pres / edgeR-OD | 0.704 | 0.997 | 1.000 | 0.598 | 0.070 |
+| pres / edgeR-naive | 0.603 | 0.992 | 1.000 | 0.554 | 0.058 |
+| plain / swish | 0.448 | 0.937 | 0.945 | 0.455 | **0.047** |
+| plain / edgeR-OD | 0.704 | 0.997 | 1.000 | 0.599 | 0.068 |
+| plain / edgeR-naive | 0.605 | 0.995 | 1.000 | 0.554 | 0.058 |
+| shared-prior / swish | 0.393 | 0.914 | 0.945 | 0.440 | 0.043 |
+| shared-prior / edgeR-OD | 0.704 | 0.997 | 1.000 | 0.598 | 0.070 |
+
+Findings:
+
+1. **The full uncertainty chain works end-to-end with production tools**:
+   swish over oarfish presence-aware inferential replicates **controls FDR**
+   (0.041–0.047 at nominal 0.05) with presence-switch power 0.91–0.95 —
+   validating the replicates, the converter, and the whole stack in one shot.
+2. **edgeR v4 + catchSalmon overdispersion**: highest power (DTE 0.70, DTU
+   0.60, switches ≈1.00) but mildly anti-conservative on this design (FDR
+   0.068–0.070, vs 0.058 naive) — the moderation buys power, not calibration,
+   here.
+3. **Presence arm vs plain downstream**: a small conservative shift in swish
+   (FDR 0.041 vs 0.047; DTE power 0.390 vs 0.448) and no difference for
+   edgeR-OD. Per-sample accuracy shows the known PacBio-family presence
+   regression (−0.0021 Spearman, uniform across all 8 samples) — this
+   SQ2-derived design inherits Panel B's TKSM behavior, reinforcing the
+   per-technology opt-in disposition.
+4. **The post-selection experiment**: within-condition prior sharing at
+   w = 0.8 (each replicate primed by a same-condition sibling) does **not**
+   measurably inflate FDR (swish 0.043 vs 0.041; edgeR unchanged to 3
+   decimals). The theoretical anti-conservativeness is empirically bounded
+   near zero under the shipped floor design (protective-only, one-directional
+   priors; both conditions treated identically; swish's infRV moderation
+   defending the boundary set). Together with the measured cross-condition
+   contrast attenuation (6–11% on switch sets), the full picture: the
+   exogenous-only recommendation stands on principle, but the feature's
+   failure modes are measured small in both directions.
