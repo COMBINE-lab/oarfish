@@ -460,3 +460,41 @@ positional/endpoint evidence simply does not pay; `--coverage-model none` is
 the best HiFi configuration (best arm on all three HiFi samples). Practical
 recommendation: per-technology coverage default of `none` for pac-bio-hifi,
 `logistic` for CLR/ONT. The flag ships opt-in with this documented negative.
+
+## Over-annotation at genome scale: mechanism isolated (2026-08-18)
+
+A genome-scale SIRV-O analog (13,361 decoy isoforms — skip/alt-terminus/
+extend perturbations at every eligible expressed gene; `make_decoys.py`) was
+quantified against by the Leg-1 samples plus two single-variable arms:
+
+| regime | mean read | decoy leak (%lib) | decoys called | presence effect |
+|---|---|---|---|---|
+| HiFi (99.2% id, KDE truncation) | 1,580 nt | 0.12% | ~380 | calls −10%, mass ≈0 |
+| ONT-error (96% id, same molecules) | ~1,570 nt | 0.12% | ~320 | ≈ none |
+| ONT-error + heavy truncation | 726 nt | **12.4%** | 3,397 | **≈ none** |
+| (real dRNA SIRV-O anchor) | short/anchored | 9.1% | 18/31 | mass −37%, +0.0275 Sp |
+
+Findings:
+
+1. **Read completeness — not error rate — is the over-annotation
+   vulnerability.** Same molecules at 96% vs 99% identity: identical 0.12%
+   leak. Same pipeline with truncation forced to ~726 nt: 12.4%. Long reads
+   that span discriminating features are structurally immune to annotation
+   decoys; truncated reads are not. (Corollary: HiFi/Kinnex users are
+   largely protected; dRNA/degraded-cDNA users are the exposed population.)
+2. **Downstream robustness on HiFi**: even at 0.12% leak, over-annotation
+   costs the plain pipeline ~6pp of swish DTE power (0.448 → 0.386) while
+   the presence arm is unaffected (0.390 → 0.388); FDR controlled in both
+   (0.043).
+3. **A measured presence-model boundary**: under heavy truncation at this
+   decoy density, each decoy equilibrates at ~360 assigned reads — far above
+   the effective-exclusive-read floor — and the leave-one-out evidence
+   genuinely supports it: presence suppresses 0% of mass-bearing decoys
+   (vs 58% of fabricated SIRV isoforms, whose equilibrium mass stayed near
+   the floor at spike-in depth). Individually-ambiguous truncated reads are
+   the sibling-shadowing information bound in another form; suppressing
+   these decoys needs evidence channels beyond assignment mass — the
+   poly(A)/full-length term (absent in this sim's surviving tails),
+   positional models robust to decoy pollution of the unique-read training
+   set, or annotation-level structural priors. Recorded as the open problem
+   the truncated-protocol population needs solved.
