@@ -191,3 +191,106 @@ mod tests {
         }
     }
 }
+
+/// Clip-aware 3' gap: the molecule-3'-side soft clip is credited against the
+/// alignment gap. On real dRNA, 91.7% of unique reads abut the annotated 3'
+/// end once clips are credited (SIRV measurement) vs 67.4% in alignment
+/// coordinates — the ragged read start (= molecule 3' end) is soft-clipped.
+#[inline]
+fn three_prime_gap_clip_aware_nt(aln: &AlnInfo, len: usize) -> u32 {
+    let gap = three_prime_gap_nt(aln, len);
+    let clip3 = if aln.strand == Strand::Reverse {
+        aln.left_clip
+    } else {
+        aln.right_clip
+    };
+    gap.saturating_sub(clip3)
+}
+
+/// Anchored-3' likelihood (`--anchor-three-prime`, dRNA): every read is
+/// treated as 3'-complete — the direct-RNA protocol sequences from the
+/// poly(A), so truncation is 5'-sided and the read's 3' end is the
+/// molecule's 3' end (premise measured at 91.7% clip-inclusive on real SIRV
+/// dRNA). Identical machinery to the poly(A) term (empirical gap-bin
+/// distribution trained on unique reads, odds capped at MAX_ODDS) but
+/// ungated and clip-aware. Do not use on cDNA/PacBio (premise fails there).
+pub(crate) fn apply_anchored_probabilities(
+    store: &mut InMemoryAlignmentStore,
+    txps: &[TranscriptInfo],
+) -> PolyaDiagnostics {
+    let bins = GAP_EDGES.len();
+    let mut counts = vec![0.0f64; bins];
+    let mut training = 0usize;
+    for (alns, _, _) in store.iter() {
+        if let [aln] = alns {
+            let len = txps[aln.ref_id as usize].len.get();
+            counts[gap_bin(three_prime_gap_clip_aware_nt(aln, len))] += 1.0;
+            training += 1;
+        }
+    }
+    let total: f64 = counts.iter().sum();
+    let density = |bin: usize| -> f64 {
+        ((counts[bin] + PRIOR_MASS / bins as f64) / (total + PRIOR_MASS)) / bin_width(bin)
+    };
+    let mut scored = 0usize;
+    let mut odds_range_sum = 0.0;
+    let mut local: Vec<f64> = Vec::new();
+    for read_index in 0..store.len() {
+        let start = store.boundaries[read_index];
+        let end = store.boundaries[read_index + 1];
+        if end - start < 2 {
+            continue;
+        }
+        local.clear();
+        for aln in &store.alignments[start..end] {
+            let len = txps[aln.ref_id as usize].len.get();
+            local.push(density(gap_bin(three_prime_gap_clip_aware_nt(aln, len))));
+        }
+        let max = local.iter().copied().fold(0.0, f64::max);
+        if !(max > 0.0) {
+            continue;
+        }
+        let floor = max / MAX_ODDS;
+        local.iter_mut().for_each(|v| *v = v.max(floor));
+        let sum: f64 = local.iter().sum();
+        if !(sum > 0.0) {
+            continue;
+        }
+        let min = local.iter().copied().fold(f64::INFINITY, f64::min);
+        odds_range_sum += (max.max(floor) / min).ln();
+        for (probability, value) in store.coverage_probabilities[start..end]
+            .iter_mut()
+            .zip(&local)
+        {
+            *probability *= value / sum;
+        }
+        let renorm: f64 = store.coverage_probabilities[start..end].iter().sum();
+        if renorm > 0.0 && renorm.is_finite() {
+            store.coverage_probabilities[start..end]
+                .iter_mut()
+                .for_each(|v| *v /= renorm);
+        } else {
+            let uniform = 1.0 / (end - start) as f64;
+            store.coverage_probabilities[start..end].fill(uniform);
+        }
+        scored += 1;
+    }
+    let flush = if total > 0.0 {
+        counts[..gap_bin(20)].iter().sum::<f64>() / total
+    } else {
+        0.0
+    };
+    let diffuse = if total > 0.0 {
+        counts[gap_bin(256)..].iter().sum::<f64>() / total
+    } else {
+        0.0
+    };
+    PolyaDiagnostics {
+        training_reads: training,
+        scored_reads: scored,
+        tail_reads: 0,
+        flush_fraction: flush,
+        diffuse_fraction: diffuse,
+        mean_log_odds_range: odds_range_sum / scored.max(1) as f64,
+    }
+}

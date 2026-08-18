@@ -772,6 +772,16 @@ pub struct Args {
     #[arg(long, hide = true, default_value_t = 0.5)]
     pub presence_prior_weight: f64,
 
+    /// anchored 3'-completeness likelihood for direct-RNA data: dRNA
+    /// sequences from the poly(A), so truncation is 5'-sided and EVERY
+    /// read's 3' end is its molecule's 3' end (premise measured at 91.7%
+    /// clip-inclusive abutment on real SIRV dRNA). Applies a clip-aware
+    /// empirical 3'-gap likelihood, trained per-sample on unique reads, odds
+    /// capped. dRNA only — the premise fails for cDNA/PacBio, and NanoSim
+    /// dRNA simulations do not reproduce it.
+    #[arg(long, help_heading = "coverage model")]
+    pub anchor_three_prime: bool,
+
     /// poly(A) 3'-completeness likelihood: a read whose terminal soft clip is
     /// a poly(A) tail demonstrably reached its molecule's 3' end, so among
     /// score-tied candidates one whose annotated 3' terminus is flush with

@@ -208,6 +208,24 @@ fn perform_inference_and_write_output(
         // the EM consumes coverage_probabilities only when this flag is set
         store.filter_opts.model_coverage = true;
     }
+    if args.anchor_three_prime {
+        // The anchored term multiplies into the per-read coverage simplex;
+        // seed it uniform when no coverage model filled it.
+        if args.coverage_model == crate::prog_opts::CoverageModel::None {
+            for i in 0..store.len() {
+                let (s, e) = (store.boundaries[i], store.boundaries[i + 1]);
+                if e > s {
+                    let u = 1.0 / (e - s) as f64;
+                    store.coverage_probabilities[s..e].fill(u);
+                }
+            }
+            store.filter_opts.model_coverage = true;
+        }
+        let diagnostics =
+            crate::util::polya_probability::apply_anchored_probabilities(store, txps);
+        info!(?diagnostics, "applied anchored 3'-completeness likelihood (dRNA)");
+        coverage_diagnostics["anchor_three_prime"] = serde_json::to_value(diagnostics)?;
+    }
     if args.polya_three_prime {
         if store.polya_tail.len() != store.len() {
             warn!(
