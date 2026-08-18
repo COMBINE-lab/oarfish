@@ -498,3 +498,54 @@ Findings:
    positional models robust to decoy pollution of the unique-read training
    set, or annotation-level structural priors. Recorded as the open problem
    the truncated-protocol population needs solved.
+
+## Anchored 3' likelihood for dRNA (2026-08-18) — the needle-mover, mapped end to end
+
+**Premise (four-corner measurement).** Real dRNA is strongly 3'-anchored:
+67.4% of unique SIRV-dRNA reads abut the annotated 3' end in alignment
+coordinates, **91.7% crediting the molecule-3'-side soft clip** (the ragged
+read start is clipped); mean gap 20 nt. NanoSim dRNA does NOT reproduce this
+(29.5%/34.5%, mean gap 550 nt; its cDNA looks the same) — resolving the
+apparent "missing 3' signal" as simulator infidelity, disqualifying Panel B
+dRNA for gating anchored/endpoint models, and retroactively explaining part
+of the July endpoint-model burial.
+
+**Feature** (`--anchor-three-prime`): every dRNA read treated as
+3'-complete; per-sample empirical likelihood over a signed, clip-aware 3'
+mismatch — undershoot (annotated end beyond the read after clip credit) and
+overhang (clip beyond an 80 nt poly(A)/adapter allowance: the signature of a
+candidate shorter than the molecule) both penalized, odds capped at 20.
+
+**Real-data results (SIRV E2 dRNA, alignment mode):**
+
+| | baseline | anchored (signed) |
+|---|---|---|
+| correct annotation, Spearman vs E2 | 0.8175 | **0.8896 (+0.072)** |
+| over-annotated, Spearman (69 real) | 0.7449 | **0.8873 (+0.142)** |
+| over-annotated, fabricated mass | 9.22% of lib | **0.51% (−94%)** |
+
+Presence alone: no effect here (fabricated isoforms equilibrate far above
+any evidence floor — assignment-level siphoning requires an
+assignment-level likelihood). Largest single-feature gains measured in the
+program, on real reads with known concentrations.
+
+**Exact-truth boundary (anchored-truncation sims, 10M reads each).** A
+dRNA-faithful simulator was built (custom 5'-side mdf truncation — tksm's
+`--always-end` anchors the wrong end; fidelity: 99.9% flush). At median
+600–1,300 nt anchored reads, baseline accuracy collapses (Spearman
+0.34–0.42) and decoy leak *rises* to 19–22%: anchoring stacks every read on
+the transcriptome's most-shared region. Leak anatomy: **alt-3' decoys
+0.00%** (the aligner's scoring already eliminates overhang candidates);
+the leak is entirely alt-5' (13–14%) and exon-skip (5–7%) decoys — 3'-
+sharing structures that 3'-anchored fragments *definitionally* cannot
+distinguish by 3' evidence, and whose 5' side is degradation-confounded.
+The anchored term is honest here: +0.003, no harm.
+
+**Disposition**: ships as the dRNA headline feature with a precisely stated
+domain — large gains whenever candidate structures differ within reach of
+the read (terminal variants, structurally distinct false isoforms; all of
+SIRV's fabrications), structurally silent for 3'-sharing ambiguity in
+heavily truncated data, where the correct response is the identifiability/
+grouping machinery, not more evidence. Evaluation used real SIRV dRNA
+(premise + gains) and the anchored sims (boundary); NanoSim dRNA must not
+be used for either.

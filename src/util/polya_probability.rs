@@ -192,10 +192,20 @@ mod tests {
     }
 }
 
-/// Clip-aware 3' gap: the molecule-3'-side soft clip is credited against the
-/// alignment gap. On real dRNA, 91.7% of unique reads abut the annotated 3'
-/// end once clips are credited (SIRV measurement) vs 67.4% in alignment
-/// coordinates — the ragged read start (= molecule 3' end) is soft-clipped.
+/// Soft-clip bases at the molecule-3' side that a genuine 3'-complete read
+/// legitimately carries: partially basecalled poly(A) plus adapter.
+const OVERHANG_ALLOWANCE_NT: u32 = 80;
+
+/// Signed, clip-aware 3' mismatch. Two failure directions, both evidence
+/// against a candidate:
+/// - undershoot: the annotated 3' end lies beyond the read even after
+///   crediting the clipped ragged read-start (gap − covered);
+/// - overhang: the read extends past the candidate's annotated 3' end (the
+///   excess is soft-clipped), beyond the poly(A)/adapter allowance — the
+///   signature of a candidate shorter than the molecule (e.g. an alt-3'
+///   decoy of the true isoform).
+/// A symmetric clip *credit* alone is blind to overhang: alignment gap is 0
+/// at a too-short candidate's end and the excess hides in the clip.
 #[inline]
 fn three_prime_gap_clip_aware_nt(aln: &AlnInfo, len: usize) -> u32 {
     let gap = three_prime_gap_nt(aln, len);
@@ -204,7 +214,10 @@ fn three_prime_gap_clip_aware_nt(aln: &AlnInfo, len: usize) -> u32 {
     } else {
         aln.right_clip
     };
-    gap.saturating_sub(clip3)
+    let covered = clip3.min(gap);
+    let residual_gap = gap - covered;
+    let overhang = clip3 - covered;
+    residual_gap + overhang.saturating_sub(OVERHANG_ALLOWANCE_NT)
 }
 
 /// Anchored-3' likelihood (`--anchor-three-prime`, dRNA): every read is
