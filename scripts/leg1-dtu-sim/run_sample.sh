@@ -4,6 +4,8 @@
 set -euo pipefail
 
 SAMPLE=$1; SEED=$2; ABUND=$3; NMOL=$4; OUT=$5
+# optional: sequencing error model + identity (default = SQ2-like HiFi)
+ERRMODEL=${6:-pacbio2016}; IDENTITY=${7:-99.19,99.99,2.09}
 ROOT=/scratch1/rob/long-read-ecosystem
 TKSM=$ROOT/tools/tksm-env/bin/tksm
 GTF=$ROOT/rebench-2026-08-03/junc/refseq.gtf
@@ -26,8 +28,8 @@ echo "[$SAMPLE] shuffle $(date '+%T')"
 $TKSM shuffle -i "$W.trunc.mdf" -o "$W.shuf.mdf" -s $((SEED * 10 + 4))
 echo "[$SAMPLE] sequence $(date '+%T')"
 $TKSM sequence -i "$W.shuf.mdf" -r "$GENOME" -o "$W.fastq" \
-    -t 16 --badread-error-model pacbio2016 --badread-qscore-model pacbio2016 \
-    --badread-identity 99.19,99.99,2.09
+    -t 16 --badread-error-model "$ERRMODEL" --badread-qscore-model "$ERRMODEL" \
+    --badread-identity "$IDENTITY"
 echo "[$SAMPLE] truth map + compress $(date '+%T')"
 # molecule -> tid from the FINAL (shuffled) mdf: transcribe emits
 # depth-collapsed molecules that polyA expands into per-copy ids (M_0 ->
