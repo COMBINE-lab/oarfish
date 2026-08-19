@@ -699,3 +699,36 @@ validation shows they are accurate descriptions; they are just not useful
 as assignment evidence), (c) the corrected census + site-structured sim as
 standing methodology. Program priority returns to presence/absence and
 projection tracks.
+
+## F4.1 end-consistency presence evidence: GATE PASSED (2026-08-19)
+
+Global-error decomposition (Panel B logistic baseline): FP transcripts carry
+0.07-0.28% of library mass but cost +0.015..+0.049 Spearman and 0.03-0.07
+MARD (oracle removal); FN mass 0.2-0.6%; detected-only Spearman 0.96-0.98.
+Presence is decisively the global-metric lever; magnitude error secondary
+(except SIRV-C, where anchored already recovers logP 0.75->0.90).
+
+F4.1 measurement — per-transcript end-consistency vs count baselines,
+FP-vs-real AUC (est>=1, >=3 reads; zone = no unique reads):
+
+| statistic | SIRV O real (zone) | A1e site-struct (zone) |
+|---|---|---|
+| flush5_frac (reads reaching OWN annotated start) | 0.974 (0.960) | 0.729 (0.748) |
+| flush3_frac | 0.889 (0.860) | 0.521 (0.525) |
+| mode_capture | 0.671 (0.703) | 0.530 (0.583) |
+| unique_frac (baseline) | 0.729 | 0.631 |
+| n_reads (baseline) | 0.524 (0.600) | 0.513 (0.523) |
+
+Pre-registered gate (in-zone AUC >= 0.70, must add over unique_frac):
+**flush5_frac passes on both datasets** — 0.960 real SIRV, 0.748 sim — and
+is strongest exactly where count evidence dies. Mechanistic irony: the 5'
+side, useless per-read, is the top transcript-level FP discriminator — a
+real transcript earns its measured full-length excess (26% of reads reach
+its start); a fabricated isoform's misassigned reads almost never reach the
+FP's own start. flush3 is diluted wherever 3' ends are shared (A1e decoys)
+but adds on real SIRV.
+
+Next (F4.2): binomial evidence log-LR on (k flush-5' of n reads; per-sample
+full-length rate vs homology background) into PresenceState::update_q via
+the existing --presence-endpoint-alpha hook; evaluate presence vs
+presence+end on Panel B + SIRV O + A1e per pre-registered F4.3 bars.
