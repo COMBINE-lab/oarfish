@@ -772,13 +772,15 @@ pub struct Args {
     #[arg(long, hide = true, default_value_t = 0.5)]
     pub presence_prior_weight: f64,
 
-    /// anchored 3'-completeness likelihood for direct-RNA data: dRNA
-    /// sequences from the poly(A), so truncation is 5'-sided and EVERY
-    /// read's 3' end is its molecule's 3' end (premise measured at 91.7%
-    /// clip-inclusive abutment on real SIRV dRNA). Applies a clip-aware
-    /// empirical 3'-gap likelihood, trained per-sample on unique reads, odds
-    /// capped. dRNA only — the premise fails for cDNA/PacBio, and NanoSim
-    /// dRNA simulations do not reproduce it.
+    /// anchored 3'-completeness likelihood for direct-RNA data with
+    /// ANNOTATION-EXACT 3' termini (spike-ins, curated end sets): every dRNA
+    /// read's 3' end is its molecule's 3' end, and the model assumes the
+    /// molecule ends at the annotated terminus. Large gains where that holds
+    /// (SIRV: +0.07..+0.14 Spearman, -94% fabricated-isoform mass). On
+    /// typical human data the second assumption FAILS (APA: mean
+    /// annotated-end offsets ~1kb; measured 18-25% flush on SG-NEx dRNA)
+    /// and this term is mildly harmful — leave it off there. Not for
+    /// cDNA/PacBio; NanoSim dRNA does not reproduce the protocol premise.
     #[arg(long, help_heading = "coverage model")]
     pub anchor_three_prime: bool,
 

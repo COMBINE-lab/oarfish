@@ -549,3 +549,30 @@ heavily truncated data, where the correct response is the identifiability/
 grouping machinery, not more evidence. Evaluation used real SIRV dRNA
 (premise + gains) and the anchored sims (boundary); NanoSim dRNA must not
 be used for either.
+
+## Anchored-3' addendum: human calibration flips the sign (2026-08-18)
+
+Census of **real human dRNA** (SG-NEx MCF7, HEK; RefSeq frame): only
+18–25% of unique reads are 3'-flush with the annotated end (21–45%
+clip-inclusive), mean gap ~0.9 kb — versus SIRV's 67%/92%/20 nt. Coherent
+mechanism: proliferative lines favor proximal APA; molecules genuinely end
+far upstream of RefSeq's distal annotated termini. The dRNA anchor premise
+splits: "read end = molecule end" holds (poly(A) selection), but
+"molecule end = annotated end" does not on human.
+
+A sim calibrated to the human census (jitter-p0 0.3, exponential 1.2 kb
+offsets; gate passed: 28.2% flush, 644 nt mean gap) gives the exact-truth
+verdict: the current global-gap anchored likelihood is **harmful**
+(std −0.0036, decoy arm −0.0042) — with APA, gap differences encode
+polyadenylation variation, not read origin.
+
+**Scoped disposition**: `--anchor-three-prime` is validated ONLY where 3'
+termini are annotation-exact (spike-ins; curated end sets). Help text to
+be updated accordingly. The SIRV result stands as the mechanism
+demonstration; the human-scale version of this feature is the identified
+upgrade: **per-transcript empirical 3'-end profiles** learned from each
+sample's own unique reads (APA becomes per-transcript signal instead of
+global noise), cross-fitted, scored per candidate. Both the calibrated sim
+(A1c) and SIRV now exist as its gates. Also recorded: the four-corner
+census methodology itself (juncprobe tail-probe --assume-anchored) as the
+per-sample premise check any anchored model should run.
