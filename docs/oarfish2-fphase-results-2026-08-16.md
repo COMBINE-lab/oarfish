@@ -576,3 +576,17 @@ global noise), cross-fitted, scored per candidate. Both the calibrated sim
 (A1c) and SIRV now exist as its gates. Also recorded: the four-corner
 census methodology itself (juncprobe tail-probe --assume-anchored) as the
 per-sample premise check any anchored model should run.
+
+### 3'-discriminability partition of human ambiguity (A1c, RefSeq)
+
+74.7% of reads are multi-candidate; among those, the spread of candidate
+annotated-3'-gaps at the read's 3' position exceeds 100 nt for only
+**21.7%** (23.7% @50 nt, 17.9% @200 nt). So the pool any 3'-end model can
+address on human RefSeq is ~16% of all reads (0.747 x 0.217); ~78% of
+ambiguity is 3'-SHARING — isoforms with a common terminus differing
+internally/5'. This bounds the human upside of even a perfect (per-
+transcript, APA-aware) 3' model well below the SIRV demonstration, where
+isoforms differ mainly at their ends and termini are annotation-exact.
+Combined ranking of remaining leads: per-transcript 3'-end profiles are a
+scoped, bounded win (~16% addressable pool, needs APA-aware form);
+presence/absence and projection tracks remain the larger levers.
