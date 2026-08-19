@@ -438,7 +438,12 @@ struct FlushEvidence {
 
 impl FlushEvidence {
     const FLUSH_NT: u32 = 16;
-    const TERM_CAP: f64 = 25.0;
+    /// The binomial log-LR is a genuine per-read sum, like the leave-one-out
+    /// delta it competes with; capping it at a small constant made
+    /// high-count false positives arithmetically immune (their delta grows
+    /// with n while the evidence saturated). Cap generously; the final
+    /// posterior log-odds is clamped by DELTA_CAP anyway.
+    const TERM_CAP: f64 = 1.0e4;
 
     #[inline]
     fn is_flush(a: &AlnInfo, tlen: f64) -> bool {

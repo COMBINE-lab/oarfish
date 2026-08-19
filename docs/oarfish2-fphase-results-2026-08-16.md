@@ -732,3 +732,38 @@ Next (F4.2): binomial evidence log-LR on (k flush-5' of n reads; per-sample
 full-length rate vs homology background) into PresenceState::update_q via
 the existing --presence-endpoint-alpha hook; evaluate presence vs
 presence+end on Panel B + SIRV O + A1e per pre-registered F4.3 bars.
+
+### F4.3 verdict (2026-08-19): integration FAILS despite the F4.1 AUC pass
+
+Arms (presence vs presence + flush evidence, alpha 1; then cap-fixed alpha
+1/3 on dev sets):
+- Panel B: presflush −0.001..−0.002 Spearman on all 6 samples (bar was
+  >= +0.002) — evidence engaged even on NanoSim (self-gate too permissive
+  there) and added noise.
+- SIRV O: fabricated mass 9.22% -> 9.22% (alpha 1, capped) -> 8.63%
+  (alpha 3, uncapped) while real-transcript Spearman fell 0.745 -> 0.705.
+- A1e: FP mass 23.65% -> 23.64%; Spearman −0.002..−0.004.
+
+Root cause, two layers:
+1. Implementation (fixed): the flush log-LR was capped at ±25 while the
+   leave-one-out delta grows per-read — mass-carrying FPs were
+   arithmetically immune. Uncapping (TERM_CAP 1e4) is the principled form.
+2. Fundamental (the kill): FP MASS lives in phantoms that SHARE their 5'
+   start with a real isoform — their flush counts look normal, so end
+   evidence cannot indict them — while the AUC 0.96/0.75 was driven by the
+   many low-mass phantoms that count evidence already handles. Meanwhile
+   real transcripts with weak 5' representation take collateral damage.
+   Mass-weighted discrimination, not ROC, is the right gate for presence
+   evidence; recorded as a methodology lesson.
+
+Consistent with the F2 finding, now measured from a second direction:
+mass-carrying fabrications sit at an EM equilibrium that per-transcript
+posterior evidence cannot dislodge — only assignment-level likelihoods
+reach them (anchored: 0.51% vs presence-channel floor ~8.6%).
+
+What stands after F4: (a) presence-alone captures part of the decomposed FP
+headroom (Panel B logistic 0.8871 -> pres 0.8951 on NA12878-cdna; +0.005..
++0.008 across samples); (b) the remaining oracle gap (to ~0.936) is in
+low-count FPs vs weakly-expressed reals — flush evidence was the candidate
+and failed; (c) --presence-flush-alpha stays experimental, default 0, with
+this provenance. F4 track closed.
