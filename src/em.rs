@@ -412,6 +412,103 @@ impl PositionalModel {
     }
 }
 
+/// Per-transcript 5'-flush binomial presence evidence (`--presence-flush-alpha`).
+///
+/// Bottom-up motivation (F4.1, 2026-08-19): real dRNA libraries carry a bulk
+/// full-length excess (26% of reads reach an annotated start, ~26x the
+/// uniform-truncation expectation), and a genuinely expressed transcript earns
+/// its share of that excess — some of its reads reach ITS OWN annotated 5'
+/// start — while a false positive accumulates misassigned homologous reads
+/// whose 5' ends almost never land at the phantom's start. Measured
+/// FP-vs-real AUC of the flush fraction: 0.974 (SIRV O real reads; 0.960 in
+/// the unique-free zone) and 0.729/0.748 (site-structured sim), beating
+/// unique-read fraction everywhere.
+///
+/// Evidence: with k of a transcript's n winner-assigned reads 5'-flush
+/// (clip-credited gap <= 16 nt), log LR = k ln(pi/b) + (n-k) ln((1-pi)/(1-b)),
+/// where pi = flush rate among unique reads (the sample's own full-length
+/// rate) and b = flush rate of NON-winner candidates of ambiguous reads (the
+/// homology-chance rate). Winner = highest score-derived probability —
+/// abundance-free, so the term cannot feed back on itself. Self-gating: if
+/// the sample shows no full-length excess (pi <= 1.2 b or pi < 0.02, e.g.
+/// simulators without end fidelity), the evidence is disabled.
+struct FlushEvidence {
+    log_lr: Vec<f64>,
+}
+
+impl FlushEvidence {
+    const FLUSH_NT: u32 = 16;
+    const TERM_CAP: f64 = 25.0;
+
+    #[inline]
+    fn is_flush(a: &AlnInfo, tlen: f64) -> bool {
+        use bio_types::strand::Strand;
+        let left = a.start.saturating_sub(1);
+        let right = (tlen - a.end as f64).max(0.0) as u32;
+        let (gap, clip) = if a.strand == Strand::Reverse {
+            (right, a.right_clip)
+        } else {
+            (left, a.left_clip)
+        };
+        gap.saturating_sub(clip) <= Self::FLUSH_NT
+    }
+
+    fn fit(em_info: &EMInfo) -> Option<Self> {
+        let n_txps = em_info.txp_info.len();
+        let mut k = vec![0u32; n_txps];
+        let mut n = vec![0u32; n_txps];
+        let (mut uniq_flush, mut uniq_tot) = (0u64, 0u64);
+        let (mut bg_flush, mut bg_tot) = (0u64, 0u64);
+        for (alns, as_probs, _) in em_info.eq_map.iter() {
+            let mut wi = 0;
+            for (i, p) in as_probs.iter().enumerate() {
+                if *p > as_probs[wi] {
+                    wi = i;
+                }
+            }
+            for (i, a) in alns.iter().enumerate() {
+                let t = a.ref_id as usize;
+                let flush = Self::is_flush(a, em_info.txp_info[t].lenf);
+                if i == wi {
+                    n[t] += 1;
+                    if flush {
+                        k[t] += 1;
+                    }
+                    if alns.len() == 1 {
+                        uniq_tot += 1;
+                        if flush {
+                            uniq_flush += 1;
+                        }
+                    }
+                } else {
+                    bg_tot += 1;
+                    if flush {
+                        bg_flush += 1;
+                    }
+                }
+            }
+        }
+        if uniq_tot == 0 || bg_tot == 0 {
+            return None;
+        }
+        let pi = (uniq_flush as f64 / uniq_tot as f64).clamp(1e-4, 1.0 - 1e-4);
+        let b = (bg_flush as f64 / bg_tot as f64).clamp(1e-4, 1.0 - 1e-4);
+        if pi < 0.02 || pi <= 1.2 * b {
+            // no exploitable full-length excess in this sample
+            return None;
+        }
+        let lpos = (pi / b).ln();
+        let lneg = ((1.0 - pi) / (1.0 - b)).ln();
+        let log_lr = (0..n_txps)
+            .map(|t| {
+                (k[t] as f64 * lpos + (n[t] - k[t]) as f64 * lneg)
+                    .clamp(-Self::TERM_CAP, Self::TERM_CAP)
+            })
+            .collect();
+        Some(Self { log_lr })
+    }
+}
+
 struct PresenceState {
     q: Vec<f64>,
     eff: Vec<f64>,
@@ -421,6 +518,10 @@ struct PresenceState {
     pos: Vec<f64>,
     positional: Option<PositionalModel>,
     endpoint_alpha: f64,
+    /// Static per-transcript 5'-flush binomial evidence (see FlushEvidence),
+    /// scaled by `flush_alpha` into the posterior log-odds.
+    flush: Option<FlushEvidence>,
+    flush_alpha: f64,
     touched: Vec<bool>,
     /// Per-transcript prior log-odds. Uniform (`logit(rho)`) unless an
     /// external presence prior (`--presence-prior-file`) raised individual
@@ -442,6 +543,8 @@ impl PresenceState {
         prior_rho: Option<&[f64]>,
         positional: Option<PositionalModel>,
         endpoint_alpha: f64,
+        flush: Option<FlushEvidence>,
+        flush_alpha: f64,
     ) -> Self {
         let logit = |p: f64| {
             let p = p.clamp(1e-4, 1.0 - 1e-4);
@@ -458,6 +561,8 @@ impl PresenceState {
             pos: vec![0.0; n_txps],
             positional,
             endpoint_alpha,
+            flush,
+            flush_alpha,
             touched: vec![false; n_txps],
             logit_rho,
             calls: 0,
@@ -553,9 +658,14 @@ impl PresenceState {
             if !self.touched[t] {
                 continue;
             }
-            // Leave-one-out gain is >= 0; the positional term is signed
-            // (typical placements add evidence, atypical placements subtract).
-            let d = (self.delta[t].max(0.0) + self.endpoint_alpha * self.pos[t])
+            // Leave-one-out gain is >= 0; the positional and flush terms are
+            // signed (typical/own-start placements add evidence, atypical
+            // subtract).
+            let flush_term = match &self.flush {
+                Some(fe) => self.flush_alpha * fe.log_lr[t],
+                None => 0.0,
+            };
+            let d = (self.delta[t].max(0.0) + self.endpoint_alpha * self.pos[t] + flush_term)
                 .clamp(-Self::DELTA_CAP, Self::DELTA_CAP);
             self.q[t] = 1.0 / (1.0 + (-(d + self.logit_rho[t])).exp());
         }
@@ -584,6 +694,18 @@ fn drive_with_presence(
     let n_states = n_txps + em_info.novel_loci;
     let endpoint_alpha = em_info.presence_endpoint_alpha;
     let positional = (endpoint_alpha != 0.0).then(|| PositionalModel::fit(em_info));
+    let flush_alpha = em_info.presence_flush_alpha;
+    let flush = if flush_alpha != 0.0 {
+        let fe = FlushEvidence::fit(em_info);
+        if fe.is_none() {
+            tracing::info!(
+                "--presence-flush-alpha: no exploitable full-length excess in this sample; flush evidence disabled"
+            );
+        }
+        fe
+    } else {
+        None
+    };
     let txp_lens: Vec<f64> = em_info.txp_info.iter().map(|t| t.lenf).collect();
     let mut st = PresenceState::new(
         n_txps,
@@ -594,6 +716,8 @@ fn drive_with_presence(
         em_info.presence_prior_rho.as_deref(),
         positional,
         endpoint_alpha,
+        flush,
+        flush_alpha,
     );
     let mut wrapped = |src: &[f64], dst: &mut [f64]| {
         st.calls += 1;

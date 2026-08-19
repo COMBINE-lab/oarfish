@@ -514,6 +514,7 @@ fn perform_inference_and_write_output(
         convergence_l1_thresh: args.convergence_l1_thresh,
         presence_model: args.presence_model,
         presence_endpoint_alpha: args.presence_endpoint_alpha,
+        presence_flush_alpha: args.presence_flush_alpha,
         presence_prior_rho,
         presence_warmup: args.presence_warmup,
         presence_period: args.presence_period,

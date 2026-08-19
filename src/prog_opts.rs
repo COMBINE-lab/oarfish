@@ -819,6 +819,19 @@ pub struct Args {
     #[arg(long, hide = true, default_value_t = 0.0)]
     pub presence_endpoint_alpha: f64,
 
+    /// weight of the 5'-flush binomial presence evidence (0 = off). A
+    /// transcript's winner-assigned reads either do or do not reach ITS OWN
+    /// annotated 5' start (clip-credited, <=16 nt); the binomial log-LR of
+    /// that count against the sample's unique-read full-length rate vs the
+    /// homology background enters the spike-slab posterior. F4.1 measured
+    /// FP-vs-real AUC 0.974/0.960-zone (SIRV O real dRNA), 0.729/0.748-zone
+    /// (site-structured sim) — strongest exactly where unique-read evidence
+    /// is absent. Self-gating: disabled automatically for samples with no
+    /// full-length excess (e.g. NanoSim-style simulators). Requires
+    /// --presence-model spike-slab.
+    #[arg(long, hide = true, default_value_t = 0.0)]
+    pub presence_flush_alpha: f64,
+
     /// number of cores that oarfish will use during different phases
     /// of quantification. Note: This value will be at least 2 for bulk
     /// quantification and at least 3 for single-cell quantification due to
