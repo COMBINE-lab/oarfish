@@ -658,3 +658,44 @@ the census caveat baked in: only sample-calibrated profiles are justified —
 naive 5'-flush preference is anti-informative on truth. Sims need
 site-structured end placement (PAS-anchored 3', clustered 5') before they
 can evaluate any of this; current A1d cannot express these signals.
+
+### End-profile evaluation verdict (2026-08-19): FAILS the quantification gate
+
+Step 1 (held-out predictability, real MCF7/HEK): PASSED with margin
+(+1.1-1.3 nats/read vs global, positive in every coverage stratum).
+Step 3 results (--end-profile vs base vs anchored):
+
+| dataset | arm | Spearman | decoy mass |
+|---|---|---|---|
+| SIRV E2 real (C) | base / anchor / endprof | .8175 / .8896 / .8898 | — |
+| SIRV E2 real (O) | base / anchor / endprof | .7449 / .8873 / .8884 | 9.22 / 0.51 / 5.34% |
+| A1d control      | base / anchor / endprof | .4123 / .4118 / .4116 | 21.9 / 22.2 / 22.5% |
+| A1e site-struct  | base / anchor / endprof | .5473 / .5457 / .5440 | 16.8 / 17.1 / 17.8% |
+
+A1e (per-transcript APA sites + 5' hotspots, census gate passed: 53.5%
+flush) is the favorable case by construction — sites drawn INDEPENDENTLY
+per transcript maximize sibling discriminability, more than real shared-PAS
+biology would — and end-profile still loses (−0.0033 std, +1.05pp decoy
+mass). Pre-registered bar (≥ +0.002) decisively missed.
+
+Mechanism of failure (why predictive ≠ discriminative):
+1. A concentrated profile helps a transcript's site-reads but PENALIZES the
+   same transcript's non-site tail reads (~half of them) relative to an
+   unexpressed sibling's broad global-shrunk profile — the two effects
+   cancel to slightly negative.
+2. Decoy forgiveness: decoys that capture a few unique reads learn
+   self-excusing profiles (SIRV fabricated mass 5.34% vs anchored's 0.51%);
+   shrinkage bounds but does not eliminate this.
+3. The EM's abundance term already resolves ties in the direction end
+   evidence would mostly confirm; where they disagree, end geometry is
+   more often wrong (consistent with the feature census).
+
+Disposition: --end-profile stays as an experimental flag with this verdict
+in its provenance; NOT a headline feature. What survives from this line:
+(a) --anchor-three-prime for annotation-exact termini (unchanged), (b) the
+per-transcript end-profile machinery as the basis for the BANKED APA
+reporting deliverable (profiles as a per-sample APA readout — the held-out
+validation shows they are accurate descriptions; they are just not useful
+as assignment evidence), (c) the corrected census + site-structured sim as
+standing methodology. Program priority returns to presence/absence and
+projection tracks.
