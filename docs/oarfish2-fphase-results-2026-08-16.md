@@ -624,3 +624,37 @@ anchored likelihood is neutral-to-harmful; the SIRV win is real but
 annotation-exact-only. Upgrade path unchanged (per-transcript 3'-end
 profiles; the 73% modal clustering is direct evidence the per-transcript
 end distribution is learnable).
+
+## Bottom-up feature census (2026-08-19)
+
+Question inverted per review: not "which mechanisms should help" but "which
+features in the data actually discriminate." Two probes: (1) exact-truth
+placement census on A1d (2.5M sampled reads; truth vs best-AS winner, per
+feature, overall and AS-tied); (2) real-data end-structure on MCF7 dRNA.
+
+DEAD (measured, third dataset for the tie result):
+- 94.1% of misassignments are AS-tied; among tied, EVERY per-alignment
+  geometry feature is ~0 or ANTI-informative: lendiff/txpcov/txplen net
+  -19%, gap5 -16%, startf -15% (short isoforms covering the read span look
+  "cleaner"; truth is systematically the longer source). Naive plausibility
+  likelihoods would hurt. gap3c ~0 on jittered ends (consistent w/ A1d quant).
+- Transcript-level coverage-shape aggregates for FP detection: mean_qcov /
+  flush_frac / end-dispersion AUC 0.51-0.52 = dead. FP separation lives in
+  unique_frac (AUC 0.675) and n_reads (0.625) — the presence-track variables.
+
+ALIVE (real data only; invisible in sims by construction):
+- 3' PAS support: AATAAA/ATTAAA in [-40,-5] of read 3' ends: 53.9% (flush),
+  32.6% (large-gap), 2.5% internal control. Read 3' ends are genuine pA
+  sites; truth-free per-candidate feature.
+- 5' structure: 26.0% of reads clip-inclusive-flush with an annotated start
+  (~26x uniform-truncation expectation) — bulk full-length reads exist; and
+  non-flush 5' truncation points cluster (modal +/-25nt = 48.8%/txp).
+
+Synthesis: per-READ geometry is exhausted; the live signal is per-TRANSCRIPT
+end-position structure at BOTH ends, concentrated and learnable from unique
+reads. Points to a two-sided per-transcript end-profile likelihood (5' side
+addresses the 78% 3'-sharing ambiguity pool that the 3' side cannot), with
+the census caveat baked in: only sample-calibrated profiles are justified —
+naive 5'-flush preference is anti-informative on truth. Sims need
+site-structured end placement (PAS-anchored 3', clustered 5') before they
+can evaluate any of this; current A1d cannot express these signals.
