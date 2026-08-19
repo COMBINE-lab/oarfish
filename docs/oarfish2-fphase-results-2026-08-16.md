@@ -590,3 +590,37 @@ isoforms differ mainly at their ends and termini are annotation-exact.
 Combined ranking of remaining leads: per-transcript 3'-end profiles are a
 scoped, bounded win (~16% addressable pool, needs APA-aware form);
 presence/absence and projection tracks remain the larger levers.
+
+### Census correction + mechanism diagnostics (2026-08-19, after review)
+
+Challenge raised: the census conditioned on unique reads (tail-probe's flush
+stat is computed only for single-candidate reads), which could deplete flush
+reads since ~78% of ambiguity is 3'-sharing. Recomputed as per-read MIN
+clip-aware gap over ALL candidates: MCF7 45.3->49.7% flush, HEK 20.6->19.6%;
+ambiguous reads no more flush than unique (51.0% vs 49.7%). Bias real in
+design, small in effect: half of MCF7 / 80% of HEK reads are flush with NO
+annotated terminus.
+
+Cause diagnostics (both samples): internal A-stretch capture DEAD
+(downstream-15nt A-frac 0.25-0.27 = background); degraded-read artifact DEAD
+(flushness flat across length strata); antisense DEAD (0.5% reverse).
+POSITIVE: large-gap read 3' ends cluster at discrete internal sites — on
+MCF7, modal +/-25nt site captures 73% of such reads per transcript
+(HEK 45%) = unannotated poly(A) sites / short-isoform ends. Combined with
+the SIRV control (same protocol, 91.7% flush), the protocol is fine:
+"read end = molecule end" holds; "molecule end = annotated end" fails (APA).
+
+Sign-flip mechanism: when a molecule ends at a proximal APA site, the TRUE
+isoform shows a ~1kb gap while a shorter sibling whose annotated end
+coincides with that site shows gap 0 — the global-gap likelihood then
+confidently reassigns the read to the wrong flush candidate. Evidence
+inverted, not diluted, exactly for APA-affected reads.
+
+Recalibrated sim A1d matched to the corrected census (jitter-p0 0.5, mean
+1400; gate: 53.4% min-gap flush vs MCF7 49.7%): std −0.0005, decoy −0.0020,
+decoy mass +0.33pp. Softer than A1c's −0.004 but still no benefit. Verdict
+robust across both calibrations: on APA-bearing human data the global-gap
+anchored likelihood is neutral-to-harmful; the SIRV win is real but
+annotation-exact-only. Upgrade path unchanged (per-transcript 3'-end
+profiles; the 73% modal clustering is direct evidence the per-transcript
+end distribution is learnable).
