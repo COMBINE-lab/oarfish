@@ -368,6 +368,23 @@ fn main() -> anyhow::Result<()> {
         rammap::set_dp_cache_cap_mb(mb);
     }
 
+    if args.mapper == crate::prog_opts::MapperBackend::Spearfish {
+        if args.genome.is_some() || args.genome_alignments.is_some() {
+            anyhow::bail!(
+                "--mapper spearfish supports transcriptome read mode only (not genome mode)"
+            );
+        }
+        if args.only_index {
+            anyhow::bail!(
+                "--mapper spearfish builds its index in seconds; use `spearfish index` to write one"
+            );
+        }
+        // spearfish scores are scaled by SPEARFISH_SCORE_SCALE; spearfish's EM uses exp(Δ / 2).
+        if args.score_prob_denom.is_none() && args.reads.is_some() {
+            args.score_prob_denom = Some(2.0 * crate::util::mapper::SPEARFISH_SCORE_SCALE);
+        }
+    }
+
     // if we are just indexing, don't bother with anything else
     if args.only_index {
         let (header, _reader, _aligner, digest) = get_aligner_from_fastas(&mut args)?;

@@ -445,7 +445,7 @@ pub fn quantify_genome_alignments_from_bam<R: BufRead>(
 #[allow(unused_mut)]
 pub fn quantify_genome_raw_reads(
     txp_header: &noodles_sam::Header,
-    mut aligner: crate::util::mapper::Mapper,
+    mut aligner: crate::util::mapper::RammapMapper,
     g2t: &G2TTree,
     proj_config: &ProjectionConfig,
     filter_opts: AlignmentFilters,
@@ -983,7 +983,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                             for (name, seq) in read_chunk.iter() {
                                 // map the next read, with cigar string
                                 let map_res_opt =
-                                    crate::util::mapper::map_read(&loc_aligner, name, seq);
+                                    crate::util::mapper::map_read_txome(&loc_aligner, name, seq);
                                 if let Ok(mut mappings) = map_res_opt {
                                     let (ag, aprobs) = filter.filter(
                                         &mut discard_table,
