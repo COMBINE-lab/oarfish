@@ -149,4 +149,122 @@ mod backend {
     }
 }
 
-pub(crate) use backend::{Mapper, OMapping, alignment_score, map_read};
+use crate::util::oarfish_types::AlnRecordLike;
+pub(crate) use backend::{OMapping, alignment_score, map_read};
+
+/// The rammap aligner, as used by the genome-projection path.
+pub(crate) type RammapMapper = std::sync::Arc<rammap::api::Aligner>;
+
+/// Transcriptome read-mode mapping backend: rammap (default) or spearfish.
+#[derive(Clone)]
+pub(crate) enum Mapper {
+    Rammap(RammapMapper),
+    Spearfish(std::sync::Arc<spearfish::Mapper>),
+}
+
+/// spearfish scores are real-valued; oarfish's filter takes integers. Scores are scaled by
+/// this factor, and the default score→probability denominator for spearfish is
+/// `SPEARFISH_SCORE_SCALE * 2` (spearfish's own EM uses exp(Δ / 2)).
+pub(crate) const SPEARFISH_SCORE_SCALE: f32 = 10.0;
+
+/// A spearfish hit plus the read length (for the aligned-fraction filter).
+#[derive(Debug, Clone)]
+pub(crate) struct SpearfishMapping {
+    pub(crate) hit: spearfish::Hit,
+    pub(crate) query_len: usize,
+}
+
+/// One transcriptome alignment from either backend.
+#[derive(Debug, Clone)]
+pub(crate) enum TxMapping {
+    Rammap(OMapping),
+    Spearfish(SpearfishMapping),
+}
+
+/// Map one read in transcriptome read mode with whichever backend is configured.
+#[inline]
+pub(crate) fn map_read_txome(
+    mapper: &Mapper,
+    name: &[u8],
+    seq: &[u8],
+) -> anyhow::Result<Vec<TxMapping>> {
+    match mapper {
+        Mapper::Rammap(a) => Ok(map_read(a, name, seq)?
+            .into_iter()
+            .map(TxMapping::Rammap)
+            .collect()),
+        Mapper::Spearfish(m) => {
+            let r = m.map(seq);
+            Ok(r.hits
+                .into_iter()
+                .map(|hit| {
+                    TxMapping::Spearfish(SpearfishMapping {
+                        hit,
+                        query_len: seq.len(),
+                    })
+                })
+                .collect())
+        }
+    }
+}
+
+impl AlnRecordLike for TxMapping {
+    fn opt_sequence_len(&self) -> Option<usize> {
+        match self {
+            TxMapping::Rammap(m) => m.opt_sequence_len(),
+            TxMapping::Spearfish(m) => Some(m.query_len),
+        }
+    }
+    fn is_reverse_complemented(&self) -> bool {
+        match self {
+            TxMapping::Rammap(m) => m.is_reverse_complemented(),
+            TxMapping::Spearfish(m) => m.hit.reverse,
+        }
+    }
+    fn is_unmapped(&self) -> bool {
+        match self {
+            TxMapping::Rammap(m) => m.is_unmapped(),
+            TxMapping::Spearfish(_) => false,
+        }
+    }
+    fn ref_id(&self, header: &noodles_sam::header::Header) -> anyhow::Result<usize> {
+        match self {
+            TxMapping::Rammap(m) => m.ref_id(header),
+            // spearfish transcript ids follow index order, which is the header order.
+            TxMapping::Spearfish(m) => Ok(m.hit.tx as usize),
+        }
+    }
+    fn aln_span(&self) -> Option<usize> {
+        match self {
+            TxMapping::Rammap(m) => m.aln_span(),
+            TxMapping::Spearfish(m) => Some((m.hit.target_end - m.hit.target_start) as usize),
+        }
+    }
+    fn aln_score(&self) -> Option<i64> {
+        match self {
+            TxMapping::Rammap(m) => m.aln_score(),
+            TxMapping::Spearfish(m) => Some((m.hit.score * SPEARFISH_SCORE_SCALE).round() as i64),
+        }
+    }
+    fn aln_start(&self) -> u32 {
+        match self {
+            TxMapping::Rammap(m) => m.aln_start(),
+            TxMapping::Spearfish(m) => m.hit.target_start,
+        }
+    }
+    fn aln_end(&self) -> u32 {
+        match self {
+            TxMapping::Rammap(m) => m.aln_end(),
+            TxMapping::Spearfish(m) => m.hit.target_end,
+        }
+    }
+    fn is_supp(&self) -> bool {
+        match self {
+            TxMapping::Rammap(m) => m.is_supp(),
+            TxMapping::Spearfish(_) => false,
+        }
+    }
+    fn name(&self) -> Option<String> {
+        None
+    }
+}

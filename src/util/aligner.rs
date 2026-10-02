@@ -141,10 +141,113 @@ fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAligner
         }
     };
 
-    Ok((header, None, Some(std::sync::Arc::new(aligner)), digests))
+    Ok((
+        header,
+        None,
+        Some(crate::util::mapper::Mapper::Rammap(std::sync::Arc::new(
+            aligner,
+        ))),
+        digests,
+    ))
+}
+
+// ===========================================================================
+// spearfish backend
+// ===========================================================================
+
+/// Map an oarfish read-mode sequencing tech onto a spearfish preset.
+fn spearfish_preset(seq_tech: &Option<SequencingTech>) -> anyhow::Result<spearfish::Preset> {
+    match seq_tech {
+        Some(SequencingTech::OntCDNA) => Ok(spearfish::Preset::Ont),
+        Some(SequencingTech::OntDRNA) => Ok(spearfish::Preset::Drna),
+        Some(SequencingTech::PacBioHifi) => Ok(spearfish::Preset::Hifi),
+        Some(SequencingTech::PacBio) => {
+            warn!("spearfish has no PacBio CLR preset; using its ONT preset.");
+            Ok(spearfish::Preset::Ont)
+        }
+        None => anyhow::bail!("sequencing tech must be provided in read mode, but it was not!"),
+    }
+}
+
+/// Build (from `--annotated`/`--novel`) or open (`--index`, a spearfish `.sfi`) a spearfish
+/// index and mapper. The header lists transcripts in index order (= FASTA order), with
+/// spearfish's transcript names (FASTA IDs cut at the first `|`).
+fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
+    info!("oarfish is operating in read-based mode (spearfish backend)");
+    let mut digests = NamedDigestVec::new();
+    let index = if let Some(idx) = &args.index {
+        let index = spearfish::Index::open(idx)?;
+        digests.push((
+            "prexisting_index".to_string(),
+            digest_utils::digest_from_header(&spearfish_header(&index)?)?,
+        ));
+        index
+    } else {
+        rammap_set_index_threads(args.threads.max(1));
+        let mut txs = Vec::new();
+        for (label, f) in [
+            ("annotated_transcripts_digest", &args.annotated),
+            ("novel_transcripts_digest", &args.novel),
+        ] {
+            if let Some(f) = f {
+                let mut reader = needletail::parse_fastx_file(f)?;
+                while let Some(rec) = reader.next() {
+                    let rec = rec?;
+                    let (name, gene) = spearfish::name_and_gene(&String::from_utf8_lossy(rec.id()));
+                    txs.push((name, gene, rec.seq().into_owned()));
+                }
+                digests.push((
+                    label.to_string(),
+                    digest_utils::get_digest_from_fasta(f)
+                        .join()
+                        .expect("valid digest")?,
+                ));
+            }
+        }
+        let t = std::time::Instant::now();
+        let (index, rep) = spearfish::Index::build(txs, &spearfish::IndexOptions::default())?;
+        info!(
+            "built spearfish index over {} transcripts ({} genes) in {:.1}s",
+            rep.transcripts.to_formatted_string(&Locale::en),
+            rep.genes.to_formatted_string(&Locale::en),
+            t.elapsed().as_secs_f64()
+        );
+        index
+    };
+    let header = spearfish_header(&index)?;
+    let opts = spearfish::MapOptions::preset(spearfish_preset(&args.seq_tech)?);
+    let mapper = spearfish::Mapper::new(std::sync::Arc::new(index), &opts)?;
+    Ok((
+        header,
+        None,
+        Some(crate::util::mapper::Mapper::Spearfish(std::sync::Arc::new(
+            mapper,
+        ))),
+        digests,
+    ))
+}
+
+fn spearfish_header(index: &spearfish::Index) -> anyhow::Result<noodles_sam::header::Header> {
+    let mut header = noodles_sam::header::Header::builder();
+    for t in 0..index.n_transcripts() as u32 {
+        header = header.add_reference_sequence(
+            index.tx_name(t).to_string(),
+            HeaderMap::<header_val::map::ReferenceSequence>::new(NonZeroUsize::try_from(
+                index.tx_len(t).max(1) as usize,
+            )?),
+        );
+    }
+    header = header.add_program(
+        "spearfish",
+        HeaderMap::<header_val::map::Program>::default(),
+    );
+    Ok(header.build())
 }
 
 pub(crate) fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
+    if args.mapper == crate::prog_opts::MapperBackend::Spearfish {
+        return get_spearfish_mapper(args);
+    }
     info!("oarfish is operating in read-based mode (rammap backend)");
     if args.index.is_some() {
         return get_aligner_from_index(args);
@@ -226,7 +329,14 @@ pub(crate) fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderRea
         write_rammap_index_with_footer(&aligner, idx_str, &digests)?;
     }
 
-    Ok((header, None, Some(std::sync::Arc::new(aligner)), digests))
+    Ok((
+        header,
+        None,
+        Some(crate::util::mapper::Mapper::Rammap(std::sync::Arc::new(
+            aligner,
+        ))),
+        digests,
+    ))
 }
 
 /// Build a *spliced* rammap aligner over a genome (FASTA) for genome-read mode,
@@ -239,7 +349,7 @@ pub(crate) fn get_aligner_from_args(args: &mut Args) -> anyhow::Result<HeaderRea
 pub(crate) fn get_genome_aligner_from_args(
     args: &Args,
     junc_bed: Option<&std::path::Path>,
-) -> anyhow::Result<(crate::util::mapper::Mapper, Vec<String>)> {
+) -> anyhow::Result<(crate::util::mapper::RammapMapper, Vec<String>)> {
     let genome = args
         .genome
         .clone()
@@ -381,7 +491,14 @@ pub(crate) fn get_aligner_from_fastas(
         write_rammap_index_with_footer(&aligner, idx_str, &digests)?;
     }
 
-    Ok((header, None, Some(std::sync::Arc::new(aligner)), digests))
+    Ok((
+        header,
+        None,
+        Some(crate::util::mapper::Mapper::Rammap(std::sync::Arc::new(
+            aligner,
+        ))),
+        digests,
+    ))
 }
 
 /// Persist a rammap aligner's index to `idx_out` as a native RMMI file and

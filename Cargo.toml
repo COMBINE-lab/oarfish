@@ -89,6 +89,10 @@ rammap = { package = "rammap-core-temp", version = "1.2.0", default-features = f
   "parallel",
 ] }
 
+# spearfish: LCP-based long-read transcriptome mapper, an alternative read-mode backend
+# (`--mapper spearfish`).
+spearfish = { path = "../../../../crates/spearfish", default-features = false }
+
 needletail = "0.6.3"
 indicatif = "0.18.3"
 rustc-hash = "2.1.1"
