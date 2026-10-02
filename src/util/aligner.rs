@@ -184,34 +184,42 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
         index
     } else {
         rammap_set_index_threads(args.threads.max(1));
-        let mut txs = Vec::new();
-        for (label, f) in [
+        // Reference digests hash the FASTAs on background threads, overlapping with
+        // reading and indexing (as on the rammap path); joined once the index is built.
+        let digest_handles: Vec<_> = [
             ("annotated_transcripts_digest", &args.annotated),
             ("novel_transcripts_digest", &args.novel),
-        ] {
-            if let Some(f) = f {
-                let mut reader = needletail::parse_fastx_file(f)?;
-                while let Some(rec) = reader.next() {
-                    let rec = rec?;
-                    let (name, gene) = spearfish::name_and_gene(&String::from_utf8_lossy(rec.id()));
-                    txs.push((name, gene, rec.seq().into_owned()));
-                }
-                digests.push((
-                    label.to_string(),
-                    digest_utils::get_digest_from_fasta(f)
-                        .join()
-                        .expect("valid digest")?,
-                ));
+        ]
+        .into_iter()
+        .filter_map(|(label, f)| f.as_ref().map(|f| (label, digest_utils::get_digest_from_fasta(f))))
+        .collect();
+        let t_read = std::time::Instant::now();
+        let mut txs = Vec::new();
+        for f in [&args.annotated, &args.novel].into_iter().flatten() {
+            let mut reader = needletail::parse_fastx_file(f)?;
+            while let Some(rec) = reader.next() {
+                let rec = rec?;
+                let (name, gene) = spearfish::name_and_gene(&String::from_utf8_lossy(rec.id()));
+                txs.push((name, gene, rec.seq().into_owned()));
             }
         }
+        info!("read {} transcripts in {:.1}s", txs.len(), t_read.elapsed().as_secs_f64());
         let t = std::time::Instant::now();
         let (index, rep) = spearfish::Index::build(txs, &spearfish::IndexOptions::default())?;
         info!(
-            "built spearfish index over {} transcripts ({} genes) in {:.1}s",
+            "built spearfish index over {} transcripts ({} genes) in {:.1}s ({})",
             rep.transcripts.to_formatted_string(&Locale::en),
             rep.genes.to_formatted_string(&Locale::en),
-            t.elapsed().as_secs_f64()
+            t.elapsed().as_secs_f64(),
+            rep.seconds
+                .iter()
+                .map(|(k, v)| format!("{k} {v:.1}s"))
+                .collect::<Vec<_>>()
+                .join(", ")
         );
+        for (label, h) in digest_handles {
+            digests.push((label.to_string(), h.join().expect("valid digest")?));
+        }
         index
     };
     let header = spearfish_header(&index)?;
