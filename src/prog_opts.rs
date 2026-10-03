@@ -541,6 +541,11 @@ pub struct Args {
     #[arg(long, help_heading = "EM", default_value_t = 1e-3)]
     pub convergence_thresh: f64,
 
+    /// run the EM over individual reads even when no per-read model term (coverage, KDE) is
+    /// active; by default such reads are collapsed into equivalence classes
+    #[arg(long, help_heading = "EM")]
+    pub per_read_em: bool,
+
     /// number of cores that oarfish will use during different phases
     /// of quantification. Note: This value will be at least 2 for bulk
     /// quantification and at least 3 for single-cell quantification due to
