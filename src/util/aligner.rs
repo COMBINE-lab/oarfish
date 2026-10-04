@@ -230,9 +230,12 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
     if args.model_truncation {
         opts.extend_ends(preset);
     }
-    // Only hits that can pass the score filter reach the EM, so only those are extended.
+    // Only hits within the score filter reach the EM: spearfish reports only those, and
+    // extends only those.
+    let within = 1.0 - args.score_threshold.try_as_f32().unwrap_or(0.95);
+    opts.params.delta_rep = opts.params.delta_rep.min(within);
     if let Some(e) = &mut opts.params.ends {
-        e.within = 1.0 - args.score_threshold.try_as_f32().unwrap_or(0.95);
+        e.within = within;
     }
     let mapper = spearfish::Mapper::new(std::sync::Arc::new(index), &opts)?;
     Ok((
