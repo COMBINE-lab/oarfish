@@ -19,7 +19,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   constant per-base rate, with a fraction of molecules full length by protocol. The four
   parameters are estimated in the EM. On SG-NEx spike-ins it improves isoform-level estimates
   from both minimap2 alignments and read mode (see the pull request for numbers). Per-read only;
-  conflicts with `--model-coverage`; bootstrap replicates are not yet supported.
+  conflicts with `--model-coverage`. Bootstrap replicates re-fit the positional parameters in
+  each replicate.
 
 ## 0.10.3 - 2026-07-16
 

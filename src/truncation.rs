@@ -223,12 +223,23 @@ impl Stats {
 }
 
 /// One EM round: distribute each read over its alignments, accumulating abundances into `curr`
-/// and the positional statistics into the returned `Stats`.
-fn step(f: &Flat, par: &Params, prev: &[AtomicF64], curr: &[AtomicF64]) -> Stats {
+/// and the positional statistics into the returned `Stats`. With `mult`, read `r` counts
+/// `mult[r]` times (a bootstrap replicate).
+fn step(
+    f: &Flat,
+    par: &Params,
+    prev: &[AtomicF64],
+    curr: &[AtomicF64],
+    mult: Option<&[u32]>,
+) -> Stats {
     let nreads = f.off.len() - 1;
     (0..nreads)
         .into_par_iter()
         .fold(Stats::default, |mut st, r| {
+            let m = mult.map_or(1.0, |m| m[r] as f64);
+            if m == 0.0 {
+                return st;
+            }
             let (lo, hi) = (f.off[r], f.off[r + 1]);
             let mut denom = 0.0;
             for k in lo..hi {
@@ -243,7 +254,8 @@ fn step(f: &Flat, par: &Params, prev: &[AtomicF64], curr: &[AtomicF64]) -> Stats
                     let t = par.terms(f, k);
                     let tid = f.target[k] as usize;
                     let post =
-                        prev[tid].load(Ordering::Relaxed) * f.prob[k] * t.start() * t.end() / denom;
+                        m * prev[tid].load(Ordering::Relaxed) * f.prob[k] * t.start() * t.end()
+                            / denom;
                     curr[tid].fetch_add(post, Ordering::AcqRel);
                     st.add(f, k, &t, post);
                 }
@@ -261,12 +273,52 @@ pub fn em(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
         .num_threads(nthreads)
         .build()
         .unwrap();
-    pool.install(|| run(em_info))
+    pool.install(|| {
+        let (counts, par) = run(em_info, &Flat::new(em_info), None);
+        info!(
+            "truncation model: full length by protocol {:.3}; stop rate {:.2e}/nt (mean extent {:.0} nt); \
+             ending within {} nt of the 3' end {:.3}",
+            par.w,
+            par.h,
+            1.0 / par.h,
+            BW as u32,
+            par.r
+        );
+        counts
+    })
 }
 
-fn run(em_info: &EMInfo) -> Vec<f64> {
+/// Bootstrap replicates under the truncation-aware model. Each replicate resamples the reads
+/// with replacement and re-fits both the abundances and the positional parameters, so the
+/// parameters' uncertainty propagates into the replicates.
+pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f64>> {
+    let span = span!(tracing::Level::INFO, "bootstrap_truncation");
+    let _guard = span.enter();
+    info!("will collect {num_boot} bootstraps");
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(nthreads)
+        .build()
+        .unwrap();
+    pool.install(|| {
+        let f = Flat::new(em_info);
+        let nreads = f.off.len() - 1;
+        let mut rng = rand::rng();
+        (0..num_boot)
+            .map(|i| {
+                let mut mult = vec![0_u32; nreads];
+                for r in crate::bootstrap::get_sample_inds(nreads, &mut rng) {
+                    mult[r] += 1;
+                }
+                let (counts, par) = run(em_info, &f, Some(&mult));
+                info!("bootstrap replicate {i}: {par:?}");
+                counts
+            })
+            .collect()
+    })
+}
+
+fn run(em_info: &EMInfo, f: &Flat, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
     let tinfo: &[TranscriptInfo] = em_info.txp_info;
-    let f = Flat::new(em_info);
     let total_weight = em_info.eq_map.num_aligned_reads() as f64;
     let init = match em_info.init_abundances {
         Some(ref v) => v.clone(),
@@ -278,7 +330,7 @@ fn run(em_info: &EMInfo) -> Vec<f64> {
 
     let mut niter = 0_u32;
     while niter < em_info.max_iter {
-        par = step(&f, &par, &prev, &curr).params(par);
+        par = step(f, &par, &prev, &curr, mult).params(par);
         let mut rel_diff = 0.0_f64;
         for (p, c) in prev.iter().zip(&curr) {
             let pc = p.load(Ordering::Relaxed);
@@ -308,16 +360,6 @@ fn run(em_info: &EMInfo) -> Vec<f64> {
             );
         }
     }
-    info!(
-        "truncation model: full length by protocol {:.3}; stop rate {:.2e}/nt (mean extent {:.0} nt); \
-         ending within {} nt of the 3' end {:.3}",
-        par.w,
-        par.h,
-        1.0 / par.h,
-        BW as u32,
-        par.r
-    );
-
     // Zero very small abundances, then one more round with the parameters fixed, as the
     // per-read EM does.
     for x in &prev {
@@ -325,8 +367,11 @@ fn run(em_info: &EMInfo) -> Vec<f64> {
             x.store(0.0, Ordering::Relaxed);
         }
     }
-    step(&f, &par, &prev, &curr);
-    curr.iter().map(|x| x.load(Ordering::Relaxed)).collect()
+    step(f, &par, &prev, &curr, mult);
+    (
+        curr.iter().map(|x| x.load(Ordering::Relaxed)).collect(),
+        par,
+    )
 }
 
 #[cfg(test)]
@@ -345,12 +390,16 @@ mod tests {
     }
 
     fn fit(f: &Flat, ntx: usize, iters: usize) -> (Vec<f64>, Params) {
-        let n = (f.off.len() - 1) as f64;
+        fit_mult(f, ntx, iters, None)
+    }
+
+    fn fit_mult(f: &Flat, ntx: usize, iters: usize, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
+        let n = mult.map_or((f.off.len() - 1) as f64, |m| m.iter().sum::<u32>() as f64);
         let mut prev: Vec<AtomicF64> = (0..ntx).map(|_| AtomicF64::new(n / ntx as f64)).collect();
         let mut curr: Vec<AtomicF64> = (0..ntx).map(|_| AtomicF64::new(0.0)).collect();
         let mut par = Params::initial();
         for _ in 0..iters {
-            par = step(f, &par, &prev, &curr).params(par);
+            par = step(f, &par, &prev, &curr, mult).params(par);
             std::mem::swap(&mut prev, &mut curr);
             curr.iter().for_each(|x| x.store(0.0, Ordering::Relaxed));
         }
@@ -401,5 +450,34 @@ mod tests {
         for (e, want) in est.iter().zip([50.0, 120.0, 30.0]) {
             assert!((e - want).abs() < 1e-6, "{est:?}");
         }
+    }
+
+    /// A bootstrap multiplicity is the same as repeating the read: counting reads twice or
+    /// dropping them through `mult` matches the fit on the resampled reads written out.
+    #[test]
+    fn multiplicities_match_repeated_reads() {
+        let lens = [2000.0, 1000.0];
+        let reads: Vec<Vec<(u32, f64, f64, f64)>> = (0..60)
+            .map(|i| match i % 3 {
+                0 => vec![(0, 1.0, 0.0, 2000.0)],
+                1 => vec![(0, 1.0, 300.0 + 10.0 * i as f64, 1990.0)],
+                _ => vec![(0, 1.0, 1000.0, 2000.0), (1, 0.9, 0.0, 1000.0)],
+            })
+            .collect();
+        let mult: Vec<u32> = (0..reads.len()).map(|i| (i % 4) as u32).collect();
+        let repeated: Vec<_> = reads
+            .iter()
+            .zip(&mult)
+            .flat_map(|(r, &m)| std::iter::repeat_n(r.clone(), m as usize))
+            .collect();
+        let (a, pa) = fit_mult(&flat(&reads, &lens), 2, 100, Some(&mult));
+        let (b, pb) = fit(&flat(&repeated, &lens), 2, 100);
+        for (x, y) in a.iter().zip(&b) {
+            assert!((x - y).abs() < 1e-6 * y.max(1.0), "{a:?} {b:?}");
+        }
+        assert!(
+            (pa.h - pb.h).abs() < 1e-9 && (pa.r - pb.r).abs() < 1e-9,
+            "{pa:?} {pb:?}"
+        );
     }
 }

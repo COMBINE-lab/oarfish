@@ -153,8 +153,9 @@ with the abundances, and their fitted values are written to the log. Because eac
 start distribution sums to one over the starts that transcript can produce, a read that is full
 length for a short isoform but truncated for a longer one favors the short isoform, by as much as
 the fitted stop rate says truncation is unlikely. The model is per read (it does not use the
-equivalence-class collapse), cannot be combined with `--model-coverage`, and does not yet support
-bootstrap replicates.
+equivalence-class collapse) and cannot be combined with `--model-coverage`. With
+`--num-bootstraps`, each replicate resamples the reads and re-fits the positional parameters along
+with the abundances, so the replicates include the uncertainty in those parameters.
 
 ## Usage examples
 
