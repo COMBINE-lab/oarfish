@@ -223,7 +223,12 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
         index
     };
     let header = spearfish_header(&index)?;
-    let opts = spearfish::MapOptions::preset(spearfish_preset(&args.seq_tech)?);
+    let mut opts = spearfish::MapOptions::preset(spearfish_preset(&args.seq_tech)?);
+    // The truncation model needs where reads start and end on each transcript, so spans are
+    // extended to the read ends even where the preset leaves them at the outermost seeds.
+    if args.model_truncation && opts.params.ends.is_none() {
+        opts.params.ends = Some(spearfish::Ends::default());
+    }
     let mapper = spearfish::Mapper::new(std::sync::Arc::new(index), &opts)?;
     Ok((
         header,
