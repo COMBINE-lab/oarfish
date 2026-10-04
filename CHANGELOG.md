@@ -9,6 +9,18 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > rename the `## Unreleased` heading below to the chosen version, e.g.
 > `## 0.10.0 - 2026-06-06`, so the notes are picked up automatically.
 
+## Unreleased
+
+### Added
+
+- **`--model-truncation`: a positional likelihood for 3'-anchored, 5'-truncated reads.** Each
+  alignment's score probability is multiplied by the probability of its start and end on the
+  transcript under a model in which reads end at the 3' end and stop toward the 5' end at a
+  constant per-base rate, with a fraction of molecules full length by protocol. The four
+  parameters are estimated in the EM. On SG-NEx spike-ins it improves isoform-level estimates
+  from both minimap2 alignments and read mode (see the pull request for numbers). Per-read only;
+  conflicts with `--model-coverage`; bootstrap replicates are not yet supported.
+
 ## 0.10.3 - 2026-07-16
 
 Patch release improving the numeric precision of the `--write-assignment-probs`

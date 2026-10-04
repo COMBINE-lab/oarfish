@@ -117,6 +117,7 @@ indexing:
 
 coverage model:
       --model-coverage             apply the coverage model
+      --model-truncation           model 3'-anchored, possibly 5'-truncated reads (learned in the EM)
   -k, --growth-rate <GROWTH_RATE>  logistic `k` [default: 2]
   -b, --bin-width <BIN_WIDTH>      coverage bin width [default: 100]
 
@@ -131,6 +132,29 @@ EM:
 ```
 
 > The block above is abridged for readability; run `oarfish --help` for the exact, complete option text for your installed version.
+
+### Truncation model
+
+Long-read protocols produce about one read per captured molecule, so `oarfish` does not divide
+abundances by an effective length. What does depend on the transcript is where a read can land
+on it: reads end near the transcript's 3' end (poly(A) priming, or direct RNA sequenced from the
+3' end), and extend toward the 5' end until reverse transcription, degradation or the pore stops
+them. `--model-truncation` multiplies each alignment's score probability by the probability of
+its start and end positions on the transcript:
+
+- the read reaches the 5' end, either because the molecule is full length by protocol (fraction
+  `w`) or because it did not stop (probability `exp(-h * len)`), or it stops after `ext` bases
+  from the 3' end with density `(1 - w) * h * exp(-h * ext)`;
+- the read ends within 50 nt of the transcript's 3' end with probability `r`, or earlier with an
+  exponentially decaying distance.
+
+`w`, the per-base stop rate `h`, `r` and the decay of early ends are estimated in the EM together
+with the abundances, and their fitted values are written to the log. Because each transcript's
+start distribution sums to one over the starts that transcript can produce, a read that is full
+length for a short isoform but truncated for a longer one favors the short isoform, by as much as
+the fitted stop rate says truncation is unlikely. The model is per read (it does not use the
+equivalence-class collapse), cannot be combined with `--model-coverage`, and does not yet support
+bootstrap replicates.
 
 ## Usage examples
 

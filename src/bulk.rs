@@ -42,6 +42,8 @@ fn get_json_info(
 ) -> serde_json::Value {
     let prob = if args.model_coverage {
         "logistic_coverage"
+    } else if args.model_truncation {
+        "truncation"
     } else {
         "no_coverage"
     };
@@ -152,7 +154,9 @@ fn perform_inference_and_write_output(
         */
     }
 
-    let counts = if args.threads > 4 {
+    let counts = if args.model_truncation {
+        crate::truncation::em(&emi, args.threads)
+    } else if args.threads > 4 {
         em::em_par(&emi, args.threads)
     } else {
         em::em(&emi, args.threads)
@@ -175,6 +179,9 @@ fn perform_inference_and_write_output(
 
     // if the user requested bootstrap replicates,
     // compute and write those out now.
+    if args.num_bootstraps > 0 && args.model_truncation {
+        anyhow::bail!("bootstrap replicates are not yet supported with --model-truncation");
+    }
     if args.num_bootstraps > 0 {
         let breps = em::bootstrap(&emi, args.num_bootstraps, args.threads);
 

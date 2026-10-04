@@ -22,6 +22,7 @@ mod alignment_parser;
 mod bootstrap;
 mod bulk;
 mod em;
+mod truncation;
 mod prog_opts;
 mod single_cell;
 mod util;
