@@ -230,12 +230,11 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
     if args.model_truncation {
         opts.extend_ends(preset);
     }
-    // Only hits within the score filter reach the EM: spearfish reports only those, and
-    // extends only those.
-    let within = 1.0 - args.score_threshold.try_as_f32().unwrap_or(0.95);
-    opts.params.delta_rep = opts.params.delta_rep.min(within);
+    // Only hits within the score filter of the best usually reach the EM, so only those are
+    // extended. (Reporting only those lost reads whose best hit fails the span filters: oarfish
+    // then rescales the threshold to the best hit that passes.)
     if let Some(e) = &mut opts.params.ends {
-        e.within = within;
+        e.within = 1.0 - args.score_threshold.try_as_f32().unwrap_or(0.95);
     }
     let mapper = spearfish::Mapper::new(std::sync::Arc::new(index), &opts)?;
     Ok((
