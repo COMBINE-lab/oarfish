@@ -229,6 +229,10 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
     if args.model_truncation && opts.params.ends.is_none() {
         opts.params.ends = Some(spearfish::Ends::default());
     }
+    // Only hits that can pass the score filter reach the EM, so only those are extended.
+    if let Some(e) = &mut opts.params.ends {
+        e.within = 1.0 - args.score_threshold.try_as_f32().unwrap_or(0.95);
+    }
     let mapper = spearfish::Mapper::new(std::sync::Arc::new(index), &opts)?;
     Ok((
         header,
