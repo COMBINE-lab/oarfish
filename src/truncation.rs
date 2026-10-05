@@ -44,76 +44,78 @@ struct Flat {
     /// Read `r` owns alignments `off[r]..off[r + 1]`.
     off: Vec<usize>,
     target: Vec<u32>,
-    prob: Vec<f64>,
-    /// Lengths and distances in bases (integers, so that [`Exps`] can tabulate their
-    /// exponentials): the transcript's length, the extent from the alignment's start to the
-    /// transcript's 3' end, and the distance from the alignment's end to the 3' end.
-    len: Vec<u32>,
+    prob: Vec<f32>,
+    /// Distances in bases (integers, so that [`Exps`] can tabulate their exponentials): from
+    /// the alignment's start to the transcript's 3' end, and from its end to the 3' end.
     ext: Vec<u32>,
     d3: Vec<u32>,
+    /// Transcript lengths, per transcript.
+    tlen: Vec<u32>,
 }
 
 impl Flat {
-    fn push(&mut self, t: u32, p: f64, len: f64, start: f64, end: f64) {
+    fn push(&mut self, t: u32, p: f32, start: f64, end: f64) {
+        let len = self.tlen[t as usize] as f64;
         let start = start.clamp(0.0, (len - 1.0).max(0.0));
         let end = end.clamp(start, len);
         self.target.push(t);
         self.prob.push(p);
-        self.len.push(len.round() as u32);
         self.ext.push((len - start).round() as u32);
         self.d3.push((len - end).round() as u32);
     }
 
+    #[inline]
+    fn len(&self, k: usize) -> u32 {
+        self.tlen[self.target[k] as usize]
+    }
+
     fn max_len(&self) -> u32 {
-        self.len.iter().copied().max().unwrap_or(0)
+        self.tlen.iter().copied().max().unwrap_or(0)
     }
 
+    /// Reads in the order of `crate::em_read::read_order`, by most probable target.
     fn new(em_info: &EMInfo) -> Self {
-        let tinfo = em_info.txp_info;
-        let mut f = Flat::empty();
-        for (alns, probs, _) in em_info.eq_map.iter() {
-            for (a, &p) in alns.iter().zip(probs) {
-                let len = tinfo[a.ref_id as usize].lenf;
-                f.push(a.ref_id, p as f64, len, a.start as f64, a.end as f64);
-            }
-            f.off.push(f.target.len());
-        }
-        f.reordered()
-    }
-
-    /// Reads sorted by their most probable target (see `crate::em_read`).
-    fn reordered(self) -> Self {
-        let n = self.off.len() - 1;
-        let key = |r: usize| {
-            let (lo, hi) = (self.off[r], self.off[r + 1]);
-            let k = (lo..hi)
-                .max_by(|&a, &b| self.prob[a].total_cmp(&self.prob[b]))
-                .unwrap_or(lo);
-            self.target.get(k).copied().unwrap_or(0)
+        let store = &em_info.eq_map;
+        let order = crate::em_read::read_order(store.len(), |r| {
+            let (alns, probs, _) = store.read(r);
+            alns.iter()
+                .zip(probs)
+                .max_by(|x, y| x.1.total_cmp(y.1))
+                .map_or(0, |x| x.0.ref_id)
+        });
+        let n = store.alignments.len();
+        let mut f = Flat {
+            off: Vec::with_capacity(order.len() + 1),
+            target: Vec::with_capacity(n),
+            prob: Vec::with_capacity(n),
+            ext: Vec::with_capacity(n),
+            d3: Vec::with_capacity(n),
+            tlen: em_info
+                .txp_info
+                .iter()
+                .map(|t| t.lenf.round() as u32)
+                .collect(),
         };
-        let mut order: Vec<(u32, u32)> = (0..n).map(|r| (key(r), r as u32)).collect();
-        order.par_sort_unstable();
-        let mut f = Flat::empty();
-        for &(_, r) in &order {
-            let (lo, hi) = (self.off[r as usize], self.off[r as usize + 1]);
-            f.target.extend_from_slice(&self.target[lo..hi]);
-            f.prob.extend_from_slice(&self.prob[lo..hi]);
-            f.len.extend_from_slice(&self.len[lo..hi]);
-            f.ext.extend_from_slice(&self.ext[lo..hi]);
-            f.d3.extend_from_slice(&self.d3[lo..hi]);
+        f.off.push(0);
+        for &r in &order {
+            let (alns, probs, _) = store.read(r as usize);
+            for (a, &p) in alns.iter().zip(probs) {
+                f.push(a.ref_id, p, a.start as f64, a.end as f64);
+            }
             f.off.push(f.target.len());
         }
         f
     }
 
-    fn empty() -> Self {
+    #[cfg(test)]
+    fn empty(lens: &[f64]) -> Self {
         Flat {
             off: vec![0],
             target: vec![],
             prob: vec![],
-            len: vec![],
             ext: vec![],
             d3: vec![],
+            tlen: lens.iter().map(|l| l.round() as u32).collect(),
         }
     }
 }
@@ -163,11 +165,11 @@ impl Params {
 
     #[inline]
     fn terms(&self, f: &Flat, k: usize, e: &Exps) -> Terms {
-        let full = f.ext[k] as f64 > f.len[k] as f64 - BW;
+        let full = f.ext[k] as f64 > f.len(k) as f64 - BW;
         Terms {
             full_w: if full { self.w / BW } else { 0.0 },
             full_surv: if full {
-                (1.0 - self.w) * e.h[f.len[k] as usize] / BW
+                (1.0 - self.w) * e.h[f.len(k) as usize] / BW
             } else {
                 0.0
             },
@@ -250,7 +252,7 @@ impl Stats {
         self.n_stop += pstop;
         // A surviving read is right-censored at the transcript length; a stopped one is an
         // observed stop after `ext` bases.
-        self.expo_h += psurv * f.len[k] as f64 + pstop * f.ext[k] as f64;
+        self.expo_h += psurv * f.len(k) as f64 + pstop * f.ext[k] as f64;
         self.n_at3 += pat;
         self.n_off3 += poff;
         self.expo_g += poff * f.d3[k] as f64;
@@ -302,7 +304,7 @@ fn step(
             for k in lo..hi {
                 let t = par.terms(f, k, e);
                 denom += prev[f.target[k] as usize].load(Ordering::Relaxed)
-                    * f.prob[k]
+                    * f.prob[k] as f64
                     * t.start()
                     * t.end();
             }
@@ -310,9 +312,12 @@ fn step(
                 for k in lo..hi {
                     let t = par.terms(f, k, e);
                     let tid = f.target[k] as usize;
-                    let post =
-                        m * prev[tid].load(Ordering::Relaxed) * f.prob[k] * t.start() * t.end()
-                            / denom;
+                    let post = m
+                        * prev[tid].load(Ordering::Relaxed)
+                        * f.prob[k] as f64
+                        * t.start()
+                        * t.end()
+                        / denom;
                     curr[tid].fetch_add(post, Ordering::AcqRel);
                     st.add(f, k, &t, post);
                 }
@@ -448,17 +453,25 @@ impl Layout {
 }
 
 impl Layout {
-    /// The layout for frozen weights `ws`: `Csr` becomes `CsrFrozen`, the others stay.
+    /// The layout for frozen weights `ws`: `Csr` becomes `CsrFrozen`, the others stay. The
+    /// per-alignment posteriors and indices are freed first and the transpose is refilled
+    /// from read order, so the two layouts do not coexist.
     fn frozen(self, f: &Flat, ws: &[f64]) -> Self {
         match self {
-            Layout::Csr { off, aln, .. } => {
+            Layout::Csr { off, post, aln } => {
+                drop((post, aln));
                 let nreads = f.off.len() - 1;
-                let mut of_aln = vec![0u32; f.target.len()];
-                for r in 0..nreads {
-                    of_aln[f.off[r]..f.off[r + 1]].fill(r as u32);
+                let mut fill = off.clone();
+                let mut read = vec![0u32; f.target.len()];
+                let mut w = vec![0f64; f.target.len()];
+                for (r, win) in f.off.windows(2).enumerate() {
+                    for k in win[0]..win[1] {
+                        let t = f.target[k] as usize;
+                        read[fill[t]] = r as u32;
+                        w[fill[t]] = ws[k];
+                        fill[t] += 1;
+                    }
                 }
-                let read = aln.par_iter().map(|&k| of_aln[k as usize]).collect();
-                let w = aln.par_iter().map(|&k| ws[k as usize]).collect();
                 Layout::CsrFrozen {
                     off,
                     read,
@@ -498,7 +511,7 @@ fn step_with(
         for k in lo..hi {
             let tid = f.target[k] as usize;
             let t = par.terms(f, k, e);
-            let w = prev[tid].load(Ordering::Relaxed) * f.prob[k] * t.start() * t.end();
+            let w = prev[tid].load(Ordering::Relaxed) * f.prob[k] as f64 * t.start() * t.end();
             denom += w;
             scratch.push((t, w));
         }
@@ -732,7 +745,7 @@ fn run(em_info: &EMInfo, f: &Flat, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
                         .into_par_iter()
                         .map(|k| {
                             let t = par.terms(f, k, &e);
-                            f.prob[k] * t.start() * t.end()
+                            f.prob[k] as f64 * t.start() * t.end()
                         })
                         .collect();
                     info!(
@@ -806,10 +819,10 @@ mod tests {
     use super::*;
 
     fn flat(alns: &[Vec<(u32, f64, f64, f64)>], lens: &[f64]) -> Flat {
-        let mut f = Flat::empty();
+        let mut f = Flat::empty(lens);
         for r in alns {
             for &(t, p, s, e) in r {
-                f.push(t, p, lens[t as usize], s, e);
+                f.push(t, p as f32, s, e);
             }
             f.off.push(f.target.len());
         }
@@ -967,7 +980,7 @@ mod tests {
         let ws: Vec<f64> = (0..f.target.len())
             .map(|k| {
                 let t = par.terms(&f, k, &e);
-                f.prob[k] * t.start() * t.end()
+                f.prob[k] as f64 * t.start() * t.end()
             })
             .collect();
         let prev: Vec<AtomicF64> = [3.0, 1.0, 2.0].into_iter().map(AtomicF64::new).collect();
@@ -987,7 +1000,8 @@ mod tests {
             }
         }
         let (a, pa) = fit(&f, 3, 50);
-        let (b, pb) = fit(&flat(&reads, &lens).reordered(), 3, 50);
+        let rev: Vec<_> = reads.iter().rev().cloned().collect();
+        let (b, pb) = fit(&flat(&rev, &lens), 3, 50);
         for (x, y) in a.iter().zip(&b) {
             assert!((x - y).abs() < 1e-9 * x.max(1.0), "{a:?} {b:?}");
         }

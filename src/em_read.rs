@@ -20,7 +20,7 @@ use rayon::prelude::*;
 use tracing::{info, span, trace};
 
 use crate::util::constants;
-use crate::util::oarfish_types::{EMInfo, TranscriptInfo};
+use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Impl {
@@ -48,56 +48,44 @@ pub(crate) struct Flat {
 }
 
 impl Flat {
+    /// Built in [`read_order`], with capacities reserved up front, so the table exists once.
     fn new(em_info: &EMInfo) -> Self {
         let tinfo: &[TranscriptInfo] = em_info.txp_info;
-        let cov = em_info.eq_map.filter_opts.model_coverage;
-        let dens = |tl: usize, al: usize| match em_info.kde_model {
-            Some(ref k) => k[(tl, al)],
-            None => 1.0,
+        let store = &em_info.eq_map;
+        let cov = store.filter_opts.model_coverage;
+        let weight = |a: &AlnInfo, p: f32, cp: f64| {
+            p as f64
+                * if cov { cp } else { 1.0 }
+                * match em_info.kde_model {
+                    Some(ref k) => {
+                        k[(
+                            tinfo[a.ref_id as usize].lenf as usize,
+                            a.alignment_span() as usize,
+                        )]
+                    }
+                    None => 1.0,
+                }
         };
+        let order = read_order(store.len(), |r| {
+            let (alns, probs, cps) = store.read(r);
+            izip!(alns, probs, cps)
+                .map(|(a, &p, &cp)| (weight(a, p, cp), a.ref_id))
+                .max_by(|x, y| x.0.total_cmp(&y.0))
+                .map_or(0, |x| x.1)
+        });
+        let n = store.alignments.len();
         let mut f = Flat {
-            off: vec![0],
-            target: Vec::new(),
-            w: Vec::new(),
-        };
-        for (alns, probs, cps) in em_info.eq_map.iter() {
-            for (a, p, cp) in izip!(alns, probs, cps) {
-                let t = a.ref_id as usize;
-                let w = *p as f64
-                    * if cov { *cp } else { 1.0 }
-                    * dens(tinfo[t].lenf as usize, a.alignment_span() as usize);
-                f.target.push(a.ref_id);
-                f.w.push(w);
-            }
-            f.off.push(f.target.len());
-        }
-        f.reordered()
-    }
-
-    /// Reads sorted by their heaviest target, so that the reads of one transcript get nearby
-    /// ids and the per-transcript pass reads their normalizers from nearby memory. The EM does
-    /// not depend on read order.
-    fn reordered(self) -> Self {
-        let n = self.nreads();
-        let key = |r: usize| {
-            let (lo, hi) = (self.off[r], self.off[r + 1]);
-            let k = (lo..hi)
-                .max_by(|&a, &b| self.w[a].total_cmp(&self.w[b]))
-                .unwrap_or(lo);
-            self.target.get(k).copied().unwrap_or(0)
-        };
-        let mut order: Vec<(u32, u32)> = (0..n).map(|r| (key(r), r as u32)).collect();
-        order.par_sort_unstable();
-        let mut f = Flat {
-            off: Vec::with_capacity(n + 1),
-            target: Vec::with_capacity(self.target.len()),
-            w: Vec::with_capacity(self.w.len()),
+            off: Vec::with_capacity(order.len() + 1),
+            target: Vec::with_capacity(n),
+            w: Vec::with_capacity(n),
         };
         f.off.push(0);
-        for &(_, r) in &order {
-            let (lo, hi) = (self.off[r as usize], self.off[r as usize + 1]);
-            f.target.extend_from_slice(&self.target[lo..hi]);
-            f.w.extend_from_slice(&self.w[lo..hi]);
+        for &r in &order {
+            let (alns, probs, cps) = store.read(r as usize);
+            for (a, &p, &cp) in izip!(alns, probs, cps) {
+                f.target.push(a.ref_id);
+                f.w.push(weight(a, p, cp));
+            }
             f.off.push(f.target.len());
         }
         f
@@ -106,6 +94,18 @@ impl Flat {
     fn nreads(&self) -> usize {
         self.off.len() - 1
     }
+}
+
+/// Read ids `0..nreads` sorted by `key(read)`, the read's heaviest target: the reads of one
+/// transcript get nearby ids, so the per-transcript pass reads their normalizers from nearby
+/// memory. The EM does not depend on read order.
+pub(crate) fn read_order(nreads: usize, key: impl Fn(usize) -> u32 + Sync) -> Vec<u32> {
+    let mut order: Vec<(u32, u32)> = (0..nreads)
+        .into_par_iter()
+        .map(|r| (key(r), r as u32))
+        .collect();
+    order.par_sort_unstable();
+    order.into_iter().map(|(_, r)| r).collect()
 }
 
 /// Transcript-major transpose of `Flat`: transcript `t` owns slots `off[t]..off[t + 1]`, each
