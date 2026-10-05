@@ -333,8 +333,12 @@ enum Layout {
 
 impl Layout {
     fn new(f: &Flat, ntx: usize) -> Self {
+        Layout::with(f, ntx, crate::em_read::Impl::from_env())
+    }
+
+    fn with(f: &Flat, ntx: usize, how: Option<crate::em_read::Impl>) -> Self {
         let nthreads = rayon::current_num_threads();
-        match crate::em_read::Impl::from_env() {
+        match how {
             None => Layout::Atomic,
             Some(crate::em_read::Impl::Local) => {
                 let n = (nthreads * 2).max(1);
@@ -565,6 +569,17 @@ mod tests {
     }
 
     fn fit_mult(f: &Flat, ntx: usize, iters: usize, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
+        fit_layout(f, ntx, iters, mult, None)
+    }
+
+    fn fit_layout(
+        f: &Flat,
+        ntx: usize,
+        iters: usize,
+        mult: Option<&[u32]>,
+        how: Option<crate::em_read::Impl>,
+    ) -> (Vec<f64>, Params) {
+        let mut lay = Layout::with(f, ntx, how);
         let n = mult.map_or((f.off.len() - 1) as f64, |m| m.iter().sum::<u32>() as f64);
         let mut prev: Vec<AtomicF64> = (0..ntx).map(|_| AtomicF64::new(n / ntx as f64)).collect();
         let mut curr: Vec<AtomicF64> = (0..ntx).map(|_| AtomicF64::new(0.0)).collect();
@@ -650,5 +665,33 @@ mod tests {
             (pa.h - pb.h).abs() < 1e-9 && (pa.r - pb.r).abs() < 1e-9,
             "{pa:?} {pb:?}"
         );
+    }
+
+    /// The atomic-free layouts give the atomic EM's estimates and parameters.
+    #[test]
+    fn layouts_agree() {
+        use crate::em_read::Impl;
+        let lens = [2000.0, 1000.0];
+        let mut reads = Vec::new();
+        for i in 0..300 {
+            reads.push(vec![(0, 1.0, 0.0, 2000.0)]);
+            reads.push(vec![(0, 1.0, 200.0 + (i % 50) as f64 * 6.0, 2000.0)]);
+            reads.push(vec![(0, 1.0, 1000.0, 2000.0), (1, 0.9, 0.0, 1000.0)]);
+        }
+        let f = flat(&reads, &lens);
+        let mult: Vec<u32> = (0..reads.len()).map(|i| (i % 3) as u32).collect();
+        for m in [None, Some(&mult[..])] {
+            let (a, pa) = fit_layout(&f, 2, 60, m, None);
+            for how in [Impl::Local, Impl::Csr] {
+                let (b, pb) = fit_layout(&f, 2, 60, m, Some(how));
+                for (x, y) in a.iter().zip(&b) {
+                    assert!((x - y).abs() < 1e-9 * x.max(1.0), "{how:?} {a:?} {b:?}");
+                }
+                assert!(
+                    (pa.h - pb.h).abs() < 1e-12 && (pa.r - pb.r).abs() < 1e-12,
+                    "{how:?}"
+                );
+            }
+        }
     }
 }
