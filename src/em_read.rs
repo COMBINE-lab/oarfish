@@ -71,6 +71,35 @@ impl Flat {
             }
             f.off.push(f.target.len());
         }
+        f.reordered()
+    }
+
+    /// Reads sorted by their heaviest target, so that the reads of one transcript get nearby
+    /// ids and the per-transcript pass reads their normalizers from nearby memory. The EM does
+    /// not depend on read order.
+    fn reordered(self) -> Self {
+        let n = self.nreads();
+        let key = |r: usize| {
+            let (lo, hi) = (self.off[r], self.off[r + 1]);
+            let k = (lo..hi)
+                .max_by(|&a, &b| self.w[a].total_cmp(&self.w[b]))
+                .unwrap_or(lo);
+            self.target.get(k).copied().unwrap_or(0)
+        };
+        let mut order: Vec<(u32, u32)> = (0..n).map(|r| (key(r), r as u32)).collect();
+        order.par_sort_unstable();
+        let mut f = Flat {
+            off: Vec::with_capacity(n + 1),
+            target: Vec::with_capacity(self.target.len()),
+            w: Vec::with_capacity(self.w.len()),
+        };
+        f.off.push(0);
+        for &(_, r) in &order {
+            let (lo, hi) = (self.off[r as usize], self.off[r as usize + 1]);
+            f.target.extend_from_slice(&self.target[lo..hi]);
+            f.w.extend_from_slice(&self.w[lo..hi]);
+            f.off.push(f.target.len());
+        }
         f
     }
 

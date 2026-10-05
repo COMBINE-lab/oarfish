@@ -45,11 +45,12 @@ struct Flat {
     off: Vec<usize>,
     target: Vec<u32>,
     prob: Vec<f64>,
-    len: Vec<f64>,
-    /// Extent from the alignment's start to the transcript's 3' end.
-    ext: Vec<f64>,
-    /// Distance from the alignment's end to the transcript's 3' end.
-    d3: Vec<f64>,
+    /// Lengths and distances in bases (integers, so that [`Exps`] can tabulate their
+    /// exponentials): the transcript's length, the extent from the alignment's start to the
+    /// transcript's 3' end, and the distance from the alignment's end to the 3' end.
+    len: Vec<u32>,
+    ext: Vec<u32>,
+    d3: Vec<u32>,
 }
 
 impl Flat {
@@ -58,9 +59,13 @@ impl Flat {
         let end = end.clamp(start, len);
         self.target.push(t);
         self.prob.push(p);
-        self.len.push(len);
-        self.ext.push(len - start);
-        self.d3.push(len - end);
+        self.len.push(len.round() as u32);
+        self.ext.push((len - start).round() as u32);
+        self.d3.push((len - end).round() as u32);
+    }
+
+    fn max_len(&self) -> u32 {
+        self.len.iter().copied().max().unwrap_or(0)
     }
 
     fn new(em_info: &EMInfo) -> Self {
@@ -71,6 +76,31 @@ impl Flat {
                 let len = tinfo[a.ref_id as usize].lenf;
                 f.push(a.ref_id, p as f64, len, a.start as f64, a.end as f64);
             }
+            f.off.push(f.target.len());
+        }
+        f.reordered()
+    }
+
+    /// Reads sorted by their most probable target (see `crate::em_read`).
+    fn reordered(self) -> Self {
+        let n = self.off.len() - 1;
+        let key = |r: usize| {
+            let (lo, hi) = (self.off[r], self.off[r + 1]);
+            let k = (lo..hi)
+                .max_by(|&a, &b| self.prob[a].total_cmp(&self.prob[b]))
+                .unwrap_or(lo);
+            self.target.get(k).copied().unwrap_or(0)
+        };
+        let mut order: Vec<(u32, u32)> = (0..n).map(|r| (key(r), r as u32)).collect();
+        order.par_sort_unstable();
+        let mut f = Flat::empty();
+        for &(_, r) in &order {
+            let (lo, hi) = (self.off[r as usize], self.off[r as usize + 1]);
+            f.target.extend_from_slice(&self.target[lo..hi]);
+            f.prob.extend_from_slice(&self.prob[lo..hi]);
+            f.len.extend_from_slice(&self.len[lo..hi]);
+            f.ext.extend_from_slice(&self.ext[lo..hi]);
+            f.d3.extend_from_slice(&self.d3[lo..hi]);
             f.off.push(f.target.len());
         }
         f
@@ -132,25 +162,44 @@ impl Params {
     }
 
     #[inline]
-    fn terms(&self, f: &Flat, k: usize) -> Terms {
-        self.terms_surv(f, k, (-self.h * f.len[k]).exp())
-    }
-
-    /// [`Params::terms`] given `surv = exp(-h len)` of the alignment's transcript, which
-    /// depends only on the transcript and can be computed once per transcript.
-    #[inline]
-    fn terms_surv(&self, f: &Flat, k: usize, surv: f64) -> Terms {
-        let full = f.ext[k] > f.len[k] - BW;
+    fn terms(&self, f: &Flat, k: usize, e: &Exps) -> Terms {
+        let full = f.ext[k] as f64 > f.len[k] as f64 - BW;
         Terms {
             full_w: if full { self.w / BW } else { 0.0 },
             full_surv: if full {
-                (1.0 - self.w) * surv / BW
+                (1.0 - self.w) * e.h[f.len[k] as usize] / BW
             } else {
                 0.0
             },
-            stopped: (1.0 - self.w) * self.h * (-self.h * f.ext[k]).exp(),
-            at3: if f.d3[k] < BW { self.r / BW } else { 0.0 },
-            off3: (1.0 - self.r) * self.g * (-self.g * f.d3[k]).exp(),
+            stopped: (1.0 - self.w) * self.h * e.h[f.ext[k] as usize],
+            at3: if (f.d3[k] as f64) < BW {
+                self.r / BW
+            } else {
+                0.0
+            },
+            off3: (1.0 - self.r) * self.g * e.g[f.d3[k] as usize],
+        }
+    }
+}
+
+/// `exp(-h x)` and `exp(-g x)` for every whole number of bases `x` up to the longest
+/// transcript, built once per iteration so that no alignment computes an exponential.
+struct Exps {
+    h: Vec<f64>,
+    g: Vec<f64>,
+}
+
+impl Exps {
+    fn new(par: &Params, max_len: u32) -> Self {
+        let tab = |rate: f64| {
+            (0..=max_len)
+                .into_par_iter()
+                .map(|x| (-rate * x as f64).exp())
+                .collect()
+        };
+        Exps {
+            h: tab(par.h),
+            g: tab(par.g),
         }
     }
 }
@@ -201,10 +250,10 @@ impl Stats {
         self.n_stop += pstop;
         // A surviving read is right-censored at the transcript length; a stopped one is an
         // observed stop after `ext` bases.
-        self.expo_h += psurv * f.len[k] + pstop * f.ext[k];
+        self.expo_h += psurv * f.len[k] as f64 + pstop * f.ext[k] as f64;
         self.n_at3 += pat;
         self.n_off3 += poff;
-        self.expo_g += poff * f.d3[k];
+        self.expo_g += poff * f.d3[k] as f64;
     }
 
     fn params(&self, old: Params) -> Params {
@@ -235,6 +284,7 @@ impl Stats {
 fn step(
     f: &Flat,
     par: &Params,
+    e: &Exps,
     prev: &[AtomicF64],
     curr: &[AtomicF64],
     mult: Option<&[u32]>,
@@ -250,7 +300,7 @@ fn step(
             let (lo, hi) = (f.off[r], f.off[r + 1]);
             let mut denom = 0.0;
             for k in lo..hi {
-                let t = par.terms(f, k);
+                let t = par.terms(f, k, e);
                 denom += prev[f.target[k] as usize].load(Ordering::Relaxed)
                     * f.prob[k]
                     * t.start()
@@ -258,7 +308,7 @@ fn step(
             }
             if denom > constants::EM_DENOM_THRESH {
                 for k in lo..hi {
-                    let t = par.terms(f, k);
+                    let t = par.terms(f, k, e);
                     let tid = f.target[k] as usize;
                     let post =
                         m * prev[tid].load(Ordering::Relaxed) * f.prob[k] * t.start() * t.end()
@@ -336,6 +386,15 @@ enum Layout {
         off: Vec<usize>,
         aln: Vec<u32>,
     },
+    /// `Csr` once the parameters are frozen, as in `crate::em_read`: transcript `t` owns
+    /// slots `off[t]..off[t + 1]` of (`read`, `w`), each an alignment's read and fixed weight,
+    /// and `inv` holds each read's multiplicity over its normalizer.
+    CsrFrozen {
+        off: Vec<usize>,
+        read: Vec<u32>,
+        w: Vec<f64>,
+        inv: Vec<f64>,
+    },
 }
 
 impl Layout {
@@ -388,6 +447,30 @@ impl Layout {
     }
 }
 
+impl Layout {
+    /// The layout for frozen weights `ws`: `Csr` becomes `CsrFrozen`, the others stay.
+    fn frozen(self, f: &Flat, ws: &[f64]) -> Self {
+        match self {
+            Layout::Csr { off, aln, .. } => {
+                let nreads = f.off.len() - 1;
+                let mut of_aln = vec![0u32; f.target.len()];
+                for r in 0..nreads {
+                    of_aln[f.off[r]..f.off[r + 1]].fill(r as u32);
+                }
+                let read = aln.par_iter().map(|&k| of_aln[k as usize]).collect();
+                let w = aln.par_iter().map(|&k| ws[k as usize]).collect();
+                Layout::CsrFrozen {
+                    off,
+                    read,
+                    w,
+                    inv: vec![0.0; nreads],
+                }
+            }
+            lay => lay,
+        }
+    }
+}
+
 /// One EM round in the chosen layout. The atomic-free layouts write each `curr` slot once.
 fn step_with(
     lay: &mut Layout,
@@ -396,7 +479,7 @@ fn step_with(
     prev: &[AtomicF64],
     curr: &[AtomicF64],
     mult: Option<&[u32]>,
-    surv: &[f64],
+    e: &Exps,
 ) -> Stats {
     // Posteriors of read r's alignments, passed to `emit(k, t, post)`; nothing if the read
     // cannot be assigned. Each alignment's positional terms are computed once, into `scratch`,
@@ -414,7 +497,7 @@ fn step_with(
         let mut denom = 0.0;
         for k in lo..hi {
             let tid = f.target[k] as usize;
-            let t = par.terms_surv(f, k, surv[tid]);
+            let t = par.terms(f, k, e);
             let w = prev[tid].load(Ordering::Relaxed) * f.prob[k] * t.start() * t.end();
             denom += w;
             scratch.push((t, w));
@@ -429,7 +512,8 @@ fn step_with(
         }
     };
     match lay {
-        Layout::Atomic => step(f, par, prev, curr, mult),
+        Layout::Atomic => step(f, par, e, prev, curr, mult),
+        Layout::CsrFrozen { .. } => unreachable!("only frozen weights use this layout"),
         Layout::Local(ch, bufs) => {
             let st = ch
                 .par_iter()
@@ -522,6 +606,28 @@ fn step_static(
     };
     match lay {
         Layout::Atomic => unreachable!("parameters are not frozen in the atomic layout"),
+        Layout::CsrFrozen { off, read, w, inv } => {
+            inv.par_iter_mut().enumerate().for_each(|(r, x)| {
+                let m = mult.map_or(1.0, |m| m[r] as f64);
+                let (lo, hi) = (f.off[r], f.off[r + 1]);
+                let mut denom = 0.0;
+                for (&t, &w) in f.target[lo..hi].iter().zip(&ws[lo..hi]) {
+                    denom += prev[t as usize].load(Ordering::Relaxed) * w;
+                }
+                *x = if m > 0.0 && denom > constants::EM_DENOM_THRESH {
+                    m / denom
+                } else {
+                    0.0
+                };
+            });
+            let inv = &*inv;
+            curr.par_iter().enumerate().for_each(|(t, c)| {
+                let s: f64 = (off[t]..off[t + 1])
+                    .map(|i| w[i] * inv[read[i] as usize])
+                    .sum();
+                c.store(prev[t].load(Ordering::Relaxed) * s, Ordering::Relaxed);
+            });
+        }
         Layout::Local(ch, bufs) => {
             ch.par_iter()
                 .zip(bufs.par_iter_mut())
@@ -605,15 +711,15 @@ fn run(em_info: &EMInfo, f: &Flat, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
     let mut par = Params::initial();
 
     let mut niter = 0_u32;
-    let lens: Vec<f64> = tinfo.iter().map(|t| t.lenf).collect();
+    let max_len = f.max_len();
     let can_freeze = !matches!(lay, Layout::Atomic);
     let (mut still, mut frozen): (u32, Option<Vec<f64>>) = (0, None);
     while niter < em_info.max_iter {
         match &frozen {
             Some(ws) => step_static(&mut lay, f, ws, &prev, &curr, mult),
             None => {
-                let surv: Vec<f64> = lens.par_iter().map(|l| (-par.h * l).exp()).collect();
-                let next = step_with(&mut lay, f, &par, &prev, &curr, mult, &surv).params(par);
+                let e = Exps::new(&par, max_len);
+                let next = step_with(&mut lay, f, &par, &prev, &curr, mult, &e).params(par);
                 still = if moved(&next, &par) < FREEZE_TOL {
                     still + 1
                 } else {
@@ -621,10 +727,11 @@ fn run(em_info: &EMInfo, f: &Flat, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
                 };
                 par = next;
                 if can_freeze && still >= FREEZE_AFTER {
-                    let ws = (0..f.target.len())
+                    let e = Exps::new(&par, max_len);
+                    let ws: Vec<f64> = (0..f.target.len())
                         .into_par_iter()
                         .map(|k| {
-                            let t = par.terms(f, k);
+                            let t = par.terms(f, k, &e);
                             f.prob[k] * t.start() * t.end()
                         })
                         .collect();
@@ -633,6 +740,7 @@ fn run(em_info: &EMInfo, f: &Flat, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
                         niter + 1,
                         par
                     );
+                    lay = std::mem::replace(&mut lay, Layout::Atomic).frozen(f, &ws);
                     frozen = Some(ws);
                 }
             }
@@ -676,8 +784,15 @@ fn run(em_info: &EMInfo, f: &Flat, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
     match &frozen {
         Some(ws) => step_static(&mut lay, f, ws, &prev, &curr, mult),
         None => {
-            let surv: Vec<f64> = lens.iter().map(|l| (-par.h * l).exp()).collect();
-            step_with(&mut lay, f, &par, &prev, &curr, mult, &surv);
+            step_with(
+                &mut lay,
+                f,
+                &par,
+                &prev,
+                &curr,
+                mult,
+                &Exps::new(&par, max_len),
+            );
         }
     }
     (
@@ -722,13 +837,8 @@ mod tests {
         let mut curr: Vec<AtomicF64> = (0..ntx).map(|_| AtomicF64::new(0.0)).collect();
         let mut par = Params::initial();
         for _ in 0..iters {
-            let surv: Vec<f64> = (0..ntx)
-                .map(|t| {
-                    let k = f.target.iter().position(|&x| x as usize == t).unwrap();
-                    (-par.h * f.len[k]).exp()
-                })
-                .collect();
-            par = step_with(&mut lay, f, &par, &prev, &curr, mult, &surv).params(par);
+            let e = Exps::new(&par, f.max_len());
+            par = step_with(&mut lay, f, &par, &prev, &curr, mult, &e).params(par);
             std::mem::swap(&mut prev, &mut curr);
             curr.iter().for_each(|x| x.store(0.0, Ordering::Relaxed));
         }
@@ -836,5 +946,51 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// With frozen weights, the thread-local and transposed layouts give the same round, with
+    /// and without bootstrap multiplicities; reordering the reads does not change the fit.
+    #[test]
+    fn frozen_layouts_and_read_order_agree() {
+        use crate::em_read::Impl;
+        let lens = [2000.0, 1000.0, 1500.0];
+        let mut reads = Vec::new();
+        for i in 0..200 {
+            reads.push(vec![(2, 1.0, 0.0, 1500.0)]);
+            reads.push(vec![(0, 1.0, 200.0 + (i % 50) as f64 * 6.0, 2000.0)]);
+            reads.push(vec![(0, 1.0, 1000.0, 2000.0), (1, 0.9, 0.0, 1000.0)]);
+            reads.push(vec![(1, 1.0, 400.0, 1000.0), (2, 0.8, 900.0, 1500.0)]);
+        }
+        let f = flat(&reads, &lens);
+        let par = Params::initial();
+        let e = Exps::new(&par, f.max_len());
+        let ws: Vec<f64> = (0..f.target.len())
+            .map(|k| {
+                let t = par.terms(&f, k, &e);
+                f.prob[k] * t.start() * t.end()
+            })
+            .collect();
+        let prev: Vec<AtomicF64> = [3.0, 1.0, 2.0].into_iter().map(AtomicF64::new).collect();
+        let mult: Vec<u32> = (0..reads.len()).map(|i| (i % 3) as u32).collect();
+        for m in [None, Some(&mult[..])] {
+            let round = |how| {
+                let mut lay = Layout::with(&f, 3, Some(how)).frozen(&f, &ws);
+                let curr: Vec<AtomicF64> = (0..3).map(|_| AtomicF64::new(0.0)).collect();
+                step_static(&mut lay, &f, &ws, &prev, &curr, m);
+                curr.iter()
+                    .map(|x| x.load(Ordering::Relaxed))
+                    .collect::<Vec<_>>()
+            };
+            let (a, b) = (round(Impl::Local), round(Impl::Csr));
+            for (x, y) in a.iter().zip(&b) {
+                assert!((x - y).abs() < 1e-9 * x.max(1.0), "{a:?} {b:?}");
+            }
+        }
+        let (a, pa) = fit(&f, 3, 50);
+        let (b, pb) = fit(&flat(&reads, &lens).reordered(), 3, 50);
+        for (x, y) in a.iter().zip(&b) {
+            assert!((x - y).abs() < 1e-9 * x.max(1.0), "{a:?} {b:?}");
+        }
+        assert!((pa.h - pb.h).abs() < 1e-12 && (pa.g - pb.g).abs() < 1e-12);
     }
 }
