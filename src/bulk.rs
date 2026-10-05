@@ -154,13 +154,18 @@ fn perform_inference_and_write_output(
         */
     }
 
+    let em_start = std::time::Instant::now();
     let counts = if args.model_truncation {
         crate::truncation::em(&emi, args.threads)
     } else if args.threads > 4 {
-        em::em_par(&emi, args.threads)
+        match crate::em_read::Impl::from_env() {
+            Some(how) => crate::em_read::em(&emi, args.threads, how),
+            None => em::em_par(&emi, args.threads),
+        }
     } else {
         em::em(&emi, args.threads)
     };
+    info!("EM finished in {:.2}s", em_start.elapsed().as_secs_f64());
 
     let aux_txp_counts = crate::util::aux_counts::get_aux_counts(store, txps)?;
 

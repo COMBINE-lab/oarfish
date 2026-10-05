@@ -30,7 +30,7 @@ use std::sync::atomic::Ordering;
 
 use atomic_float::AtomicF64;
 use num_format::{Locale, ToFormattedString};
-use rayon::iter::{IntoParallelIterator, IntoParallelRefIterator, ParallelIterator};
+use rayon::prelude::*;
 use tracing::{info, span, trace};
 
 use crate::util::constants;
@@ -317,6 +317,171 @@ pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f6
     })
 }
 
+/// Layout-specific state for the atomic-free variants of [`step`] (see `crate::em_read`).
+enum Layout {
+    Atomic,
+    /// Read chunks and one abundance buffer per chunk.
+    Local(Vec<(usize, usize)>, Vec<Vec<f64>>),
+    /// Per-alignment posteriors in read order, and the transcript-major transpose: transcript
+    /// `t` owns alignment indices `off[t]..off[t + 1]` of `aln`.
+    Csr {
+        post: Vec<f64>,
+        off: Vec<usize>,
+        aln: Vec<u32>,
+    },
+}
+
+impl Layout {
+    fn new(f: &Flat, ntx: usize) -> Self {
+        let nthreads = rayon::current_num_threads();
+        match crate::em_read::Impl::from_env() {
+            None => Layout::Atomic,
+            Some(crate::em_read::Impl::Local) => {
+                let n = (nthreads * 2).max(1);
+                let per = f.target.len().div_ceil(n).max(1);
+                let nreads = f.off.len() - 1;
+                let (mut ch, mut start) = (Vec::new(), 0);
+                for r in 0..nreads {
+                    if f.off[r + 1] - f.off[start] >= per {
+                        ch.push((start, r + 1));
+                        start = r + 1;
+                    }
+                }
+                if start < nreads {
+                    ch.push((start, nreads));
+                }
+                let bufs = (0..ch.len()).map(|_| vec![0.0; ntx]).collect();
+                Layout::Local(ch, bufs)
+            }
+            Some(crate::em_read::Impl::Csr) => {
+                let mut off = vec![0usize; ntx + 1];
+                for &t in &f.target {
+                    off[t as usize + 1] += 1;
+                }
+                for i in 0..ntx {
+                    off[i + 1] += off[i];
+                }
+                let mut fill = off.clone();
+                let mut aln = vec![0u32; f.target.len()];
+                for (k, &t) in f.target.iter().enumerate() {
+                    aln[fill[t as usize]] = k as u32;
+                    fill[t as usize] += 1;
+                }
+                Layout::Csr {
+                    post: vec![0.0; f.target.len()],
+                    off,
+                    aln,
+                }
+            }
+        }
+    }
+}
+
+/// One EM round in the chosen layout. The atomic-free layouts write each `curr` slot once.
+fn step_with(
+    lay: &mut Layout,
+    f: &Flat,
+    par: &Params,
+    prev: &[AtomicF64],
+    curr: &[AtomicF64],
+    mult: Option<&[u32]>,
+) -> Stats {
+    // Posteriors of read r's alignments, passed to `emit(k, t, post)`; nothing if the read
+    // cannot be assigned. Each alignment's positional terms are computed once, into `scratch`,
+    // and reused for the posterior.
+    let read = |r: usize,
+                st: &mut Stats,
+                scratch: &mut Vec<(Terms, f64)>,
+                emit: &mut dyn FnMut(usize, usize, f64)| {
+        let m = mult.map_or(1.0, |m| m[r] as f64);
+        if m == 0.0 {
+            return;
+        }
+        let (lo, hi) = (f.off[r], f.off[r + 1]);
+        scratch.clear();
+        let mut denom = 0.0;
+        for k in lo..hi {
+            let t = par.terms(f, k);
+            let w = prev[f.target[k] as usize].load(Ordering::Relaxed)
+                * f.prob[k]
+                * t.start()
+                * t.end();
+            denom += w;
+            scratch.push((t, w));
+        }
+        if denom > constants::EM_DENOM_THRESH {
+            for (i, k) in (lo..hi).enumerate() {
+                let (t, w) = &scratch[i];
+                let post = m * w / denom;
+                emit(k, f.target[k] as usize, post);
+                st.add(f, k, t, post);
+            }
+        }
+    };
+    match lay {
+        Layout::Atomic => step(f, par, prev, curr, mult),
+        Layout::Local(ch, bufs) => {
+            let st = ch
+                .par_iter()
+                .zip(bufs.par_iter_mut())
+                .map(|(&(r0, r1), acc)| {
+                    acc.fill(0.0);
+                    let (mut st, mut scratch) = (Stats::default(), Vec::new());
+                    for r in r0..r1 {
+                        read(r, &mut st, &mut scratch, &mut |_, t, p| acc[t] += p);
+                    }
+                    st
+                })
+                .reduce(Stats::default, Stats::merge);
+            const BLOCK: usize = 4096;
+            let bufs = &*bufs;
+            curr.par_chunks(BLOCK).enumerate().for_each(|(b, out)| {
+                let base = b * BLOCK;
+                for (i, o) in out.iter().enumerate() {
+                    o.store(
+                        bufs.iter().map(|acc| acc[base + i]).sum(),
+                        Ordering::Relaxed,
+                    );
+                }
+            });
+            st
+        }
+        Layout::Csr { post, off, aln } => {
+            // Pass 1, over reads: posteriors into the read-ordered buffer (each read writes
+            // only its own alignments' slots), and the sufficient statistics.
+            let nreads = f.off.len() - 1;
+            let post_ptr = post.as_mut_ptr() as usize;
+            let st = (0..nreads)
+                .into_par_iter()
+                .fold(
+                    || (Stats::default(), Vec::new()),
+                    |(mut st, mut scratch), r| {
+                        for k in f.off[r]..f.off[r + 1] {
+                            // SAFETY: slot k belongs to read r alone.
+                            unsafe { *(post_ptr as *mut f64).add(k) = 0.0 };
+                        }
+                        read(r, &mut st, &mut scratch, &mut |k, _, p| unsafe {
+                            *(post_ptr as *mut f64).add(k) = p
+                        });
+                        (st, scratch)
+                    },
+                )
+                .map(|(st, _)| st)
+                .reduce(Stats::default, Stats::merge);
+            // Pass 2, over transcripts: sum their alignments' posteriors.
+            let post = &*post;
+            curr.par_iter().enumerate().for_each(|(t, c)| {
+                let s: f64 = aln[off[t]..off[t + 1]]
+                    .iter()
+                    .map(|&k| post[k as usize])
+                    .sum();
+                c.store(s, Ordering::Relaxed);
+            });
+            st
+        }
+    }
+}
+
 fn run(em_info: &EMInfo, f: &Flat, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
     let tinfo: &[TranscriptInfo] = em_info.txp_info;
     let total_weight = em_info.eq_map.num_aligned_reads() as f64;
@@ -326,11 +491,17 @@ fn run(em_info: &EMInfo, f: &Flat, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
     };
     let mut prev: Vec<AtomicF64> = init.into_iter().map(AtomicF64::new).collect();
     let mut curr: Vec<AtomicF64> = (0..tinfo.len()).map(|_| AtomicF64::new(0.0)).collect();
+    let t_setup = std::time::Instant::now();
+    let mut lay = Layout::new(f, tinfo.len());
+    info!(
+        "truncation EM layout set up in {:.2}s",
+        t_setup.elapsed().as_secs_f64()
+    );
     let mut par = Params::initial();
 
     let mut niter = 0_u32;
     while niter < em_info.max_iter {
-        par = step(f, &par, &prev, &curr, mult).params(par);
+        par = step_with(&mut lay, f, &par, &prev, &curr, mult).params(par);
         let mut rel_diff = 0.0_f64;
         for (p, c) in prev.iter().zip(&curr) {
             let pc = p.load(Ordering::Relaxed);
@@ -399,7 +570,7 @@ mod tests {
         let mut curr: Vec<AtomicF64> = (0..ntx).map(|_| AtomicF64::new(0.0)).collect();
         let mut par = Params::initial();
         for _ in 0..iters {
-            par = step(f, &par, &prev, &curr, mult).params(par);
+            par = step_with(&mut lay, f, &par, &prev, &curr, mult).params(par);
             std::mem::swap(&mut prev, &mut curr);
             curr.iter().for_each(|x| x.store(0.0, Ordering::Relaxed));
         }
