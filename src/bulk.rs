@@ -83,7 +83,7 @@ fn get_json_info(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn perform_inference_and_write_output(
+pub(crate) fn perform_inference_and_write_output(
     header: &noodles_sam::header::Header,
     store: &mut InMemoryAlignmentStore,
     name_vec: Option<SwapVec<String>>,
