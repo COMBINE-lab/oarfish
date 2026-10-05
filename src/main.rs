@@ -27,6 +27,7 @@ mod eq_classes;
 mod presence;
 mod truncation;
 mod prog_opts;
+mod rad_input;
 mod single_cell;
 mod util;
 
@@ -400,8 +401,34 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // A RAD file given as --alignments: read its header first, since it can set options
+    // (the score denominator).
+    let rad_hdr = match args.alignments.clone() {
+        Some(p) if rad_input::is_rad(&p)? => Some(rad_input::read_header(&p, &mut args)?),
+        _ => None,
+    };
+
     // if we are quantifying, handle this below
     let mut filter_opts = get_filter_opts(&args)?;
+
+    if let Some(rad) = rad_hdr {
+        let path = args.alignments.clone().expect("RAD input is --alignments");
+        let header = rad_input::sam_header(&rad)?;
+        let digest = digest_utils::digest_from_header(&header)?;
+        let (mut txps, txps_name) = get_txp_info_from_header(&header, &args)?;
+        rad_input::quantify(
+            &path,
+            &header,
+            &rad,
+            filter_opts,
+            &mut txps,
+            &txps_name,
+            &args,
+            vec![("rad_digest".to_string(), digest)].into(),
+        )?;
+        info!("oarfish completed successfully.");
+        return Ok(());
+    }
 
     // Genome-space modes: rather than quantifying against the input BAM/aligner
     // references directly, we project genomic alignments onto the transcripts in
