@@ -509,14 +509,14 @@ fn step_static(
         }
         let (lo, hi) = (f.off[r], f.off[r + 1]);
         let mut denom = 0.0;
-        for k in lo..hi {
-            denom += prev[f.target[k] as usize].load(Ordering::Relaxed) * ws[k];
+        for (&t, &w) in f.target[lo..hi].iter().zip(&ws[lo..hi]) {
+            denom += prev[t as usize].load(Ordering::Relaxed) * w;
         }
         if denom > constants::EM_DENOM_THRESH {
             let inv = m / denom;
-            for k in lo..hi {
-                let t = f.target[k] as usize;
-                emit(k, t, prev[t].load(Ordering::Relaxed) * ws[k] * inv);
+            for (k, (&t, &w)) in (lo..hi).zip(f.target[lo..hi].iter().zip(&ws[lo..hi])) {
+                let t = t as usize;
+                emit(k, t, prev[t].load(Ordering::Relaxed) * w * inv);
             }
         }
     };
