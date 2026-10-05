@@ -465,10 +465,11 @@ impl Layout {
                 let mut read = vec![0u32; f.target.len()];
                 let mut w = vec![0f64; f.target.len()];
                 for (r, win) in f.off.windows(2).enumerate() {
-                    for k in win[0]..win[1] {
-                        let t = f.target[k] as usize;
+                    let (lo, hi) = (win[0], win[1]);
+                    for (&t, &wk) in f.target[lo..hi].iter().zip(&ws[lo..hi]) {
+                        let t = t as usize;
                         read[fill[t]] = r as u32;
-                        w[fill[t]] = ws[k];
+                        w[fill[t]] = wk;
                         fill[t] += 1;
                     }
                 }
