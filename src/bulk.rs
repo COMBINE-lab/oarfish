@@ -160,7 +160,7 @@ fn perform_inference_and_write_output(
     let per_read_terms =
         emi.eq_map.filter_opts.model_coverage || emi.kde_model.is_some() || args.model_truncation;
     let eqc = (!per_read_terms && !args.per_read_em).then(|| {
-        let eqc = EqClasses::from_store(emi.eq_map);
+        let eqc = EqClasses::from_store(emi.eq_map, emi.txp_info.len());
         info!(
             "{} reads in {} equivalence classes",
             emi.eq_map.num_aligned_reads().to_formatted_string(&Locale::en),
