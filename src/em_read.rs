@@ -1,4 +1,4 @@
-//! Per-read EM without atomics: experimental alternatives to `em::em_par`.
+//! Per-read EM without atomics, used in place of `em::em_par` (`Csr` by default).
 //!
 //! In the per-read EM (with or without the coverage model) each alignment's weight, its score
 //! probability times its coverage and length-density terms, is fixed across iterations, so an
@@ -11,6 +11,8 @@
 //! - `Csr`: pass 1, over reads, computes each read's normalizer; pass 2, over transcripts,
 //!   sums `w / normalizer` over the transcript's alignments through a precomputed transpose.
 //!   Each pass writes only its own slots, and the result does not depend on scheduling.
+//!
+//! `OARFISH_READ_EM=local` or `OARFISH_READ_EM=atomic` selects the other layouts.
 
 use std::time::Instant;
 
@@ -29,12 +31,13 @@ pub enum Impl {
 }
 
 impl Impl {
-    /// From `OARFISH_READ_EM` (`local` or `csr`); None keeps the atomic EM.
+    /// The per-read EM layout: `csr` by default; `OARFISH_READ_EM=local` selects the
+    /// thread-local layout and `OARFISH_READ_EM=atomic` the atomic EM (None).
     pub fn from_env() -> Option<Impl> {
-        match std::env::var("OARFISH_READ_EM").ok()?.as_str() {
-            "local" => Some(Impl::Local),
-            "csr" => Some(Impl::Csr),
-            _ => None,
+        match std::env::var("OARFISH_READ_EM").ok().as_deref() {
+            Some("atomic") => None,
+            Some("local") => Some(Impl::Local),
+            _ => Some(Impl::Csr),
         }
     }
 }
