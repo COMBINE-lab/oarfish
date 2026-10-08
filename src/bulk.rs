@@ -1,6 +1,7 @@
 use crate::NamedDigestVec;
 use crate::alignment_parser;
 use crate::em;
+use crate::eq_classes::{self, EqClasses};
 use crate::kde_utils;
 use crate::prog_opts::Args;
 use crate::util::constants::EMPTY_READ_NAME;
@@ -154,16 +155,36 @@ fn perform_inference_and_write_output(
         */
     }
 
+    // Without per-read model terms, reads with the same (target, probability) multiset are
+    // interchangeable: run the EM over equivalence classes.
+    let per_read_terms =
+        emi.eq_map.filter_opts.model_coverage || emi.kde_model.is_some() || args.model_truncation;
+    let eqc = (!per_read_terms && !args.per_read_em).then(|| {
+        let eqc = EqClasses::from_store(emi.eq_map, emi.txp_info.len());
+        info!(
+            "{} reads in {} equivalence classes",
+            emi.eq_map.num_aligned_reads().to_formatted_string(&Locale::en),
+            eqc.len().to_formatted_string(&Locale::en)
+        );
+        eqc
+    });
+
     let em_start = std::time::Instant::now();
-    let counts = if args.model_truncation {
-        crate::truncation::em(&emi, args.threads)
-    } else if args.threads > 4 {
-        match crate::em_read::Impl::from_env() {
+    let counts = match &eqc {
+        Some(eqc) => eq_classes::em(
+            eqc,
+            emi.txp_info,
+            emi.max_iter,
+            emi.convergence_thresh,
+            emi.init_abundances.as_ref(),
+            args.threads,
+        ),
+        None if args.model_truncation => crate::truncation::em(&emi, args.threads),
+        None if args.threads > 4 => match crate::em_read::Impl::from_env() {
             Some(how) => crate::em_read::em(&emi, args.threads, how),
             None => em::em_par(&emi, args.threads),
-        }
-    } else {
-        em::em(&emi, args.threads)
+        },
+        None => em::em(&emi, args.threads),
     };
     info!("EM finished in {:.2}s", em_start.elapsed().as_secs_f64());
 
@@ -185,10 +206,20 @@ fn perform_inference_and_write_output(
     // if the user requested bootstrap replicates,
     // compute and write those out now.
     if args.num_bootstraps > 0 {
-        let breps = if args.model_truncation {
-            crate::truncation::bootstrap(&emi, args.num_bootstraps, args.threads)
-        } else {
-            em::bootstrap(&emi, args.num_bootstraps, args.threads)
+        let breps = match &eqc {
+            Some(eqc) => eq_classes::bootstrap(
+                eqc,
+                emi.txp_info,
+                emi.max_iter,
+                emi.convergence_thresh,
+                emi.init_abundances.as_ref(),
+                args.num_bootstraps,
+                args.threads,
+            ),
+            None if args.model_truncation => {
+                crate::truncation::bootstrap(&emi, args.num_bootstraps, args.threads)
+            }
+            None => em::bootstrap(&emi, args.num_bootstraps, args.threads),
         };
 
         let mut new_arrays = vec![];
