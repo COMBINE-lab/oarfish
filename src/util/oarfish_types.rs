@@ -648,6 +648,17 @@ impl<'h> InMemoryAlignmentStore<'h> {
         }
     }
 
+    /// The alignments of read `i`, with their score and coverage probabilities.
+    #[inline]
+    pub fn read(&self, i: usize) -> (&[AlnInfo], &[f32], &[f64]) {
+        let (start, end) = (self.boundaries[i], self.boundaries[i + 1]);
+        (
+            &self.alignments[start..end],
+            &self.as_probabilities[start..end],
+            &self.coverage_probabilities[start..end],
+        )
+    }
+
     pub fn iter(&self) -> InMemoryAlignmentStoreIter<'_, '_> {
         InMemoryAlignmentStoreIter {
             store: self,

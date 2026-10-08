@@ -493,6 +493,11 @@ pub struct Args {
     #[arg(long, help_heading = "coverage model", value_parser)]
     pub model_coverage: bool,
 
+    /// model where reads land on transcripts: 3'-anchored reads that are either full length or
+    /// 5'-truncated, with the full-length fraction and position distributions learned in the EM
+    #[arg(long, help_heading = "coverage model", conflicts_with = "model_coverage")]
+    pub model_truncation: bool,
+
     /// if using the coverage model, use this as the value of `k` in the logistic equation
     #[arg(
         short = 'k',

@@ -42,6 +42,8 @@ fn get_json_info(
 ) -> serde_json::Value {
     let prob = if args.model_coverage {
         "logistic_coverage"
+    } else if args.model_truncation {
+        "truncation"
     } else {
         "no_coverage"
     };
@@ -152,11 +154,18 @@ fn perform_inference_and_write_output(
         */
     }
 
-    let counts = if args.threads > 4 {
-        em::em_par(&emi, args.threads)
+    let em_start = std::time::Instant::now();
+    let counts = if args.model_truncation {
+        crate::truncation::em(&emi, args.threads)
+    } else if args.threads > 4 {
+        match crate::em_read::Impl::from_env() {
+            Some(how) => crate::em_read::em(&emi, args.threads, how),
+            None => em::em_par(&emi, args.threads),
+        }
     } else {
         em::em(&emi, args.threads)
     };
+    info!("EM finished in {:.2}s", em_start.elapsed().as_secs_f64());
 
     let aux_txp_counts = crate::util::aux_counts::get_aux_counts(store, txps)?;
 
@@ -176,7 +185,11 @@ fn perform_inference_and_write_output(
     // if the user requested bootstrap replicates,
     // compute and write those out now.
     if args.num_bootstraps > 0 {
-        let breps = em::bootstrap(&emi, args.num_bootstraps, args.threads);
+        let breps = if args.model_truncation {
+            crate::truncation::bootstrap(&emi, args.num_bootstraps, args.threads)
+        } else {
+            em::bootstrap(&emi, args.num_bootstraps, args.threads)
+        };
 
         let mut new_arrays = vec![];
         let mut bs_fields = vec![];
