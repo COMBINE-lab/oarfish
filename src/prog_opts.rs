@@ -407,11 +407,12 @@ pub struct Args {
     #[arg(long, value_parser = parse_pos_f32, help_heading = "filters")]
     pub score_prob_denom: Option<f32>,
 
-    /// aligner match score; when positive, the credit a read's poly(A) tail earns by aligning
-    /// to a transcript (one whose sequence ends in an A-run) is removed from that alignment's
-    /// score (prototype; 0 disables)
-    #[arg(long, hide = true, default_value_t = 0)]
-    pub tail_match_score: i32,
+    /// per-base match score of the aligner, used to remove the score credit a read's poly(A)
+    /// tail earns by aligning to a transcript whose sequence ends in an A-run. By default it is
+    /// taken from the aligner (a minimap2 `@PG` command line, or the rammap preset); with an
+    /// unrecognized aligner the adjustment is off. 0 turns it off.
+    #[arg(long, hide = true)]
+    pub tail_match_score: Option<i32>,
 
     /// genome mode: per-internal-junction-mismatch discount in (0,1] applied to a
     /// transcript's projection similarity (sharpens isoform discrimination).

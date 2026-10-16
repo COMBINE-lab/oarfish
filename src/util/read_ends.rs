@@ -82,9 +82,78 @@ impl TailNeutral {
     }
 }
 
+/// Per-base match score of a minimap2 command line: its `-A`, else its `-x` preset's, else
+/// minimap2's default (2).
+pub fn minimap2_match_score(command_line: &str) -> i32 {
+    let toks: Vec<&str> = command_line.split_whitespace().collect();
+    // The value of single-letter option `opt`, which may be bundled after flags (`-ax map-ont`)
+    // or attached (`-A1`, `-xmap-ont`).
+    let value = |opt: char| {
+        toks.iter().enumerate().find_map(|(i, t)| {
+            let letters = t.strip_prefix('-').filter(|s| !s.starts_with('-'))?;
+            let at = letters.find(opt)?;
+            if !letters[..at].chars().all(|c| c.is_ascii_alphabetic()) {
+                return None;
+            }
+            let rest = &letters[at + opt.len_utf8()..];
+            if rest.is_empty() {
+                toks.get(i + 1).copied()
+            } else {
+                Some(rest)
+            }
+        })
+    };
+    if let Some(a) = value('A').and_then(|v| v.parse().ok()) {
+        return a;
+    }
+    match value('x') {
+        Some("map-hifi" | "lr:hq" | "lr:hqae" | "splice:hq" | "asm5" | "asm10" | "asm20") => 1,
+        _ => 2,
+    }
+}
+
+/// Per-base match score of the aligner that wrote a SAM/BAM header, if it is minimap2 (from the
+/// command line of its `@PG` record); `None` for other or undeclared aligners.
+pub fn match_score_from_header(header: &noodles_sam::Header) -> Option<i32> {
+    use noodles_sam::header::record::value::map::program::tag;
+    header.programs().as_ref().iter().find_map(|(id, prog)| {
+        let fields = prog.other_fields();
+        let name = fields.get(&tag::NAME).map(|v| v.to_string());
+        let is_mm2 = id.to_string().starts_with("minimap2")
+            || name.as_deref().is_some_and(|n| n.starts_with("minimap2"));
+        if !is_mm2 {
+            return None;
+        }
+        Some(
+            fields
+                .get(&tag::COMMAND_LINE)
+                .map_or(2, |cl| minimap2_match_score(&cl.to_string())),
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn match_score_from_minimap2_command_lines() {
+        assert_eq!(
+            minimap2_match_score("minimap2 -t 32 -a -N 100 ref.mmi r.fq"),
+            2
+        );
+        assert_eq!(minimap2_match_score("minimap2 -ax map-hifi ref.fa r.fq"), 1);
+        assert_eq!(minimap2_match_score("minimap2 -ax splice ref.fa r.fq"), 2);
+        assert_eq!(
+            minimap2_match_score("minimap2 -a -x map-hifi ref.fa r.fq"),
+            1
+        );
+        assert_eq!(
+            minimap2_match_score("minimap2 -x map-ont -A 3 ref.fa r.fq"),
+            3
+        );
+        assert_eq!(minimap2_match_score("minimap2 -A1 ref.fa r.fq"), 1);
+    }
 
     /// Tail detection: an A-run at the end counts (one stray base per ten tolerated); short runs
     /// and A-poor ends do not.
