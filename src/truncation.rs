@@ -38,6 +38,7 @@ use num_format::{Locale, ToFormattedString};
 use rayon::prelude::*;
 use tracing::{info, span, trace};
 
+use crate::presence::{Presence, PresenceOpts};
 use crate::util::constants;
 use crate::util::oarfish_types::{EMInfo, TranscriptInfo};
 
@@ -163,7 +164,12 @@ struct Terms {
 impl Terms {
     #[inline]
     fn total(&self) -> f64 {
-        self.a3_stop + self.a3_cens + self.a5_stop + self.a5_cens + self.full + self.u_stop
+        self.a3_stop
+            + self.a3_cens
+            + self.a5_stop
+            + self.a5_cens
+            + self.full
+            + self.u_stop
             + self.u_cens
     }
 }
@@ -196,13 +202,21 @@ impl Params {
             } else {
                 0.0
             },
-            a3_cens: if both { self.p3 * e.h3[len_us] / bw2 } else { 0.0 },
+            a3_cens: if both {
+                self.p3 * e.h3[len_us] / bw2
+            } else {
+                0.0
+            },
             a5_stop: if f5 {
                 self.p5 * self.h5 * e.h5[l_us] / BW
             } else {
                 0.0
             },
-            a5_cens: if both { self.p5 * e.h5[len_us] / bw2 } else { 0.0 },
+            a5_cens: if both {
+                self.p5 * e.h5[len_us] / bw2
+            } else {
+                0.0
+            },
             full: if both { self.pf / bw2 } else { 0.0 },
             u_stop: self.pu * self.lam * e.lam[l_us] / ((len - l) as f64 + 1.0),
             u_cens: if both {
@@ -324,7 +338,6 @@ impl Stats {
     }
 }
 
-
 /// One EM round: distribute each read over its alignments, accumulating abundances into `curr`
 /// and the positional statistics into the returned `Stats`. With `mult`, read `r` counts
 /// `mult[r]` times (a bootstrap replicate).
@@ -356,10 +369,7 @@ fn step(
                 for k in lo..hi {
                     let t = par.terms(f, k, e);
                     let tid = f.target[k] as usize;
-                    let post = m
-                        * prev[tid].load(Ordering::Relaxed)
-                        * f.prob[k] as f64
-                        * t.total()
+                    let post = m * prev[tid].load(Ordering::Relaxed) * f.prob[k] as f64 * t.total()
                         / denom;
                     curr[tid].fetch_add(post, Ordering::AcqRel);
                     st.add(f, k, &t, post);
@@ -371,7 +381,7 @@ fn step(
 }
 
 /// Abundance estimates (expected reads per target) under the truncation-aware model.
-pub fn em(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
+pub fn em(em_info: &EMInfo, presence: Option<PresenceOpts>, nthreads: usize) -> Vec<f64> {
     let span = span!(tracing::Level::INFO, "em_truncation");
     let _guard = span.enter();
     let pool = rayon::ThreadPoolBuilder::new()
@@ -379,7 +389,7 @@ pub fn em(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
         .build()
         .unwrap();
     pool.install(|| {
-        let (counts, par) = run(em_info, &Flat::new(em_info), None);
+        let (counts, par) = run(em_info, &Flat::new(em_info), None, presence);
         info!(
             "truncation model: 3'-anchored {:.3} (stop rate {:.2e}/nt), 5'-anchored {:.3} \
              (stop rate {:.2e}/nt), full length {:.3}, uniformly placed {:.3} (mean length {:.0} nt)",
@@ -398,7 +408,12 @@ pub fn em(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
 /// Bootstrap replicates under the truncation-aware model. Each replicate resamples the reads
 /// with replacement and re-fits both the abundances and the positional parameters, so the
 /// parameters' uncertainty propagates into the replicates.
-pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f64>> {
+pub fn bootstrap(
+    em_info: &EMInfo,
+    presence: Option<PresenceOpts>,
+    num_boot: u32,
+    nthreads: usize,
+) -> Vec<Vec<f64>> {
     let span = span!(tracing::Level::INFO, "bootstrap_truncation");
     let _guard = span.enter();
     info!("will collect {num_boot} bootstraps");
@@ -416,7 +431,7 @@ pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f6
                 for r in crate::bootstrap::get_sample_inds(nreads, &mut rng) {
                     mult[r] += 1;
                 }
-                let (counts, par) = run(em_info, &f, Some(&mult));
+                let (counts, par) = run(em_info, &f, Some(&mult), presence);
                 info!("bootstrap replicate {i}: {par:?}");
                 counts
             })
@@ -755,7 +770,47 @@ fn moved(a: &Params, b: &Params) -> f64 {
         .max(rel(a.lam, b.lam))
 }
 
-fn run(em_info: &EMInfo, f: &Flat, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
+/// Refresh the presence posteriors if due at iteration `niter`, then fill `eff` with
+/// `q * prev`. Each alignment's weight is its score probability times its positional
+/// likelihood: the frozen weights `ws` if the parameters are frozen, else from `par`.
+#[allow(clippy::too_many_arguments)]
+fn refresh_presence(
+    p: &mut Presence,
+    niter: u32,
+    f: &Flat,
+    par: &Params,
+    ws: Option<&[f64]>,
+    prev: &[AtomicF64],
+    eff: &[AtomicF64],
+    mult: Option<&[u32]>,
+    max_len: u32,
+) {
+    let counts: Vec<f64> = prev.iter().map(|x| x.load(Ordering::Relaxed)).collect();
+    if p.due(niter) {
+        let e = ws.is_none().then(|| Exps::new(par, max_len));
+        p.update(&counts, f.off.len() - 1, |r, buf| {
+            for k in f.off[r]..f.off[r + 1] {
+                let w = match (ws, &e) {
+                    (Some(ws), _) => ws[k],
+                    (None, Some(e)) => f.prob[k] as f64 * par.terms(f, k, e).total(),
+                    (None, None) => unreachable!(),
+                };
+                buf.push((f.target[k], w));
+            }
+            mult.map_or(1.0, |m| m[r] as f64)
+        });
+    }
+    eff.par_iter()
+        .zip(counts.par_iter().zip(&p.q))
+        .for_each(|(e, (c, q))| e.store(q * c, Ordering::Relaxed));
+}
+
+fn run(
+    em_info: &EMInfo,
+    f: &Flat,
+    mult: Option<&[u32]>,
+    presence: Option<PresenceOpts>,
+) -> (Vec<f64>, Params) {
     let tinfo: &[TranscriptInfo] = em_info.txp_info;
     let total_weight = em_info.eq_map.num_aligned_reads() as f64;
     let init = match em_info.init_abundances {
@@ -776,12 +831,33 @@ fn run(em_info: &EMInfo, f: &Flat, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
     let max_len = f.max_len();
     let can_freeze = !matches!(lay, Layout::Atomic);
     let (mut still, mut frozen): (u32, Option<Vec<f64>>) = (0, None);
+    // With the presence model the EM sees `q * prev` (see `crate::presence`); `eff` holds it.
+    let mut pres = presence.map(|o| Presence::new(tinfo.len(), o));
+    let eff: Vec<AtomicF64> = if pres.is_some() {
+        (0..tinfo.len()).map(|_| AtomicF64::new(0.0)).collect()
+    } else {
+        Vec::new()
+    };
     while niter < em_info.max_iter {
+        if let Some(p) = &mut pres {
+            refresh_presence(
+                p,
+                niter,
+                f,
+                &par,
+                frozen.as_deref(),
+                &prev,
+                &eff,
+                mult,
+                max_len,
+            );
+        }
+        let src = if pres.is_some() { &eff } else { &prev };
         match &frozen {
-            Some(ws) => step_static(&mut lay, f, ws, &prev, &curr, mult),
+            Some(ws) => step_static(&mut lay, f, ws, src, &curr, mult),
             None => {
                 let e = Exps::new(&par, max_len);
-                let next = step_with(&mut lay, f, &par, &prev, &curr, mult, &e).params(par);
+                let next = step_with(&mut lay, f, &par, src, &curr, mult, &e).params(par);
                 still = if moved(&next, &par) < FREEZE_TOL {
                     still + 1
                 } else {
@@ -843,14 +919,27 @@ fn run(em_info: &EMInfo, f: &Flat, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
             x.store(0.0, Ordering::Relaxed);
         }
     }
+    if let Some(p) = &pres {
+        if mult.is_none() {
+            info!(
+                "presence model: {} transcripts called absent (q < 0.5)",
+                p.n_absent().to_formatted_string(&Locale::en)
+            );
+        }
+        let counts: Vec<f64> = prev.iter().map(|x| x.load(Ordering::Relaxed)).collect();
+        for (e, (c, q)) in eff.iter().zip(counts.iter().zip(&p.q)) {
+            e.store(q * c, Ordering::Relaxed);
+        }
+    }
+    let src = if pres.is_some() { &eff } else { &prev };
     match &frozen {
-        Some(ws) => step_static(&mut lay, f, ws, &prev, &curr, mult),
+        Some(ws) => step_static(&mut lay, f, ws, src, &curr, mult),
         None => {
             step_with(
                 &mut lay,
                 f,
                 &par,
-                &prev,
+                src,
                 &curr,
                 mult,
                 &Exps::new(&par, max_len),

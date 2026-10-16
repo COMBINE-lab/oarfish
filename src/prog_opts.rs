@@ -36,6 +36,17 @@ fn parse_pos_f32(arg: &str) -> anyhow::Result<f32> {
     }
 }
 
+/// Presence/absence component for the bulk EM.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
+pub enum PresenceModel {
+    /// No presence modelling.
+    #[default]
+    None,
+    /// Spike-and-slab: per-transcript Bernoulli presence posterior with a fixed prior; the EM
+    /// sees presence-discounted abundances (zero-inflated EM).
+    SpikeSlab,
+}
+
 #[derive(Debug, Clone, clap::ValueEnum, Serialize)]
 pub enum ReadAssignmentProbOut {
     Uncompressed,
@@ -495,7 +506,11 @@ pub struct Args {
 
     /// model where reads land on transcripts: 3'-anchored reads that are either full length or
     /// 5'-truncated, with the full-length fraction and position distributions learned in the EM
-    #[arg(long, help_heading = "coverage model", conflicts_with = "model_coverage")]
+    #[arg(
+        long,
+        help_heading = "coverage model",
+        conflicts_with = "model_coverage"
+    )]
     pub model_truncation: bool,
 
     /// if using the coverage model, use this as the value of `k` in the logistic equation
@@ -545,6 +560,26 @@ pub struct Args {
     /// active; by default such reads are collapsed into equivalence classes
     #[arg(long, help_heading = "EM")]
     pub per_read_em: bool,
+
+    /// presence/absence model: each transcript carries a Bernoulli presence posterior that
+    /// discounts its effective abundance during the EM (zero-inflated EM), suppressing
+    /// low-evidence false-positive transcripts. Supported by the equivalence-class EM and
+    /// `--model-truncation`.
+    #[arg(long, help_heading = "EM", value_enum, default_value_t = PresenceModel::None)]
+    pub presence_model: PresenceModel,
+
+    /// presence prior probability, a fixed penalty: roughly `-logit(rho)` effective exclusive
+    /// reads are needed for a transcript to be called present
+    #[arg(long, hide = true, default_value_t = 0.05)]
+    pub presence_rho: f64,
+
+    /// EM iterations before the first presence update
+    #[arg(long, hide = true, default_value_t = 50)]
+    pub presence_warmup: u32,
+
+    /// EM iterations between presence updates
+    #[arg(long, hide = true, default_value_t = 10)]
+    pub presence_period: u32,
 
     /// number of cores that oarfish will use during different phases
     /// of quantification. Note: This value will be at least 2 for bulk

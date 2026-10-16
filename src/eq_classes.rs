@@ -16,6 +16,7 @@ use rustc_hash::FxHashMap;
 use tracing::{info, span, trace};
 
 use crate::bootstrap;
+use crate::presence::{Presence, PresenceOpts};
 use crate::util::constants;
 use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
 
@@ -40,11 +41,9 @@ pub struct EqClasses {
 impl EqClasses {
     pub fn from_store(store: &InMemoryAlignmentStore, ntx: usize) -> Self {
         Self::from_reads(
-            store.iter().map(|(alns, probs, _)| {
-                alns.iter()
-                    .zip(probs)
-                    .map(|(a, &p)| (a.ref_id, p))
-            }),
+            store
+                .iter()
+                .map(|(alns, probs, _)| alns.iter().zip(probs).map(|(a, &p)| (a.ref_id, p))),
             store.len(),
             ntx,
         )
@@ -157,6 +156,7 @@ fn m_step(eqc: &EqClasses, counts: &[f64], prev: &[f64], scale: &mut [f64], curr
 
 /// The EM of [`crate::em::em_par`] over classes with read `counts` (the class counts, or a
 /// bootstrap resample of them): same initialization, convergence rule and final pruning round.
+#[allow(clippy::too_many_arguments)]
 fn run(
     eqc: &EqClasses,
     counts: &[f64],
@@ -164,6 +164,7 @@ fn run(
     max_iter: u32,
     convergence_thresh: f64,
     init_abundances: Option<&Vec<f64>>,
+    presence: Option<PresenceOpts>,
     do_log: bool,
 ) -> Vec<f64> {
     let total_weight: f64 = counts.iter().sum();
@@ -174,10 +175,30 @@ fn run(
     let mut prev = init;
     let mut curr = vec![0.0_f64; tinfo.len()];
     let mut scale = vec![0.0_f64; eqc.len()];
+    // With the presence model the EM sees `q * prev` (see `crate::presence`).
+    let mut pres = presence.map(|o| Presence::new(tinfo.len(), o));
+    let mut eff = if pres.is_some() {
+        vec![0.0_f64; tinfo.len()]
+    } else {
+        Vec::new()
+    };
 
     let mut niter = 0_u32;
     while niter < max_iter {
-        m_step(eqc, counts, &prev, &mut scale, &mut curr);
+        match &mut pres {
+            Some(p) => {
+                if p.due(niter) {
+                    p.update(&prev, eqc.len(), |c, buf| {
+                        let (ts, ps) = eqc.class(c);
+                        buf.extend(ts.iter().zip(ps).map(|(&t, &p)| (t, p as f64)));
+                        counts[c]
+                    });
+                }
+                p.effective(&prev, &mut eff);
+                m_step(eqc, counts, &eff, &mut scale, &mut curr);
+            }
+            None => m_step(eqc, counts, &prev, &mut scale, &mut curr),
+        }
         let mut rel_diff = 0.0_f64;
         for (&pc, &c) in prev.iter().zip(&curr) {
             if pc > constants::MIN_READ_THRESH {
@@ -212,7 +233,19 @@ fn run(
             *x = 0.0;
         }
     }
-    m_step(eqc, counts, &prev, &mut scale, &mut curr);
+    match &pres {
+        Some(p) => {
+            if do_log {
+                info!(
+                    "presence model: {} transcripts called absent (q < 0.5)",
+                    p.n_absent().to_formatted_string(&Locale::en)
+                );
+            }
+            p.effective(&prev, &mut eff);
+            m_step(eqc, counts, &eff, &mut scale, &mut curr);
+        }
+        None => m_step(eqc, counts, &prev, &mut scale, &mut curr),
+    }
     curr
 }
 
@@ -223,6 +256,7 @@ pub fn em(
     max_iter: u32,
     convergence_thresh: f64,
     init_abundances: Option<&Vec<f64>>,
+    presence: Option<PresenceOpts>,
     nthreads: usize,
 ) -> Vec<f64> {
     let span = span!(tracing::Level::INFO, "em");
@@ -239,6 +273,7 @@ pub fn em(
             max_iter,
             convergence_thresh,
             init_abundances,
+            presence,
             true,
         )
     })
@@ -246,12 +281,14 @@ pub fn em(
 
 /// Bootstrap replicates: each resamples the reads with replacement (as the per-read bootstrap
 /// does) and runs the EM on the resulting class counts.
+#[allow(clippy::too_many_arguments)]
 pub fn bootstrap(
     eqc: &EqClasses,
     tinfo: &[TranscriptInfo],
     max_iter: u32,
     convergence_thresh: f64,
     init_abundances: Option<&Vec<f64>>,
+    presence: Option<PresenceOpts>,
     num_boot: u32,
     nthreads: usize,
 ) -> Vec<Vec<f64>> {
@@ -279,6 +316,7 @@ pub fn bootstrap(
                     max_iter,
                     convergence_thresh,
                     init_abundances,
+                    presence,
                     false,
                 )
             })
@@ -308,7 +346,7 @@ mod tests {
         let tinfo: Vec<TranscriptInfo> = (0..3)
             .map(|_| TranscriptInfo::with_len(std::num::NonZeroUsize::new(1000).unwrap()))
             .collect();
-        let got = run(&eqc, &eqc.counts, &tinfo, 200, 1e-12, None, false);
+        let got = run(&eqc, &eqc.counts, &tinfo, 200, 1e-12, None, None, false);
 
         // Per-read EM with the same initialization, rounds and final pruning round.
         let mut prev = vec![reads.len() as f64 / 3.0; 3];

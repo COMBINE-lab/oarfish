@@ -24,6 +24,7 @@ mod bulk;
 mod em;
 mod em_read;
 mod eq_classes;
+mod presence;
 mod truncation;
 mod prog_opts;
 mod single_cell;
