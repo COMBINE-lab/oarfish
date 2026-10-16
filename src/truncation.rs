@@ -259,6 +259,127 @@ impl GapLaw {
     }
 }
 
+/// Bins of the relative part of an end kernel (gap as a fraction of transcript length).
+const RB: usize = 20;
+
+/// An end kernel: how far a read placed at an end sits from it. A mixture of an absolute part
+/// (a [`GapLaw`] in nucleotides, for reads flush with the end or a fixed distance from it) and a
+/// relative part (a histogram over the gap as a fraction of the transcript's length, for ends
+/// that fall at a relative position, as poly(A) sites in long 3' UTRs do), each a distribution
+/// over the gaps `0..L` a transcript of length `L` allows: `K(d | L) = (1 - rho) K_abs(d) /
+/// C_abs(L - 1) + rho g(d / L) / L`.
+#[derive(Clone)]
+struct EndLaw {
+    abs: GapLaw,
+    rel: Vec<f64>,
+    rho: f64,
+}
+
+impl std::fmt::Debug for EndLaw {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let near: f64 = self.rel[..RB / 10].iter().sum();
+        let far: f64 = self.rel[RB / 2..].iter().sum();
+        write!(
+            f,
+            "{:?} + relative {:.2} (gap/L < 0.1: {:.2}, >= 0.5: {:.2})",
+            self.abs, self.rho, near, far
+        )
+    }
+}
+
+impl EndLaw {
+    fn initial(max_len: u32) -> Self {
+        EndLaw {
+            abs: GapLaw::initial(max_len),
+            rel: vec![1.0 / RB as f64; RB],
+            rho: 0.5,
+        }
+    }
+
+    #[inline]
+    fn rbin(d: u32, len: u32) -> usize {
+        ((d as u64 * RB as u64) / len.max(1) as u64).min(RB as u64 - 1) as usize
+    }
+
+    /// The absolute and relative parts of `K(d | len)`, given the absolute part's tables.
+    #[inline]
+    fn parts(&self, d: u32, len: u32, dens: &[f64], cdf: &[f64]) -> (f64, f64) {
+        let last = len.saturating_sub(1) as usize;
+        let a = (1.0 - self.rho) * dens[d as usize] / cdf[last].max(1e-300);
+        let r = self.rho * self.rel[Self::rbin(d, len)] * RB as f64 / len.max(1) as f64;
+        (a, r)
+    }
+
+    fn moved(&self, o: &EndLaw) -> f64 {
+        let tv: f64 = 0.5
+            * self
+                .rel
+                .iter()
+                .zip(&o.rel)
+                .map(|(a, b)| (a - b).abs())
+                .sum::<f64>();
+        self.abs.moved(&o.abs).max(tv).max((self.rho - o.rho).abs())
+    }
+
+    fn law(s: &EStats, old: &EndLaw) -> EndLaw {
+        let n = s.n_abs + s.n_rel;
+        if n <= 0.0 {
+            return old.clone();
+        }
+        let tot: f64 = s.rel.iter().sum();
+        let eps = 1e-9 * tot.max(1e-300);
+        let z = tot + eps * RB as f64;
+        EndLaw {
+            abs: GapLaw::law(&s.abs, &old.abs),
+            rel: if tot > 0.0 {
+                (0..RB)
+                    .map(|b| (s.rel.get(b).copied().unwrap_or(0.0) + eps) / z)
+                    .collect()
+            } else {
+                old.rel.clone()
+            },
+            rho: (s.n_rel / n).clamp(1e-6, 1.0 - 1e-6),
+        }
+    }
+}
+
+/// Expected sufficient statistics of an end kernel.
+#[derive(Default, Clone)]
+struct EStats {
+    abs: LStats,
+    rel: Vec<f64>,
+    n_abs: f64,
+    n_rel: f64,
+}
+
+impl EStats {
+    fn merge(mut self, o: EStats) -> EStats {
+        self.abs = self.abs.merge(o.abs);
+        if self.rel.len() < o.rel.len() {
+            self.rel.resize(o.rel.len(), 0.0);
+        }
+        self.rel.iter_mut().zip(o.rel).for_each(|(a, b)| *a += b);
+        self.n_abs += o.n_abs;
+        self.n_rel += o.n_rel;
+        self
+    }
+
+    /// Weight `w` of a gap `d` on a transcript of length `len`, split between the kernel's
+    /// parts in proportion to their values `a`, `r` there.
+    fn add(&mut self, w: f64, d: u32, len: u32, a: f64, r: f64) {
+        let z = a + r;
+        if w <= 0.0 || z <= 0.0 {
+            return;
+        }
+        let (wa, wr) = (w * a / z, w * r / z);
+        LStats::add(&mut self.abs.stop, GapLaw::bin(d), wa);
+        LStats::add(&mut self.abs.cens, GapLaw::bin(len.saturating_sub(1)), wa);
+        LStats::add(&mut self.rel, EndLaw::rbin(d, len), wr);
+        self.n_abs += wa;
+        self.n_rel += wr;
+    }
+}
+
 /// A read-length law: a histogram over lengths in bins of [`LenLaw::W`] nt, uniform within a
 /// bin. Lengths are right-censored at the length a transcript makes available (a read that
 /// would be longer runs to the transcript's end), so the law is fitted by the censored-data EM
@@ -413,8 +534,8 @@ struct Params {
     len5: LenLaw,
     lenu: LenLaw,
     /// End kernels at the 3' and 5' ends.
-    k3: GapLaw,
-    k5: GapLaw,
+    k3: EndLaw,
+    k5: EndLaw,
 }
 
 /// Per-alignment terms of the positional likelihood, each already weighted by its mixture
@@ -428,6 +549,11 @@ struct Terms {
     full: f64,
     u_stop: f64,
     u_cens: f64,
+    /// Absolute and relative parts of the end kernels at this alignment's gaps.
+    k3a: f64,
+    k3r: f64,
+    k5a: f64,
+    k5r: f64,
 }
 
 impl Terms {
@@ -453,8 +579,8 @@ impl Params {
             len3: LenLaw::exponential(1000.0, max_len),
             len5: LenLaw::exponential(1000.0, max_len),
             lenu: LenLaw::exponential(1000.0, max_len),
-            k3: GapLaw::initial(max_len),
-            k5: GapLaw::initial(max_len),
+            k3: EndLaw::initial(max_len),
+            k5: EndLaw::initial(max_len),
         }
     }
 
@@ -463,11 +589,11 @@ impl Params {
         let len = f.len(k);
         let (l, d5) = f.l_d5(k);
         let d3 = f.d3[k];
-        let (l_us, len_us, d3_us, d5_us) = (l as usize, len as usize, d3 as usize, d5 as usize);
-        // end kernels, normalized over the gaps this transcript allows (0..len)
-        let last = len.saturating_sub(1) as usize;
-        let kk3 = e.g3d[d3_us] / e.g3c[last].max(1e-300);
-        let kk5 = e.g5d[d5_us] / e.g5c[last].max(1e-300);
+        let (l_us, len_us) = (l as usize, len as usize);
+        // end kernels, each a distribution over the gaps this transcript allows (0..len)
+        let (k3a, k3r) = self.k3.parts(d3, len, &e.g3d, &e.g3c);
+        let (k5a, k5r) = self.k5.parts(d5, len, &e.g5d, &e.g5c);
+        let (kk3, kk5) = (k3a + k3r, k5a + k5r);
         Terms {
             a3_stop: self.p3 * kk3 * e.d3[l_us],
             a3_cens: self.p3 * kk3 * e.s3[(len - d3) as usize] * kk5,
@@ -476,6 +602,10 @@ impl Params {
             full: self.pf * kk3 * kk5,
             u_stop: self.pu * e.du[l_us] / ((len - l) as f64 + 1.0),
             u_cens: self.pu * e.su[len_us] * kk3 * kk5,
+            k3a,
+            k3r,
+            k5a,
+            k5r,
         }
     }
 }
@@ -503,8 +633,8 @@ impl Exps {
         let (d3, s3) = par.len3.tables(max_len);
         let (d5, s5) = par.len5.tables(max_len);
         let (du, su) = par.lenu.tables(max_len);
-        let (g3d, g3c) = par.k3.tables(max_len);
-        let (g5d, g5c) = par.k5.tables(max_len);
+        let (g3d, g3c) = par.k3.abs.tables(max_len);
+        let (g5d, g5c) = par.k5.abs.tables(max_len);
         Exps {
             d3,
             s3,
@@ -534,8 +664,8 @@ struct Stats {
     l5: LStats,
     lu: LStats,
     /// End kernels: observed gaps (`stop`) and truncation points (`cens`), binned.
-    k3: LStats,
-    k5: LStats,
+    k3: EStats,
+    k5: EStats,
 }
 
 impl Stats {
@@ -580,12 +710,10 @@ impl Stats {
         LStats::add(&mut self.lu.stop, LenLaw::bin(l), us);
         LStats::add(&mut self.lu.cens, LenLaw::bin(len), uc);
         // Every part that places the read at an end through that end's kernel observes its gap.
-        let last = GapLaw::bin(f.len(k).saturating_sub(1));
         let (w3, w5) = (a3s + a3c + a5c + fl + uc, a5s + a5c + a3c + fl + uc);
-        LStats::add(&mut self.k3.stop, GapLaw::bin(d3 as u32), w3);
-        LStats::add(&mut self.k3.cens, last, w3);
-        LStats::add(&mut self.k5.stop, GapLaw::bin(d5 as u32), w5);
-        LStats::add(&mut self.k5.cens, last, w5);
+        let lu = f.len(k);
+        self.k3.add(w3, d3 as u32, lu, t.k3a, t.k3r);
+        self.k5.add(w5, d5 as u32, lu, t.k5a, t.k5r);
     }
 
     fn params(&self, old: &Params) -> Params {
@@ -603,8 +731,8 @@ impl Stats {
             len3: self.l3.law(&old.len3),
             len5: self.l5.law(&old.len5),
             lenu: self.lu.law(&old.lenu),
-            k3: GapLaw::law(&self.k3, &old.k3),
-            k5: GapLaw::law(&self.k5, &old.k5),
+            k3: EndLaw::law(&self.k3, &old.k3),
+            k5: EndLaw::law(&self.k5, &old.k5),
         }
     }
 }
