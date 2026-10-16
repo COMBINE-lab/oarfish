@@ -345,6 +345,7 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let mut args = Args::parse();
+    args.resolve_coverage_model()?;
 
     // change the logging filter if the user specified quiet or
     // verbose.

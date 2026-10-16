@@ -116,8 +116,9 @@ indexing:
       --index-out <INDEX_OUT>  path where the index will be written (if provided)
 
 coverage model:
-      --model-coverage             apply the coverage model
-      --model-truncation           model where reads land on transcripts (placement mixture learned in the EM)
+      --coverage-model <MODEL>     none | logistic | truncation (where reads land on transcripts) [default: none]
+      --model-coverage             same as --coverage-model logistic
+      --model-truncation           same as --coverage-model truncation
   -k, --growth-rate <GROWTH_RATE>  logistic `k` [default: 2]
   -b, --bin-width <BIN_WIDTH>      coverage bin width [default: 100]
 
@@ -139,7 +140,7 @@ Long-read protocols produce about one read per captured molecule, so `oarfish` d
 abundances by an effective length. What does depend on the transcript is where a read can land
 on it, and that differs between protocols: direct RNA and poly(A)-primed cDNA reads end at the
 3' end and are truncated toward the 5' end; some libraries are dominated by full-length reads;
-others are truncated at both ends. `--model-truncation` multiplies each alignment's score
+others are truncated at both ends. `--coverage-model truncation` (or `--model-truncation`) multiplies each alignment's score
 probability by the probability of its placement on the transcript under a mixture learned from
 the data, so it needs no setting for the protocol:
 
@@ -163,7 +164,8 @@ to an A-run at the end of a transcript, the score credit those bases earn is rem
 transcripts annotated with a poly(A) stretch do not attract reads from siblings without one. The
 aligner's match score is taken from the BAM header (minimap2) or the mapping preset.
 
-The model cannot be combined with `--model-coverage`. With `--num-bootstraps`, each replicate
+The model cannot be combined with the coverage model (`--coverage-model logistic`), and is not
+available in single-cell mode. With `--num-bootstraps`, each replicate
 resamples the reads and re-fits the placement parameters along with the abundances. It works in
 transcriptome-alignment, read, and genome (projection) modes; it is per read, and its EM is
 slower than the default equivalence-class EM (tens of seconds to minutes, depending on the

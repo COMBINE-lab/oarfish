@@ -27,6 +27,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`--coverage-model none|logistic|truncation`** selects the positional model in one flag;
+  `--model-coverage` and `--model-truncation` remain as shorthands. Contradictory combinations,
+  and the truncation model in single-cell mode (previously ignored silently), are errors.
 - **`--score-prob-denom` defaults to 3 (was 5).** Sharper weighting of a read's alignments toward
   the best-scoring one. On the simulations with exact truth it raises Spearman slightly (TKSM SQ2
   0.950 to 0.953 for the default model, 0.954 to 0.956 with `--model-truncation`); on LongBench it

@@ -42,6 +42,56 @@ fn parse_pos_f32(arg: &str) -> anyhow::Result<f32> {
 /// (see the CHANGELOG); `--score-prob-denom 5` restores the old behaviour.
 pub const DEFAULT_SCORE_PROB_DENOM: f32 = 3.0;
 
+/// Model of where reads land on transcripts (`--coverage-model`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
+pub enum CoverageModel {
+    /// No positional term.
+    #[default]
+    None,
+    /// The coverage model (`--model-coverage`).
+    Logistic,
+    /// The learned placement mixture (`--model-truncation`).
+    Truncation,
+}
+
+impl Args {
+    /// Resolves `--coverage-model` and its shorthands into the model in effect, and sets the
+    /// shorthand flags to match, which is what the rest of the program reads. Contradictory
+    /// choices, and models a mode does not support, are errors.
+    pub fn resolve_coverage_model(&mut self) -> anyhow::Result<CoverageModel> {
+        let implied = if self.model_coverage {
+            Some(CoverageModel::Logistic)
+        } else if self.model_truncation {
+            Some(CoverageModel::Truncation)
+        } else {
+            None
+        };
+        let model = match (self.coverage_model, implied) {
+            (Some(m), Some(i)) if m != i => anyhow::bail!(
+                "--coverage-model {} contradicts --model-{}",
+                clap::ValueEnum::to_possible_value(&m)
+                    .expect("named")
+                    .get_name(),
+                if i == CoverageModel::Logistic {
+                    "coverage"
+                } else {
+                    "truncation"
+                }
+            ),
+            (Some(m), _) => m,
+            (None, Some(i)) => i,
+            (None, None) => CoverageModel::None,
+        };
+        if self.single_cell && model == CoverageModel::Truncation {
+            anyhow::bail!("the truncation model is not supported in single-cell mode");
+        }
+        self.coverage_model = Some(model);
+        self.model_coverage = model == CoverageModel::Logistic;
+        self.model_truncation = model == CoverageModel::Truncation;
+        Ok(model)
+    }
+}
+
 /// Presence/absence component for the bulk EM.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
 pub enum PresenceModel {
@@ -516,13 +566,21 @@ pub struct Args {
     )]
     pub single_cell: bool,
 
-    /// apply the coverage model
+    /// which model of where reads land on transcripts to use: `none`, `logistic` (the coverage
+    /// model) or `truncation` (a learned mixture of 3'-anchored, 5'-anchored, full-length and
+    /// uniformly placed reads); default `none`. `--model-coverage` and `--model-truncation` are
+    /// shorthands for the last two.
+    #[arg(long, help_heading = "coverage model", value_enum)]
+    pub coverage_model: Option<CoverageModel>,
+
+    /// apply the coverage model (same as `--coverage-model logistic`)
     #[arg(long, help_heading = "coverage model", value_parser)]
     pub model_coverage: bool,
 
     /// model where reads land on transcripts: a mixture of 3'-anchored, 5'-anchored, full-length
     /// and uniformly placed reads, whose weights, read-length laws and end-gap laws are learned
-    /// from the data in the EM (the fitted mixture is written to the log)
+    /// from the data in the EM; the fitted mixture is written to the log (same as
+    /// `--coverage-model truncation`)
     #[arg(
         long,
         help_heading = "coverage model",
@@ -631,6 +689,56 @@ pub struct Args {
 mod tests {
     use super::Args;
     use clap::Parser;
+
+    /// `--coverage-model` and its shorthands resolve to one model; contradictions and the
+    /// truncation model in single-cell mode are errors.
+    #[test]
+    fn coverage_model_selector_and_shorthands_agree() {
+        use super::CoverageModel as M;
+        let resolve = |extra: &[&str]| {
+            let mut v = vec![
+                "oarfish",
+                "-a",
+                "x.bam",
+                "--seq-tech",
+                "ont-cdna",
+                "-o",
+                "out",
+            ];
+            v.extend_from_slice(extra);
+            let mut a = Args::try_parse_from(v).expect("valid arguments");
+            a.resolve_coverage_model()
+                .map(|m| (m, a.model_coverage, a.model_truncation))
+        };
+        assert_eq!(resolve(&[]).unwrap(), (M::None, false, false));
+        assert_eq!(
+            resolve(&["--model-coverage"]).unwrap(),
+            (M::Logistic, true, false)
+        );
+        assert_eq!(
+            resolve(&["--model-truncation"]).unwrap(),
+            (M::Truncation, false, true)
+        );
+        assert_eq!(
+            resolve(&["--coverage-model", "logistic"]).unwrap(),
+            (M::Logistic, true, false)
+        );
+        assert_eq!(
+            resolve(&["--coverage-model", "truncation"]).unwrap(),
+            (M::Truncation, false, true)
+        );
+        assert_eq!(
+            resolve(&["--coverage-model", "truncation", "--model-truncation"]).unwrap(),
+            (M::Truncation, false, true)
+        );
+        assert!(resolve(&["--coverage-model", "none", "--model-coverage"]).is_err());
+        assert!(resolve(&["--coverage-model", "logistic", "--model-truncation"]).is_err());
+        assert!(resolve(&["--single-cell", "--coverage-model", "truncation"]).is_err());
+        assert_eq!(
+            resolve(&["--single-cell", "--model-coverage"]).unwrap(),
+            (M::Logistic, true, false)
+        );
+    }
 
     #[test]
     fn allows_annotated_and_novel_together() {
