@@ -666,10 +666,13 @@ struct Stats {
     /// End kernels: observed gaps (`stop`) and truncation points (`cens`), binned.
     k3: EStats,
     k5: EStats,
+    /// Log-likelihood of the reads at the step's input (abundances unnormalized).
+    ll: f64,
 }
 
 impl Stats {
     fn merge(mut self, o: Stats) -> Stats {
+        self.ll += o.ll;
         self.n += o.n;
         self.n3 += o.n3;
         self.n5 += o.n5;
@@ -979,6 +982,7 @@ fn step_with(
             scratch.push((t, w));
         }
         if denom > constants::EM_DENOM_THRESH {
+            st.ll += m * denom.ln();
             for (i, k) in (lo..hi).enumerate() {
                 let (t, w) = &scratch[i];
                 let post = m * w / denom;
@@ -1156,6 +1160,13 @@ fn step_static(
 /// Only the atomic-free layouts freeze.
 const FREEZE_TOL: f64 = 1e-6;
 const FREEZE_AFTER: u32 = 3;
+/// Parameters also stop being re-estimated once an iteration raises the log-likelihood by less
+/// than this many nats, for `FREEZE_AFTER` consecutive iterations. The parameters can drift
+/// along directions that barely change any alignment's weight (mass trading between the
+/// full-length component and an anchored one whose read lengths mostly exceed the transcript)
+/// long after their distance test would pass; the likelihood bounds what such drift is worth.
+/// One nat over the whole sample is far below what the data could distinguish.
+const FREEZE_LL_GAIN: f64 = 1.0;
 
 /// How far the parameters moved: absolute change for the mixture weights; for each length law,
 /// its change scaled by the weight of the one component that uses it, as that bounds its effect
@@ -1380,6 +1391,8 @@ fn run(
     let mut niter = 0_u32;
     let can_freeze = !matches!(lay, Layout::Atomic);
     let (mut still, mut frozen): (u32, Option<Vec<f64>>) = (0, None);
+    // Log-likelihood gain of the last parameter-updating step.
+    let (mut last_ll, mut ll_gain) = (f64::NEG_INFINITY, f64::INFINITY);
     // With the presence model the EM sees `q * prev` (see `crate::presence`); `eff` holds it.
     let mut pres = presence.map(|o| Presence::new(tinfo.len(), o));
     let eff: Vec<AtomicF64> = if pres.is_some() {
@@ -1413,8 +1426,13 @@ fn run(
             Some(ws) => step_static(&mut lay, f, ws, src, &curr, mult),
             None => {
                 let e = Exps::new(&par, max_len);
-                let next = step_with(&mut lay, f, &par, src, &curr, mult, &e).params(&par);
-                still = if moved(&next, &par) < FREEZE_TOL {
+                let st = step_with(&mut lay, f, &par, src, &curr, mult, &e);
+                ll_gain = st.ll - last_ll;
+                last_ll = st.ll;
+                let next = st.params(&par);
+                still = if moved(&next, &par) < FREEZE_TOL
+                    || (0.0..FREEZE_LL_GAIN).contains(&ll_gain)
+                {
                     still + 1
                 } else {
                     0
@@ -1439,11 +1457,14 @@ fn run(
                 }
             }
         }
+        // Largest relative change in either direction. (The per-read EM counts increases only;
+        // after a SQUAREM extrapolation most of the motion is in decreases, which that test
+        // ignores, so it would stop at an arbitrary point.)
         let mut rel_diff = 0.0_f64;
         for (p, c) in prev.iter().zip(&curr) {
             let pc = p.load(Ordering::Relaxed);
             if pc > constants::MIN_READ_THRESH {
-                rel_diff = rel_diff.max((c.load(Ordering::Relaxed) - pc) / pc);
+                rel_diff = rel_diff.max((c.load(Ordering::Relaxed) - pc).abs() / pc);
             }
         }
         std::mem::swap(&mut prev, &mut curr);
@@ -1455,9 +1476,10 @@ fn run(
         niter += 1;
         if niter.is_multiple_of(100) {
             info!(
-                "iteration {}; rel diff {}; {:?}",
+                "iteration {}; rel diff {}; log-likelihood gain {:.3}; {:?}",
                 niter.to_formatted_string(&Locale::en),
                 rel_diff,
+                ll_gain,
                 par
             );
         } else if niter.is_multiple_of(10) {
