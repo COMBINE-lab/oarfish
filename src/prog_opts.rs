@@ -514,8 +514,9 @@ pub struct Args {
     #[arg(long, help_heading = "coverage model", value_parser)]
     pub model_coverage: bool,
 
-    /// model where reads land on transcripts: 3'-anchored reads that are either full length or
-    /// 5'-truncated, with the full-length fraction and position distributions learned in the EM
+    /// model where reads land on transcripts: a mixture of 3'-anchored, 5'-anchored, full-length
+    /// and uniformly placed reads, whose weights, read-length laws and end-gap laws are learned
+    /// from the data in the EM (the fitted mixture is written to the log)
     #[arg(
         long,
         help_heading = "coverage model",
@@ -571,10 +572,10 @@ pub struct Args {
     #[arg(long, help_heading = "EM")]
     pub per_read_em: bool,
 
-    /// presence/absence model: each transcript carries a Bernoulli presence posterior that
-    /// discounts its effective abundance during the EM (zero-inflated EM), suppressing
-    /// low-evidence false-positive transcripts. Supported by the equivalence-class EM and
-    /// `--model-truncation`.
+    /// presence/absence model (experimental): each transcript carries a Bernoulli presence
+    /// posterior that discounts its effective abundance during the EM (zero-inflated EM). It
+    /// suppresses low-evidence false-positive transcripts at some cost to true low-abundance
+    /// ones. Supported by the equivalence-class EM and `--model-truncation`.
     #[arg(long, help_heading = "EM", value_enum, default_value_t = PresenceModel::None)]
     pub presence_model: PresenceModel,
 

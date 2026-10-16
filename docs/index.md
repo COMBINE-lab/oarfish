@@ -117,7 +117,7 @@ indexing:
 
 coverage model:
       --model-coverage             apply the coverage model
-      --model-truncation           model 3'-anchored, possibly 5'-truncated reads (learned in the EM)
+      --model-truncation           model where reads land on transcripts (placement mixture learned in the EM)
   -k, --growth-rate <GROWTH_RATE>  logistic `k` [default: 2]
   -b, --bin-width <BIN_WIDTH>      coverage bin width [default: 100]
 
@@ -137,25 +137,37 @@ EM:
 
 Long-read protocols produce about one read per captured molecule, so `oarfish` does not divide
 abundances by an effective length. What does depend on the transcript is where a read can land
-on it: reads end near the transcript's 3' end (poly(A) priming, or direct RNA sequenced from the
-3' end), and extend toward the 5' end until reverse transcription, degradation or the pore stops
-them. `--model-truncation` multiplies each alignment's score probability by the probability of
-its start and end positions on the transcript:
+on it, and that differs between protocols: direct RNA and poly(A)-primed cDNA reads end at the
+3' end and are truncated toward the 5' end; some libraries are dominated by full-length reads;
+others are truncated at both ends. `--model-truncation` multiplies each alignment's score
+probability by the probability of its placement on the transcript under a mixture learned from
+the data, so it needs no setting for the protocol:
 
-- the read reaches the 5' end, either because the molecule is full length by protocol (fraction
-  `w`) or because it did not stop (probability `exp(-h * len)`), or it stops after `ext` bases
-  from the 3' end with density `(1 - w) * h * exp(-h * ext)`;
-- the read ends within 50 nt of the transcript's 3' end with probability `r`, or earlier with an
-  exponentially decaying distance.
+- **3'-anchored** reads end at the transcript's 3' end and extend toward the 5' end by a length
+  drawn from a learned (nonparametric) length law;
+- **5'-anchored** reads start at the 5' end, likewise;
+- **full-length** reads span the transcript;
+- **uniformly placed** reads start anywhere, with their own learned length law.
 
-`w`, the per-base stop rate `h`, `r` and the decay of early ends are estimated in the EM together
-with the abundances, and their fitted values are written to the log. Because each transcript's
-start distribution sums to one over the starts that transcript can produce, a read that is full
-length for a short isoform but truncated for a longer one favors the short isoform, by as much as
-the fitted stop rate says truncation is unlikely. The model is per read (it does not use the
-equivalence-class collapse) and cannot be combined with `--model-coverage`. With
-`--num-bootstraps`, each replicate resamples the reads and re-fits the positional parameters along
-with the abundances, so the replicates include the uncertainty in those parameters.
+Where a read is "at" an end, the gap to that end follows a learned end-gap law (nonparametric on
+log-spaced bins, with a part that scales with transcript length), which absorbs aligner clipping
+and annotation imprecision; a read longer than its transcript is treated as censored. The
+mixture weights and laws are estimated in the EM together with the abundances, and the fitted
+mixture is written to the log. Because each transcript's placement distribution sums to one over
+the placements it can produce, a read that fits a short isoform end to end but would be
+truncated on a longer one favors the short isoform, by as much as the fitted mixture says
+truncation is unlikely.
+
+Alignment scores are also made *tail-neutral* (for all models): when a read's poly(A) tail aligns
+to an A-run at the end of a transcript, the score credit those bases earn is removed, so that
+transcripts annotated with a poly(A) stretch do not attract reads from siblings without one. The
+aligner's match score is taken from the BAM header (minimap2) or the mapping preset.
+
+The model cannot be combined with `--model-coverage`. With `--num-bootstraps`, each replicate
+resamples the reads and re-fits the placement parameters along with the abundances. It works in
+transcriptome-alignment, read, and genome (projection) modes; it is per read, and its EM is
+slower than the default equivalence-class EM (tens of seconds to minutes, depending on the
+number of alignments).
 
 ## Usage examples
 

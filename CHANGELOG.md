@@ -6,21 +6,49 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > Release tooling note: `dist` (cargo-dist) extracts the section whose header
 > matches the release tag and uses it as the GitHub Release body. When tagging,
-> rename the `## Unreleased` heading below to the chosen version, e.g.
-> `## 0.10.0 - 2026-06-06`, so the notes are picked up automatically.
-
-## Unreleased
+> rename the `## Unreleased
 
 ### Added
 
-- **`--model-truncation`: a positional likelihood for 3'-anchored, 5'-truncated reads.** Each
-  alignment's score probability is multiplied by the probability of its start and end on the
-  transcript under a model in which reads end at the 3' end and stop toward the 5' end at a
-  constant per-base rate, with a fraction of molecules full length by protocol. The four
-  parameters are estimated in the EM. On SG-NEx spike-ins it improves isoform-level estimates
-  from both minimap2 alignments and read mode (see the pull request for numbers). Per-read only;
-  conflicts with `--model-coverage`. Bootstrap replicates re-fit the positional parameters in
-  each replicate.
+- **`--model-truncation`: a learned placement model.** Each alignment's score probability is
+  multiplied by the probability of where it lands on the transcript under a mixture of
+  3'-anchored, 5'-anchored, full-length and uniformly placed reads, whose weights, read-length
+  laws and end-gap laws are learned in the EM; the fitted mixture is logged. It adapts to the
+  protocol without settings. On the SIRV E2 direct-RNA spike-ins it raises isoform-level
+  Spearman from 0.817 to 0.881, and on the over-annotated SIRV reference cuts the mass placed on
+  fabricated isoforms from 9.4% to 0.5%; on TKSM SQ2 simulations Spearman goes 0.950 to 0.954;
+  on LongBench (50k-read subsamples) it agrees better with Illumina TPM than the default model
+  on all 8 direct-RNA samples, and on 6 of 8 cDNA samples (all 8 on expressed transcripts). Works with bootstraps and in genome mode; conflicts with `--model-coverage`.
+  (Supersedes the 3'-anchored model proposed in #75, which mis-ranked isoforms whenever reads
+  were not 3'-anchored.)
+- **`--presence-model spike-slab|bayes` (experimental).** A per-transcript presence posterior
+  that discounts low-evidence transcripts during the EM; reduces false positives at some cost to
+  true low-abundance transcripts. Off by default.
+
+### Changed
+
+- **Tail-neutral alignment scores, for all models.** The score credit a read's poly(A) tail earns
+  by aligning to an annotated A-run at a transcript's end is removed, using the aligner's match
+  score (from the minimap2 `@PG` line or the rammap preset). On TKSM SQ2 this improves the
+  default model (Spearman 0.948 to 0.950, false positives 868 to 678); outputs on data without
+  poly(A) tails are unchanged.
+- **EM engines.** Without a per-read model term, the EM runs over equivalence classes (CSR
+  layout); per-read models use an atomic-free CSR layout (`OARFISH_READ_EM=local|atomic` selects
+  the alternatives; `--per-read-em` forces the per-read EM). Estimates match the previous
+  release up to summation order.
+- **Reads are ordered by likeliest transcript before inference**, which speeds up every EM;
+  `--write-assignment-probs` still lists reads in input order.
+
+### Performance
+
+- Lower peak memory: the per-alignment record shrinks from 24 to 16 bytes (an unused field
+  removed), coverage probabilities are only allocated by the coverage model, and the truncation
+  EM no longer copies the alignments. Default model, versus 0.10.3: 2.36 to 1.62 GB on the NanoSim
+  NA12878 cDNA simulation, 3.52 to 3.13 GB on TKSM SQ2.
+- The truncation EM freezes its placement parameters once they stop improving the likelihood and
+  then accelerates the abundance updates (SQUAREM).
+- Genome-mode quantification of the NanoSim NA12878 cDNA simulation runs in 1:04 instead of
+  2:26 (wall time), with identical estimates.
 
 ## 0.10.3 - 2026-07-16
 
