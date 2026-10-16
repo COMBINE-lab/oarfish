@@ -955,7 +955,7 @@ pub struct AlignmentFilters {
     /// `exp((score - best_score) / D)` used to weight a read's alignments in the
     /// EM (transcriptome mode and the `score`/`combined` projected sources).
     /// Larger flattens, smaller sharpens. Exposed via `--score-prob-denom`.
-    #[builder(default = 5.0)]
+    #[builder(default = crate::prog_opts::DEFAULT_SCORE_PROB_DENOM)]
     pub score_prob_denom: f32,
     /// Remove the score credit a read's poly(A) tail earns where it aligns to a transcript
     /// (see `crate::util::read_ends::TailNeutral`); `None` leaves scores as the aligner gave them.

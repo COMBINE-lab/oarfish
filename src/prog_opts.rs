@@ -36,6 +36,12 @@ fn parse_pos_f32(arg: &str) -> anyhow::Result<f32> {
     }
 }
 
+/// Default denominator `D` of the score→probability conversion `exp((score - best) / D)`
+/// (`--score-prob-denom`). 3 rather than the earlier 5: sharper weighting toward the
+/// best-scoring alignment improved accuracy on simulations with exact truth and on LongBench
+/// (see the CHANGELOG); `--score-prob-denom 5` restores the old behaviour.
+pub const DEFAULT_SCORE_PROB_DENOM: f32 = 3.0;
+
 /// Presence/absence component for the bulk EM.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
 pub enum PresenceModel {
@@ -402,7 +408,7 @@ pub struct Args {
     pub projected_prob_source: ProjProbSource,
 
     /// denominator `D` in the score→probability conversion `exp((score - best)/D)`
-    /// used to weight a read's alignments in the EM (default 5). Larger `D`
+    /// used to weight a read's alignments in the EM (default 3). Larger `D`
     /// flattens the weighting across alignments of differing score; smaller `D`
     /// sharpens it toward the best-scoring alignment. Transcriptome mode only —
     /// in genome mode projected alignments are weighted by bramble similarity, so

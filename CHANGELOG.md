@@ -27,6 +27,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`--score-prob-denom` defaults to 3 (was 5).** Sharper weighting of a read's alignments toward
+  the best-scoring one. On the simulations with exact truth it raises Spearman slightly (TKSM SQ2
+  0.950 to 0.953 for the default model, 0.954 to 0.956 with `--model-truncation`); on LongBench it
+  improved 27 of 28 samples in a held-out sweep. On SIRV E2 it raises Spearman but slightly
+  worsens MARD. `--score-prob-denom 5` restores the previous behaviour exactly.
 - **Tail-neutral alignment scores, for all models.** The score credit a read's poly(A) tail earns
   by aligning to an annotated A-run at a transcript's end is removed, using the aligner's match
   score (from the minimap2 `@PG` line or the rammap preset). On TKSM SQ2 this improves the
