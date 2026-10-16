@@ -238,9 +238,9 @@ impl GapLaw {
         let nb = old.h.len();
         let mut n = vec![0.0; nb];
         let (mut f, mut acc) = (0.0, 0.0);
-        for b in 0..nb {
-            n[b] = s.stop.get(b).copied().unwrap_or(0.0) + acc * old.h[b];
-            f += old.h[b];
+        for (b, (nb_, &hb)) in n.iter_mut().zip(&old.h).enumerate() {
+            *nb_ = s.stop.get(b).copied().unwrap_or(0.0) + acc * hb;
+            f += hb;
             let c = s.cens.get(b).copied().unwrap_or(0.0);
             if c > 0.0 && f > 0.0 {
                 // (1 - F) / F unobserved draws per truncated one, spread as h_b / (1 - F)
