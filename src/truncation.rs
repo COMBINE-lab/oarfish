@@ -44,93 +44,173 @@ use tracing::{info, span, trace};
 
 use crate::presence::{Presence, PresenceOpts};
 use crate::util::constants;
-use crate::util::oarfish_types::{EMInfo, TranscriptInfo};
+use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
+use std::borrow::Cow;
 
-/// Alignments flattened with the positional quantities the model needs.
-struct Flat {
-    /// Read `r` owns alignments `off[r]..off[r + 1]`.
+/// The alignment store as the parameter-estimating EM sees it: reads in store order, read `r`
+/// owning alignments `off[r]..off[r + 1]` (positions in the store). Nothing per alignment is
+/// copied: targets, score probabilities and spans are read from the store, which those passes
+/// stream through in order.
+struct Flat<'a> {
     off: Vec<usize>,
-    target: Vec<u32>,
-    prob: Vec<f32>,
-    /// Distances in bases (integers, so that [`Exps`] can tabulate their exponentials): from
-    /// the alignment's start to the transcript's 3' end, and from its end to the 3' end.
-    ext: Vec<u32>,
-    d3: Vec<u32>,
+    alns: Cow<'a, [AlnInfo]>,
+    probs: Cow<'a, [f32]>,
     /// Transcript lengths, per transcript.
     tlen: Vec<u32>,
 }
 
-impl Flat {
+impl<'a> Flat<'a> {
+    #[cfg(test)]
     fn push(&mut self, t: u32, p: f32, start: f64, end: f64) {
-        let len = self.tlen[t as usize] as f64;
-        let start = start.clamp(0.0, (len - 1.0).max(0.0));
-        let end = end.clamp(start, len);
-        self.target.push(t);
-        self.prob.push(p);
-        self.ext.push((len - start).round() as u32);
-        self.d3.push((len - end).round() as u32);
+        self.alns.to_mut().push(AlnInfo {
+            ref_id: t,
+            start: start.max(0.0).round() as u32,
+            end: end.max(0.0).round() as u32,
+            strand: bio_types::strand::Strand::Forward,
+        });
+        self.probs.to_mut().push(p);
+    }
+
+    /// Number of alignments.
+    #[inline]
+    fn n(&self) -> usize {
+        self.alns.len()
     }
 
     #[inline]
-    fn len(&self, k: usize) -> u32 {
-        self.tlen[self.target[k] as usize]
+    fn target(&self, k: usize) -> u32 {
+        self.alns[k].ref_id
     }
 
-    /// Aligned length `l` and the gap `d5` from the transcript's 5' end.
+    /// The geometry of alignment `k`.
     #[inline]
-    fn l_d5(&self, k: usize) -> (u32, u32) {
-        let (len, ext, d3) = (self.len(k), self.ext[k], self.d3[k]);
-        (ext.saturating_sub(d3), len.saturating_sub(ext))
+    fn geo(&self, k: usize) -> Geo {
+        let a = &self.alns[k];
+        let len = self.tlen[a.ref_id as usize];
+        let start = a.start.min(len.saturating_sub(1));
+        let end = a.end.clamp(start, len);
+        Geo {
+            t: a.ref_id,
+            p: self.probs[k],
+            len,
+            l: end - start,
+            d5: start,
+            d3: len - end,
+        }
+    }
+
+    /// The geometries of read `r`'s alignments.
+    #[inline]
+    fn read_geos(&self, r: usize) -> impl Iterator<Item = Geo> + '_ {
+        (self.off[r]..self.off[r + 1]).map(move |k| self.geo(k))
     }
 
     fn max_len(&self) -> u32 {
         self.tlen.iter().copied().max().unwrap_or(0)
     }
 
-    /// Reads in the order of `crate::em_read::read_order`, by most probable target.
-    fn new(em_info: &EMInfo) -> Self {
+    fn new(em_info: &'a EMInfo) -> Self {
         let store = &em_info.eq_map;
-        let order = crate::em_read::read_order(store.len(), |r| {
-            let (alns, probs, _) = store.read(r);
-            alns.iter()
-                .zip(probs)
-                .max_by(|x, y| x.1.total_cmp(y.1))
-                .map_or(0, |x| x.0.ref_id)
-        });
         let n = store.alignments.len();
-        let mut f = Flat {
-            off: Vec::with_capacity(order.len() + 1),
-            target: Vec::with_capacity(n),
-            prob: Vec::with_capacity(n),
-            ext: Vec::with_capacity(n),
-            d3: Vec::with_capacity(n),
+        assert!(
+            n <= u32::MAX as usize,
+            "the truncation model indexes alignments with 32 bits; {n} is too many"
+        );
+        let mut off = Vec::with_capacity(store.len() + 1);
+        off.push(0);
+        off.extend((0..store.len()).map(|r| store.read_range(r).end));
+        Flat {
+            off,
+            alns: Cow::Borrowed(&store.alignments),
+            probs: Cow::Borrowed(&store.as_probabilities),
             tlen: em_info
                 .txp_info
                 .iter()
                 .map(|t| t.lenf.round() as u32)
                 .collect(),
-        };
-        f.off.push(0);
-        for &r in &order {
-            let (alns, probs, _) = store.read(r as usize);
-            for (a, &p) in alns.iter().zip(probs) {
-                f.push(a.ref_id, p, a.start as f64, a.end as f64);
-            }
-            f.off.push(f.target.len());
         }
-        f
     }
 
     #[cfg(test)]
     fn empty(lens: &[f64]) -> Self {
         Flat {
             off: vec![0],
-            target: vec![],
-            prob: vec![],
-            ext: vec![],
-            d3: vec![],
+            alns: Cow::Owned(vec![]),
+            probs: Cow::Owned(vec![]),
             tlen: lens.iter().map(|l| l.round() as u32).collect(),
         }
+    }
+}
+
+/// What the positional model needs of one alignment: its target and score probability, the
+/// target's length, the aligned length, and the gaps to the transcript's 5' and 3' ends (the
+/// span clamped to the transcript).
+#[derive(Clone, Copy)]
+struct Geo {
+    t: u32,
+    p: f32,
+    len: u32,
+    l: u32,
+    d5: u32,
+    d3: u32,
+}
+
+/// The frozen-parameter EM's inputs: each alignment's target and fixed weight (score
+/// probability times positional likelihood), laid out by read in the order of
+/// `crate::em_read::read_order` (reads of one transcript together, which the transcript-major
+/// pass reads from nearby memory). Read `r` here is read `perm[r]` of [`Flat`] and owns
+/// entries `off[r]..off[r + 1]`.
+struct Fixed {
+    off: Vec<usize>,
+    perm: Vec<u32>,
+    t: Vec<u32>,
+    w: Vec<f64>,
+}
+
+impl Fixed {
+    /// With `reorder` false the reads keep [`Flat`]'s order, so that entry `k` is alignment
+    /// `k` (as the presence model, which indexes alignments, needs).
+    fn new(f: &Flat, par: &Params, reorder: bool) -> Self {
+        let e = Exps::new(par, f.max_len());
+        let nreads = f.off.len() - 1;
+        let perm: Vec<u32> = if reorder {
+            crate::em_read::read_order(nreads, |r| {
+                f.read_geos(r)
+                    .max_by(|x, y| x.p.total_cmp(&y.p))
+                    .map_or(0, |g| g.t)
+            })
+        } else {
+            (0..nreads as u32).collect()
+        };
+        let mut off = Vec::with_capacity(nreads + 1);
+        off.push(0usize);
+        for &r in &perm {
+            let r = r as usize;
+            off.push(off.last().unwrap() + (f.off[r + 1] - f.off[r]));
+        }
+        let n = f.n();
+        let (mut t, mut w) = (vec![0u32; n], vec![0f64; n]);
+        let (tp, wp) = (t.as_mut_ptr() as usize, w.as_mut_ptr() as usize);
+        (0..nreads).into_par_iter().for_each(|i| {
+            for (j, g) in (off[i]..off[i + 1]).zip(f.read_geos(perm[i] as usize)) {
+                // SAFETY: entries off[i]..off[i + 1] belong to read i alone.
+                unsafe {
+                    *(tp as *mut u32).add(j) = g.t;
+                    *(wp as *mut f64).add(j) = g.p as f64 * par.terms(&g, &e).total();
+                }
+            }
+        });
+        Fixed { off, perm, t, w }
+    }
+
+    fn nreads(&self) -> usize {
+        self.off.len() - 1
+    }
+
+    /// Multiplicity of read `r` (bootstrap weights are indexed in [`Flat`]'s order).
+    #[inline]
+    fn mult(&self, mult: Option<&[u32]>, r: usize) -> f64 {
+        mult.map_or(1.0, |m| m[self.perm[r] as usize] as f64)
     }
 }
 
@@ -585,10 +665,8 @@ impl Params {
     }
 
     #[inline]
-    fn terms(&self, f: &Flat, k: usize, e: &Exps) -> Terms {
-        let len = f.len(k);
-        let (l, d5) = f.l_d5(k);
-        let d3 = f.d3[k];
+    fn terms(&self, g: &Geo, e: &Exps) -> Terms {
+        let (len, l, d5, d3) = (g.len, g.l, g.d5, g.d3);
         let (l_us, len_us) = (l as usize, len as usize);
         // end kernels, each a distribution over the gaps this transcript allows (0..len)
         let (k3a, k3r) = self.k3.parts(d3, len, &e.g3d, &e.g3c);
@@ -686,15 +764,13 @@ impl Stats {
         self
     }
 
-    fn add(&mut self, f: &Flat, k: usize, t: &Terms, post: f64) {
+    fn add(&mut self, g: &Geo, t: &Terms, post: f64) {
         let tot = t.total();
         if tot <= 0.0 {
             return;
         }
         let q = post / tot;
-        let (l, d5) = f.l_d5(k);
-        let d3 = f.d3[k];
-        let (l, len, d3, d5) = (l as f64, f.len(k) as f64, d3 as f64, d5 as f64);
+        let (l, len, d3, d5) = (g.l as f64, g.len as f64, g.d3 as f64, g.d5 as f64);
         let (a3s, a3c) = (q * t.a3_stop, q * t.a3_cens);
         let (a5s, a5c) = (q * t.a5_stop, q * t.a5_cens);
         let (us, uc) = (q * t.u_stop, q * t.u_cens);
@@ -714,7 +790,7 @@ impl Stats {
         LStats::add(&mut self.lu.cens, LenLaw::bin(len), uc);
         // Every part that places the read at an end through that end's kernel observes its gap.
         let (w3, w5) = (a3s + a3c + a5c + fl + uc, a5s + a5c + a3c + fl + uc);
-        let lu = f.len(k);
+        let lu = g.len;
         self.k3.add(w3, d3 as u32, lu, t.k3a, t.k3r);
         self.k5.add(w5, d5 as u32, lu, t.k5a, t.k5r);
     }
@@ -759,22 +835,19 @@ fn step(
             if m == 0.0 {
                 return st;
             }
-            let (lo, hi) = (f.off[r], f.off[r + 1]);
             let mut denom = 0.0;
-            for k in lo..hi {
-                let t = par.terms(f, k, e);
-                denom += prev[f.target[k] as usize].load(Ordering::Relaxed)
-                    * f.prob[k] as f64
-                    * t.total();
+            for g in f.read_geos(r) {
+                let t = par.terms(&g, e);
+                denom += prev[g.t as usize].load(Ordering::Relaxed) * g.p as f64 * t.total();
             }
             if denom > constants::EM_DENOM_THRESH {
-                for k in lo..hi {
-                    let t = par.terms(f, k, e);
-                    let tid = f.target[k] as usize;
-                    let post = m * prev[tid].load(Ordering::Relaxed) * f.prob[k] as f64 * t.total()
-                        / denom;
+                for g in f.read_geos(r) {
+                    let t = par.terms(&g, e);
+                    let tid = g.t as usize;
+                    let post =
+                        m * prev[tid].load(Ordering::Relaxed) * g.p as f64 * t.total() / denom;
                     curr[tid].fetch_add(post, Ordering::AcqRel);
-                    st.add(f, k, &t, post);
+                    st.add(&g, &t, post);
                 }
             }
             st
@@ -878,7 +951,7 @@ impl Layout {
             None => Layout::Atomic,
             Some(crate::em_read::Impl::Local) => {
                 let n = (nthreads * 2).max(1);
-                let per = f.target.len().div_ceil(n).max(1);
+                let per = f.n().div_ceil(n).max(1);
                 let nreads = f.off.len() - 1;
                 let (mut ch, mut start) = (Vec::new(), 0);
                 for r in 0..nreads {
@@ -895,20 +968,20 @@ impl Layout {
             }
             Some(crate::em_read::Impl::Csr) => {
                 let mut off = vec![0usize; ntx + 1];
-                for &t in &f.target {
+                for t in (0..f.n()).map(|k| f.target(k)) {
                     off[t as usize + 1] += 1;
                 }
                 for i in 0..ntx {
                     off[i + 1] += off[i];
                 }
                 let mut fill = off.clone();
-                let mut aln = vec![0u32; f.target.len()];
-                for (k, &t) in f.target.iter().enumerate() {
+                let mut aln = vec![0u32; f.n()];
+                for (k, t) in (0..f.n()).map(|k| (k, f.target(k))) {
                     aln[fill[t as usize]] = k as u32;
                     fill[t as usize] += 1;
                 }
                 Layout::Csr {
-                    post: vec![0.0; f.target.len()],
+                    post: vec![0.0; f.n()],
                     off,
                     aln,
                 }
@@ -921,17 +994,17 @@ impl Layout {
     /// The layout for frozen weights `ws`: `Csr` becomes `CsrFrozen`, the others stay. The
     /// per-alignment posteriors and indices are freed first and the transpose is refilled
     /// from read order, so the two layouts do not coexist.
-    fn frozen(self, f: &Flat, ws: &[f64]) -> Self {
+    fn frozen(self, fx: &Fixed) -> Self {
         match self {
             Layout::Csr { off, post, aln } => {
                 drop((post, aln));
-                let nreads = f.off.len() - 1;
+                let nreads = fx.nreads();
                 let mut fill = off.clone();
-                let mut read = vec![0u32; f.target.len()];
-                let mut w = vec![0f64; f.target.len()];
-                for (r, win) in f.off.windows(2).enumerate() {
+                let mut read = vec![0u32; fx.t.len()];
+                let mut w = vec![0f64; fx.t.len()];
+                for (r, win) in fx.off.windows(2).enumerate() {
                     let (lo, hi) = (win[0], win[1]);
-                    for (&t, &wk) in f.target[lo..hi].iter().zip(&ws[lo..hi]) {
+                    for (&t, &wk) in fx.t[lo..hi].iter().zip(&fx.w[lo..hi]) {
                         let t = t as usize;
                         read[fill[t]] = r as u32;
                         w[fill[t]] = wk;
@@ -965,7 +1038,7 @@ fn step_with(
     // and reused for the posterior.
     let read = |r: usize,
                 st: &mut Stats,
-                scratch: &mut Vec<(Terms, f64)>,
+                scratch: &mut Vec<(Geo, Terms, f64)>,
                 emit: &mut dyn FnMut(usize, usize, f64)| {
         let m = mult.map_or(1.0, |m| m[r] as f64);
         if m == 0.0 {
@@ -974,20 +1047,18 @@ fn step_with(
         let (lo, hi) = (f.off[r], f.off[r + 1]);
         scratch.clear();
         let mut denom = 0.0;
-        for k in lo..hi {
-            let tid = f.target[k] as usize;
-            let t = par.terms(f, k, e);
-            let w = prev[tid].load(Ordering::Relaxed) * f.prob[k] as f64 * t.total();
+        for g in f.read_geos(r) {
+            let t = par.terms(&g, e);
+            let w = prev[g.t as usize].load(Ordering::Relaxed) * g.p as f64 * t.total();
             denom += w;
-            scratch.push((t, w));
+            scratch.push((g, t, w));
         }
         if denom > constants::EM_DENOM_THRESH {
             st.ll += m * denom.ln();
-            for (i, k) in (lo..hi).enumerate() {
-                let (t, w) = &scratch[i];
+            for (k, (g, t, w)) in (lo..hi).zip(scratch.iter()) {
                 let post = m * w / denom;
-                emit(k, f.target[k] as usize, post);
-                st.add(f, k, t, post);
+                emit(k, g.t as usize, post);
+                st.add(g, t, post);
             }
         }
     };
@@ -1060,25 +1131,24 @@ fn step_with(
 /// probability times its positional terms), so no terms or statistics are computed.
 fn step_static(
     lay: &mut Layout,
-    f: &Flat,
-    ws: &[f64],
+    fx: &Fixed,
     prev: &[AtomicF64],
     curr: &[AtomicF64],
     mult: Option<&[u32]>,
 ) {
     let read = |r: usize, emit: &mut dyn FnMut(usize, usize, f64)| {
-        let m = mult.map_or(1.0, |m| m[r] as f64);
+        let m = fx.mult(mult, r);
         if m == 0.0 {
             return;
         }
-        let (lo, hi) = (f.off[r], f.off[r + 1]);
+        let (lo, hi) = (fx.off[r], fx.off[r + 1]);
         let mut denom = 0.0;
-        for (&t, &w) in f.target[lo..hi].iter().zip(&ws[lo..hi]) {
+        for (&t, &w) in fx.t[lo..hi].iter().zip(&fx.w[lo..hi]) {
             denom += prev[t as usize].load(Ordering::Relaxed) * w;
         }
         if denom > constants::EM_DENOM_THRESH {
             let inv = m / denom;
-            for (k, (&t, &w)) in (lo..hi).zip(f.target[lo..hi].iter().zip(&ws[lo..hi])) {
+            for (k, (&t, &w)) in (lo..hi).zip(fx.t[lo..hi].iter().zip(&fx.w[lo..hi])) {
                 let t = t as usize;
                 emit(k, t, prev[t].load(Ordering::Relaxed) * w * inv);
             }
@@ -1088,10 +1158,10 @@ fn step_static(
         Layout::Atomic => unreachable!("parameters are not frozen in the atomic layout"),
         Layout::CsrFrozen { off, read, w, inv } => {
             inv.par_iter_mut().enumerate().for_each(|(r, x)| {
-                let m = mult.map_or(1.0, |m| m[r] as f64);
-                let (lo, hi) = (f.off[r], f.off[r + 1]);
+                let m = fx.mult(mult, r);
+                let (lo, hi) = (fx.off[r], fx.off[r + 1]);
                 let mut denom = 0.0;
-                for (&t, &w) in f.target[lo..hi].iter().zip(&ws[lo..hi]) {
+                for (&t, &w) in fx.t[lo..hi].iter().zip(&fx.w[lo..hi]) {
                     denom += prev[t as usize].load(Ordering::Relaxed) * w;
                 }
                 *x = if m > 0.0 && denom > constants::EM_DENOM_THRESH {
@@ -1129,27 +1199,7 @@ fn step_static(
                 }
             });
         }
-        Layout::Csr { post, off, aln } => {
-            let nreads = f.off.len() - 1;
-            let post_ptr = post.as_mut_ptr() as usize;
-            (0..nreads).into_par_iter().for_each(|r| {
-                for k in f.off[r]..f.off[r + 1] {
-                    // SAFETY: slot k belongs to read r alone.
-                    unsafe { *(post_ptr as *mut f64).add(k) = 0.0 };
-                }
-                read(r, &mut |k, _, p| unsafe {
-                    *(post_ptr as *mut f64).add(k) = p
-                });
-            });
-            let post = &*post;
-            curr.par_iter().enumerate().for_each(|(t, c)| {
-                let s: f64 = aln[off[t]..off[t + 1]]
-                    .iter()
-                    .map(|&k| post[k as usize])
-                    .sum();
-                c.store(s, Ordering::Relaxed);
-            });
-        }
+        Layout::Csr { .. } => unreachable!("frozen weights use the CsrFrozen layout"),
     }
 }
 
@@ -1230,16 +1280,16 @@ fn store_from(dst: &[AtomicF64], src: &[f64]) {
 
 /// Log-likelihood of abundances `theta` (normalized to proportions) under the fixed weights
 /// `ws`, up to a constant: the objective the frozen-weight EM ascends.
-fn loglik_static(f: &Flat, ws: &[f64], theta: &[f64], mult: Option<&[u32]>) -> f64 {
+fn loglik_static(fx: &Fixed, theta: &[f64], mult: Option<&[u32]>) -> f64 {
     let total: f64 = theta.par_iter().sum();
-    let (ll, n) = (0..f.off.len() - 1)
+    let (ll, n) = (0..fx.nreads())
         .into_par_iter()
         .map(|r| {
-            let m = mult.map_or(1.0, |m| m[r] as f64);
-            let (lo, hi) = (f.off[r], f.off[r + 1]);
-            let d: f64 = f.target[lo..hi]
+            let m = fx.mult(mult, r);
+            let (lo, hi) = (fx.off[r], fx.off[r + 1]);
+            let d: f64 = fx.t[lo..hi]
                 .iter()
-                .zip(&ws[lo..hi])
+                .zip(&fx.w[lo..hi])
                 .map(|(&t, &w)| theta[t as usize] * w)
                 .sum();
             if m > 0.0 && d > constants::EM_DENOM_THRESH {
@@ -1259,18 +1309,17 @@ fn loglik_static(f: &Flat, ws: &[f64], theta: &[f64], mult: Option<&[u32]>) -> f
 /// of the cycle's last EM step, so their difference is a one-step change as in plain EM.
 fn squarem_cycle(
     lay: &mut Layout,
-    f: &Flat,
-    ws: &[f64],
+    fx: &Fixed,
     prev: &[AtomicF64],
     curr: &[AtomicF64],
     mult: Option<&[u32]>,
     sq: &mut Squarem,
 ) {
     load_into(&mut sq.t0, prev);
-    step_static(lay, f, ws, prev, curr, mult);
+    step_static(lay, fx, prev, curr, mult);
     load_into(&mut sq.t1, curr);
     store_from(prev, &sq.t1);
-    step_static(lay, f, ws, prev, curr, mult);
+    step_static(lay, fx, prev, curr, mult);
     load_into(&mut sq.t2, curr);
     let (rr, vv) = sq
         .t0
@@ -1308,11 +1357,11 @@ fn squarem_cycle(
         })
         .collect();
     store_from(prev, &ext);
-    step_static(lay, f, ws, prev, curr, mult);
+    step_static(lay, fx, prev, curr, mult);
     let t3: Vec<f64> = curr.par_iter().map(|x| x.load(Ordering::Relaxed)).collect();
     let (l3, l2) = (
-        loglik_static(f, ws, &t3, mult),
-        loglik_static(f, ws, &sq.t2, mult),
+        loglik_static(fx, &t3, mult),
+        loglik_static(fx, &sq.t2, mult),
     );
     if l3.is_finite() && l3 >= l2 {
         sq.acc += 1;
@@ -1347,14 +1396,17 @@ fn refresh_presence(
         let e = ws.is_none().then(|| Exps::new(par, max_len));
         let reads = crate::presence::ReadAlns {
             off: &f.off,
-            target: &f.target,
+            target: &|k| f.target(k),
         };
         p.refresh(
             &counts,
             reads,
             |k| match (ws, &e) {
                 (Some(ws), _) => ws[k],
-                (None, Some(e)) => f.prob[k] as f64 * par.terms(f, k, e).total(),
+                (None, Some(e)) => {
+                    let g = f.geo(k);
+                    g.p as f64 * par.terms(&g, e).total()
+                }
                 (None, None) => unreachable!(),
             },
             |r| mult.map_or(1.0, |m| m[r] as f64),
@@ -1390,7 +1442,7 @@ fn run(
 
     let mut niter = 0_u32;
     let can_freeze = !matches!(lay, Layout::Atomic);
-    let (mut still, mut frozen): (u32, Option<Vec<f64>>) = (0, None);
+    let (mut still, mut frozen): (u32, Option<Fixed>) = (0, None);
     // Log-likelihood gain of the last parameter-updating step.
     let (mut last_ll, mut ll_gain) = (f64::NEG_INFINITY, f64::INFINITY);
     // With the presence model the EM sees `q * prev` (see `crate::presence`); `eff` holds it.
@@ -1408,7 +1460,7 @@ fn run(
                 niter,
                 f,
                 &par,
-                frozen.as_deref(),
+                frozen.as_ref().map(|x| x.w.as_slice()),
                 &prev,
                 &eff,
                 mult,
@@ -1420,10 +1472,10 @@ fn run(
             // With the weights fixed, the abundance update is a fixed-point map; accelerate
             // it (the presence model rescales the abundances between steps, so it does not).
             Some(ws) if pres.is_none() => {
-                squarem_cycle(&mut lay, f, ws, &prev, &curr, mult, &mut sq);
+                squarem_cycle(&mut lay, ws, &prev, &curr, mult, &mut sq);
                 niter += 2;
             }
-            Some(ws) => step_static(&mut lay, f, ws, src, &curr, mult),
+            Some(ws) => step_static(&mut lay, ws, src, &curr, mult),
             None => {
                 let e = Exps::new(&par, max_len);
                 let st = step_with(&mut lay, f, &par, src, &curr, mult, &e);
@@ -1439,21 +1491,14 @@ fn run(
                 };
                 par = next;
                 if can_freeze && still >= FREEZE_AFTER {
-                    let e = Exps::new(&par, max_len);
-                    let ws: Vec<f64> = (0..f.target.len())
-                        .into_par_iter()
-                        .map(|k| {
-                            let t = par.terms(f, k, &e);
-                            f.prob[k] as f64 * t.total()
-                        })
-                        .collect();
+                    let fx = Fixed::new(f, &par, pres.is_none());
                     info!(
                         "truncation parameters frozen after {} iterations: {:?}",
                         niter + 1,
                         par
                     );
-                    lay = std::mem::replace(&mut lay, Layout::Atomic).frozen(f, &ws);
-                    frozen = Some(ws);
+                    lay = std::mem::replace(&mut lay, Layout::Atomic).frozen(&fx);
+                    frozen = Some(fx);
                 }
             }
         }
@@ -1519,7 +1564,7 @@ fn run(
     }
     let src = if pres.is_some() { &eff } else { &prev };
     match &frozen {
-        Some(ws) => step_static(&mut lay, f, ws, src, &curr, mult),
+        Some(ws) => step_static(&mut lay, ws, src, &curr, mult),
         None => {
             step_with(
                 &mut lay,
@@ -1542,13 +1587,13 @@ fn run(
 mod tests {
     use super::*;
 
-    fn flat(alns: &[Vec<(u32, f64, f64, f64)>], lens: &[f64]) -> Flat {
+    fn flat(alns: &[Vec<(u32, f64, f64, f64)>], lens: &[f64]) -> Flat<'static> {
         let mut f = Flat::empty(lens);
         for r in alns {
             for &(t, p, s, e) in r {
                 f.push(t, p as f32, s, e);
             }
-            f.off.push(f.target.len());
+            f.off.push(f.n());
         }
         f
     }
@@ -1702,20 +1747,14 @@ mod tests {
         }
         let f = flat(&reads, &lens);
         let par = Params::initial(f.max_len());
-        let e = Exps::new(&par, f.max_len());
-        let ws: Vec<f64> = (0..f.target.len())
-            .map(|k| {
-                let t = par.terms(&f, k, &e);
-                f.prob[k] as f64 * t.total()
-            })
-            .collect();
+        let ws = Fixed::new(&f, &par, true);
         let prev: Vec<AtomicF64> = [3.0, 1.0, 2.0].into_iter().map(AtomicF64::new).collect();
         let mult: Vec<u32> = (0..reads.len()).map(|i| (i % 3) as u32).collect();
         for m in [None, Some(&mult[..])] {
             let round = |how| {
-                let mut lay = Layout::with(&f, 3, Some(how)).frozen(&f, &ws);
+                let mut lay = Layout::with(&f, 3, Some(how)).frozen(&ws);
                 let curr: Vec<AtomicF64> = (0..3).map(|_| AtomicF64::new(0.0)).collect();
-                step_static(&mut lay, &f, &ws, &prev, &curr, m);
+                step_static(&mut lay, &ws, &prev, &curr, m);
                 curr.iter()
                     .map(|x| x.load(Ordering::Relaxed))
                     .collect::<Vec<_>>()
@@ -1758,10 +1797,7 @@ mod tests {
         }
         let f = flat(&reads, &lens);
         let par = Params::initial(f.max_len());
-        let e = Exps::new(&par, f.max_len());
-        let ws: Vec<f64> = (0..f.target.len())
-            .map(|k| f.prob[k] as f64 * par.terms(&f, k, &e).total())
-            .collect();
+        let ws = Fixed::new(&f, &par, true);
         let init = || -> Vec<AtomicF64> { (0..4).map(|_| AtomicF64::new(100.0)).collect() };
         let fresh = || -> Vec<AtomicF64> { (0..4).map(|_| AtomicF64::new(0.0)).collect() };
         let get = |v: &[AtomicF64]| {
@@ -1770,22 +1806,22 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        let mut lay = Layout::with(&f, 4, Some(Impl::Csr)).frozen(&f, &ws);
+        let mut lay = Layout::with(&f, 4, Some(Impl::Csr)).frozen(&ws);
         let (prev, curr) = (init(), fresh());
         for _ in 0..5_000 {
-            step_static(&mut lay, &f, &ws, &prev, &curr, None);
+            step_static(&mut lay, &ws, &prev, &curr, None);
             store_from(&prev, &get(&curr));
         }
         let plain = get(&prev);
 
-        let mut lay = Layout::with(&f, 4, Some(Impl::Csr)).frozen(&f, &ws);
+        let mut lay = Layout::with(&f, 4, Some(Impl::Csr)).frozen(&ws);
         let (prev, curr) = (init(), fresh());
         let mut sq = Squarem::new(4);
         let mut last = f64::NEG_INFINITY;
         for _ in 0..100 {
-            squarem_cycle(&mut lay, &f, &ws, &prev, &curr, None, &mut sq);
+            squarem_cycle(&mut lay, &ws, &prev, &curr, None, &mut sq);
             let now = get(&curr);
-            let ll = loglik_static(&f, &ws, &now, None);
+            let ll = loglik_static(&ws, &now, None);
             assert!(ll >= last - 1e-9, "likelihood fell: {last} -> {ll}");
             last = ll;
             store_from(&prev, &now);

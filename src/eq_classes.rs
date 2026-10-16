@@ -190,7 +190,7 @@ fn run(
                 if p.due(niter) {
                     let reads = crate::presence::ReadAlns {
                         off: &eqc.offsets,
-                        target: &eqc.targets,
+                        target: &|k| eqc.targets[k],
                     };
                     p.refresh(&prev, reads, |k| eqc.probs[k] as f64, |c| counts[c]);
                 }

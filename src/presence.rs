@@ -70,11 +70,18 @@ pub struct PresenceOpts {
 }
 
 /// Reads as ranges of alignments: read `r` owns alignments `off[r]..off[r + 1]`, whose targets
-/// are `target[k]`.
+/// are `target(k)` (a lookup, so that a caller need not hold the targets as one array).
 #[derive(Clone, Copy)]
 pub struct ReadAlns<'a> {
     pub off: &'a [usize],
-    pub target: &'a [u32],
+    pub target: &'a (dyn Fn(usize) -> u32 + Sync),
+}
+
+impl ReadAlns<'_> {
+    /// Number of alignments.
+    fn n(&self) -> usize {
+        self.off.last().copied().unwrap_or(0)
+    }
 }
 
 /// Grid of shares `a` on which each transcript's evidence `l_t(a)` is evaluated: log-spaced
@@ -98,21 +105,21 @@ struct Index {
 impl Index {
     fn new(reads: ReadAlns, ntx: usize) -> Self {
         let mut t_off = vec![0usize; ntx + 1];
-        for &t in reads.target {
-            t_off[t as usize + 1] += 1;
+        for k in 0..reads.n() {
+            t_off[(reads.target)(k) as usize + 1] += 1;
         }
         for i in 0..ntx {
             t_off[i + 1] += t_off[i];
         }
         let mut fill = t_off.clone();
-        let mut aln = vec![0u32; reads.target.len()];
-        let mut read_of = vec![0u32; reads.target.len()];
+        let mut aln = vec![0u32; reads.n()];
+        let mut read_of = vec![0u32; reads.n()];
         for (r, w) in reads.off.windows(2).enumerate() {
-            for (k, &t) in reads.target.iter().enumerate().take(w[1]).skip(w[0]) {
-                let t = t as usize;
+            for (k, ro) in read_of.iter_mut().enumerate().take(w[1]).skip(w[0]) {
+                let t = (reads.target)(k) as usize;
                 aln[fill[t]] = k as u32;
                 fill[t] += 1;
-                read_of[k] = r as u32;
+                *ro = r as u32;
             }
         }
         Index {
@@ -179,15 +186,12 @@ impl Presence {
         match self.kind {
             PresenceKind::SpikeSlab => self.update(counts, reads.off.len() - 1, |r, buf| {
                 for k in reads.off[r]..reads.off[r + 1] {
-                    buf.push((reads.target[k], weight(k)));
+                    buf.push(((reads.target)(k), weight(k)));
                 }
                 mult(r)
             }),
             PresenceKind::Bayes => {
-                let w: Vec<f64> = (0..reads.target.len())
-                    .into_par_iter()
-                    .map(&weight)
-                    .collect();
+                let w: Vec<f64> = (0..reads.n()).into_par_iter().map(&weight).collect();
                 self.update_bayes(counts, reads, &w, mult)
             }
         }
@@ -212,7 +216,7 @@ impl Presence {
             .into_par_iter()
             .map(|r| {
                 let d: f64 = (reads.off[r]..reads.off[r + 1])
-                    .map(|k| eff[reads.target[k] as usize] * w[k])
+                    .map(|k| eff[(reads.target)(k) as usize] * w[k])
                     .sum();
                 (d, mult(r))
             })
@@ -470,7 +474,7 @@ mod tests {
         );
         let reads = ReadAlns {
             off: &off,
-            target: &target,
+            target: &|k| target[k],
         };
         p.refresh(&counts, reads, |k| wts[k], |_| 1.0);
         assert!(p.q[0] == 1.0 && p.q[2] == 1.0 && p.q[3] == 1.0, "{:?}", p.q);

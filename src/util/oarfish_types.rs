@@ -361,7 +361,6 @@ pub struct AlnInfo {
     pub ref_id: u32,
     pub start: u32,
     pub end: u32,
-    pub prob: f64,
     pub strand: Strand,
 }
 
@@ -378,7 +377,6 @@ impl AlnInfo {
             ref_id: aln.ref_id(aln_header).expect("valid ref_id") as u32,
             start: aln.aln_start(),
             end: aln.aln_end(),
-            prob: 0.0_f64,
             strand: if aln.is_reverse_complemented() {
                 Strand::Reverse
             } else {
@@ -394,7 +392,6 @@ impl<T: sam::alignment::record::Record> From<&T> for AlnInfo {
             ref_id: aln.reference_sequence_id().unwrap() as u32,
             start: aln.alignment_start().unwrap().expect("valid aln start").get() as u32,
             end: aln.alignment_end().unwrap().expect("valid aln end").get() as u32,
-            prob: 0.0_f64,
             strand: if aln.flags().expect("valid flags").is_reverse_complemented() {
                 Strand::Reverse
             } else {
@@ -579,7 +576,12 @@ pub struct InMemoryAlignmentStore<'h> {
     pub aln_header: &'h Header,
     pub alignments: Vec<AlnInfo>,
     pub as_probabilities: Vec<f32>,
+    /// Per-alignment coverage probabilities, filled only by the coverage model
+    /// (`crate::normalize_read_probs`); empty otherwise, when every read sees zeros (from
+    /// `zeros`) instead of the store holding one per alignment.
     pub coverage_probabilities: Vec<f64>,
+    /// As many zeros as the most alignments of any read.
+    zeros: Vec<f64>,
     // holds the boundaries between records for different reads
     boundaries: Vec<usize>,
     pub discard_table: DiscardTable,
@@ -587,6 +589,16 @@ pub struct InMemoryAlignmentStore<'h> {
 }
 
 impl InMemoryAlignmentStore<'_> {
+    /// Coverage probabilities of alignments `start..end` (one read's).
+    #[inline]
+    fn coverage_probs(&self, start: usize, end: usize) -> &[f64] {
+        if self.coverage_probabilities.is_empty() {
+            &self.zeros[..end - start]
+        } else {
+            &self.coverage_probabilities[start..end]
+        }
+    }
+
     #[inline]
     pub fn len(&self) -> usize {
         self.boundaries.len().saturating_sub(1)
@@ -613,7 +625,7 @@ impl<'a> Iterator for InMemoryAlignmentStoreSamplingWithReplacementIter<'a, '_, 
             Some((
                 &self.store.alignments[start..end],
                 &self.store.as_probabilities[start..end],
-                &self.store.coverage_probabilities[start..end],
+                self.store.coverage_probs(start, end),
             ))
         } else {
             None
@@ -647,7 +659,7 @@ impl<'a> Iterator for InMemoryAlignmentStoreIter<'a, '_> {
             Some((
                 &self.store.alignments[start..end],
                 &self.store.as_probabilities[start..end],
-                &self.store.coverage_probabilities[start..end],
+                self.store.coverage_probs(start, end),
             ))
         }
     }
@@ -671,10 +683,17 @@ impl<'h> InMemoryAlignmentStore<'h> {
             alignments: vec![],
             as_probabilities: vec![],
             coverage_probabilities: vec![],
+            zeros: vec![],
             boundaries: vec![0],
             discard_table: DiscardTable::new(),
             num_unique_alignments: 0,
         }
+    }
+
+    /// Positions of read `i`'s alignments in `alignments`.
+    #[inline]
+    pub fn read_range(&self, i: usize) -> std::ops::Range<usize> {
+        self.boundaries[i]..self.boundaries[i + 1]
     }
 
     /// The alignments of read `i`, with their score and coverage probabilities.
@@ -684,7 +703,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
         (
             &self.alignments[start..end],
             &self.as_probabilities[start..end],
-            &self.coverage_probabilities[start..end],
+            self.coverage_probs(start, end),
         )
     }
 
@@ -768,8 +787,9 @@ impl<'h> InMemoryAlignmentStore<'h> {
             }
             self.alignments.extend_from_slice(alns);
             self.as_probabilities.extend_from_slice(as_probs);
-            self.coverage_probabilities
-                .extend(vec![0.0_f64; alns.len()]);
+            if alns.len() > self.zeros.len() {
+                self.zeros.resize(alns.len(), 0.0);
+            }
             self.boundaries.push(self.alignments.len());
             true
         } else {
@@ -1346,7 +1366,6 @@ impl AlignmentFilters {
                 ref_id: r.ref_id,
                 start,
                 end,
-                prob: 0.0_f64,
                 strand: if r.is_reverse {
                     Strand::Reverse
                 } else {
@@ -1371,7 +1390,6 @@ mod tests {
             ref_id: 0,
             start: 0,
             end: 100,
-            prob: 0.5,
             strand: Strand::Forward,
         };
         assert_eq!(ainf.alignment_span(), 100);
