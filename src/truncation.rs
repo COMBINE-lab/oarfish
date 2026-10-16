@@ -135,27 +135,128 @@ impl Flat {
 }
 
 /// An end kernel: the distribution of the gap `d` (nt) between a read's end and the transcript's
-/// end, for reads at that end. A mixture of two geometric laws, a short and a long scale:
-/// `K(d) = w rho1 (1 - rho1)^d + (1 - w) rho2 (1 - rho2)^d`.
-#[derive(Clone, Copy, Debug)]
-struct Kernel {
-    w: f64,
-    rho1: f64,
-    rho2: f64,
+/// end, for reads placed at that end. Nonparametric, on log-spaced bins `{0}`, `{1}`, `[2, 3]`,
+/// `[4, 7]`, ... (uniform within a bin), so it can represent both reads flush with the end and
+/// ends spread hundreds of bases from it (alternative polyadenylation, annotation mismatch).
+/// For a transcript of length `L` it is normalized over the gaps the transcript allows,
+/// `0..L`, and fitted by the truncated-data EM.
+#[derive(Clone)]
+struct GapLaw {
+    h: Vec<f64>,
 }
 
-impl Kernel {
-    fn initial() -> Self {
-        Kernel {
-            w: 0.5,
-            rho1: 1.0 / 20.0,
-            rho2: 1.0 / 200.0,
+impl std::fmt::Debug for GapLaw {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = self.summary();
+        write!(
+            f,
+            "GapLaw(0: {:.2}, 1-15: {:.2}, 16-255: {:.2}, 256+: {:.2})",
+            s[0], s[1], s[2], s[3]
+        )
+    }
+}
+
+impl GapLaw {
+    #[inline]
+    fn bin(d: u32) -> usize {
+        (32 - d.leading_zeros()) as usize
+    }
+
+    #[inline]
+    fn width(b: usize) -> f64 {
+        if b == 0 {
+            1.0
+        } else {
+            (1u64 << (b - 1)) as f64
         }
     }
 
-    /// Longest scale (`1 / rho`, nt) a kernel may take, so that an end kernel
-    /// stays an end effect rather than a slowly decaying placement preference.
-    const MAX_SCALE: f64 = 500.0;
+    /// Discretized exponential law of mean 100 nt over gaps up to `max_len`.
+    fn initial(max_len: u32) -> Self {
+        let nb = Self::bin(max_len) + 1;
+        let cdf = |x: f64| 1.0 - (-x / 100.0).exp();
+        let h: Vec<f64> = (0..nb)
+            .map(|b| {
+                let lo = if b == 0 { 0.0 } else { Self::width(b) };
+                cdf(lo + Self::width(b)) - cdf(lo)
+            })
+            .collect();
+        let s: f64 = h.iter().sum();
+        GapLaw {
+            h: h.into_iter().map(|x| x / s).collect(),
+        }
+    }
+
+    /// Per-nt density `dens[d]` and distribution function `cdf[x] = P(gap <= x)` for gaps up
+    /// to `max_len`.
+    fn tables(&self, max_len: u32) -> (Vec<f64>, Vec<f64>) {
+        let dens: Vec<f64> = (0..=max_len)
+            .map(|d| {
+                let b = Self::bin(d);
+                self.h.get(b).map_or(0.0, |p| p / Self::width(b))
+            })
+            .collect();
+        let mut acc = 0.0;
+        let cdf = dens
+            .iter()
+            .map(|x| {
+                acc += x;
+                acc
+            })
+            .collect();
+        (dens, cdf)
+    }
+
+    /// Mass at gap 0, in 1-15, 16-255 and 256 or more.
+    fn summary(&self) -> [f64; 4] {
+        let mut s = [0.0; 4];
+        for (b, p) in self.h.iter().enumerate() {
+            s[match b {
+                0 => 0,
+                1..=4 => 1,
+                5..=8 => 2,
+                _ => 3,
+            }] += p;
+        }
+        s
+    }
+
+    fn moved(&self, o: &GapLaw) -> f64 {
+        0.5 * self
+            .h
+            .iter()
+            .zip(&o.h)
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f64>()
+    }
+
+    /// Truncated-data EM step from `old`: `s.stop[b]` is the observed weight in bin `b`,
+    /// `s.cens[c]` the weight of observations truncated at a gap in bin `c` (the transcript
+    /// allowed no larger gap); each implies unobserved draws beyond its truncation point,
+    /// spread over the bins above `c` in proportion to `old.h`.
+    fn law(s: &LStats, old: &GapLaw) -> GapLaw {
+        let nb = old.h.len();
+        let mut n = vec![0.0; nb];
+        let (mut f, mut acc) = (0.0, 0.0);
+        for b in 0..nb {
+            n[b] = s.stop.get(b).copied().unwrap_or(0.0) + acc * old.h[b];
+            f += old.h[b];
+            let c = s.cens.get(b).copied().unwrap_or(0.0);
+            if c > 0.0 && f > 0.0 {
+                // (1 - F) / F unobserved draws per truncated one, spread as h_b / (1 - F)
+                acc += c / f;
+            }
+        }
+        let tot: f64 = n.iter().sum();
+        if tot <= 0.0 {
+            return old.clone();
+        }
+        let eps = 1e-9 * tot;
+        let z = tot + eps * nb as f64;
+        GapLaw {
+            h: n.into_iter().map(|x| (x + eps) / z).collect(),
+        }
+    }
 }
 
 /// A read-length law: a histogram over lengths in bins of [`LenLaw::W`] nt, uniform within a
@@ -312,14 +413,13 @@ struct Params {
     len5: LenLaw,
     lenu: LenLaw,
     /// End kernels at the 3' and 5' ends.
-    k3: Kernel,
-    k5: Kernel,
+    k3: GapLaw,
+    k5: GapLaw,
 }
 
 /// Per-alignment terms of the positional likelihood, each already weighted by its mixture
 /// weight. `*_stop` is the part where the read's length was observed, `*_cens` the part where
-/// it spans the transcript (length censored at `L`). `k3a`, `k3b` are the two parts of the
-/// 3' kernel at this alignment's 3' gap (`K3 = k3a + k3b`), likewise `k5a`, `k5b`.
+/// it spans the transcript (length censored at `L`).
 struct Terms {
     a3_stop: f64,
     a3_cens: f64,
@@ -328,10 +428,6 @@ struct Terms {
     full: f64,
     u_stop: f64,
     u_cens: f64,
-    k3a: f64,
-    k3b: f64,
-    k5a: f64,
-    k5b: f64,
 }
 
 impl Terms {
@@ -357,8 +453,8 @@ impl Params {
             len3: LenLaw::exponential(1000.0, max_len),
             len5: LenLaw::exponential(1000.0, max_len),
             lenu: LenLaw::exponential(1000.0, max_len),
-            k3: Kernel::initial(),
-            k5: Kernel::initial(),
+            k3: GapLaw::initial(max_len),
+            k5: GapLaw::initial(max_len),
         }
     }
 
@@ -368,11 +464,10 @@ impl Params {
         let (l, d5) = f.l_d5(k);
         let d3 = f.d3[k];
         let (l_us, len_us, d3_us, d5_us) = (l as usize, len as usize, d3 as usize, d5 as usize);
-        let k3a = self.k3.w * self.k3.rho1 * e.k3a[d3_us];
-        let k3b = (1.0 - self.k3.w) * self.k3.rho2 * e.k3b[d3_us];
-        let k5a = self.k5.w * self.k5.rho1 * e.k5a[d5_us];
-        let k5b = (1.0 - self.k5.w) * self.k5.rho2 * e.k5b[d5_us];
-        let (kk3, kk5) = (k3a + k3b, k5a + k5b);
+        // end kernels, normalized over the gaps this transcript allows (0..len)
+        let last = len.saturating_sub(1) as usize;
+        let kk3 = e.g3d[d3_us] / e.g3c[last].max(1e-300);
+        let kk5 = e.g5d[d5_us] / e.g5c[last].max(1e-300);
         Terms {
             a3_stop: self.p3 * kk3 * e.d3[l_us],
             a3_cens: self.p3 * kk3 * e.s3[(len - d3) as usize] * kk5,
@@ -381,10 +476,6 @@ impl Params {
             full: self.pf * kk3 * kk5,
             u_stop: self.pu * e.du[l_us] / ((len - l) as f64 + 1.0),
             u_cens: self.pu * e.su[len_us] * kk3 * kk5,
-            k3a,
-            k3b,
-            k5a,
-            k5b,
         }
     }
 }
@@ -400,24 +491,20 @@ struct Exps {
     s5: Vec<f64>,
     du: Vec<f64>,
     su: Vec<f64>,
-    k3a: Vec<f64>,
-    k3b: Vec<f64>,
-    k5a: Vec<f64>,
-    k5b: Vec<f64>,
+    /// End-kernel densities and distribution functions.
+    g3d: Vec<f64>,
+    g3c: Vec<f64>,
+    g5d: Vec<f64>,
+    g5c: Vec<f64>,
 }
 
 impl Exps {
     fn new(par: &Params, max_len: u32) -> Self {
-        let tab = |rate: f64| {
-            (0..=max_len)
-                .into_par_iter()
-                .map(|x| (-rate * x as f64).exp())
-                .collect()
-        };
-        let geo = |rho: f64| tab(-(1.0 - rho).ln());
         let (d3, s3) = par.len3.tables(max_len);
         let (d5, s5) = par.len5.tables(max_len);
         let (du, su) = par.lenu.tables(max_len);
+        let (g3d, g3c) = par.k3.tables(max_len);
+        let (g5d, g5c) = par.k5.tables(max_len);
         Exps {
             d3,
             s3,
@@ -425,80 +512,10 @@ impl Exps {
             s5,
             du,
             su,
-            k3a: geo(par.k3.rho1),
-            k3b: geo(par.k3.rho2),
-            k5a: geo(par.k5.rho1),
-            k5b: geo(par.k5.rho2),
-        }
-    }
-}
-
-/// Expected sufficient statistics of one end kernel: posterior weight and weighted gap sum for
-/// each of its two geometric parts.
-#[derive(Default, Clone, Copy)]
-struct KStats {
-    na: f64,
-    sa: f64,
-    nb: f64,
-    sb: f64,
-}
-
-impl KStats {
-    fn merge(self, o: KStats) -> KStats {
-        KStats {
-            na: self.na + o.na,
-            sa: self.sa + o.sa,
-            nb: self.nb + o.nb,
-            sb: self.sb + o.sb,
-        }
-    }
-
-    /// Weight `wt` of an observation at gap `d`, split between the parts in proportion `a : b`.
-    #[inline]
-    fn add(&mut self, wt: f64, d: f64, a: f64, b: f64) {
-        let z = a + b;
-        if wt <= 0.0 || z <= 0.0 {
-            return;
-        }
-        let (wa, wb) = (wt * a / z, wt * b / z);
-        self.na += wa;
-        self.sa += wa * d;
-        self.nb += wb;
-        self.sb += wb * d;
-    }
-
-    /// Geometric M-steps (`rho = n / (n + sum d)`), ordered so that part one is the shorter
-    /// scale.
-    fn kernel(&self, old: Kernel) -> Kernel {
-        let n = self.na + self.nb;
-        if n <= 0.0 {
-            return old;
-        }
-        let lo = 1.0 / Kernel::MAX_SCALE;
-        let rho = |n: f64, s: f64, old: f64| {
-            if n > 0.0 {
-                (n / (n + s)).clamp(lo, 0.999)
-            } else {
-                old
-            }
-        };
-        let (w, r1, r2) = (
-            (self.na / n).clamp(1e-6, 1.0 - 1e-6),
-            rho(self.na, self.sa, old.rho1),
-            rho(self.nb, self.sb, old.rho2),
-        );
-        if r1 >= r2 {
-            Kernel {
-                w,
-                rho1: r1,
-                rho2: r2,
-            }
-        } else {
-            Kernel {
-                w: 1.0 - w,
-                rho1: r2,
-                rho2: r1,
-            }
+            g3d,
+            g3c,
+            g5d,
+            g5c,
         }
     }
 }
@@ -516,9 +533,9 @@ struct Stats {
     l3: LStats,
     l5: LStats,
     lu: LStats,
-    /// End kernels.
-    k3: KStats,
-    k5: KStats,
+    /// End kernels: observed gaps (`stop`) and truncation points (`cens`), binned.
+    k3: LStats,
+    k5: LStats,
 }
 
 impl Stats {
@@ -563,8 +580,12 @@ impl Stats {
         LStats::add(&mut self.lu.stop, LenLaw::bin(l), us);
         LStats::add(&mut self.lu.cens, LenLaw::bin(len), uc);
         // Every part that places the read at an end through that end's kernel observes its gap.
-        self.k3.add(a3s + a3c + a5c + fl + uc, d3, t.k3a, t.k3b);
-        self.k5.add(a5s + a5c + a3c + fl + uc, d5, t.k5a, t.k5b);
+        let last = GapLaw::bin(f.len(k).saturating_sub(1));
+        let (w3, w5) = (a3s + a3c + a5c + fl + uc, a5s + a5c + a3c + fl + uc);
+        LStats::add(&mut self.k3.stop, GapLaw::bin(d3 as u32), w3);
+        LStats::add(&mut self.k3.cens, last, w3);
+        LStats::add(&mut self.k5.stop, GapLaw::bin(d5 as u32), w5);
+        LStats::add(&mut self.k5.cens, last, w5);
     }
 
     fn params(&self, old: &Params) -> Params {
@@ -582,8 +603,8 @@ impl Stats {
             len3: self.l3.law(&old.len3),
             len5: self.l5.law(&old.len5),
             lenu: self.lu.law(&old.lenu),
-            k3: self.k3.kernel(old.k3),
-            k5: self.k5.kernel(old.k5),
+            k3: GapLaw::law(&self.k3, &old.k3),
+            k5: GapLaw::law(&self.k5, &old.k5),
         }
     }
 }
@@ -643,7 +664,7 @@ pub fn em(em_info: &EMInfo, presence: Option<PresenceOpts>, nthreads: usize) -> 
         info!(
             "truncation model: 3'-anchored {:.3} (mean length {:.0} nt), 5'-anchored {:.3} \
              (mean length {:.0} nt), full length {:.3}, uniformly placed {:.3} (mean length {:.0} nt); \
-             3' end kernel {:.2}x{:.0}nt + {:.2}x{:.0}nt, 5' end kernel {:.2}x{:.0}nt + {:.2}x{:.0}nt",
+             3' end gap {:?}, 5' end gap {:?}",
             par.p3,
             par.len3.mean(),
             par.p5,
@@ -651,14 +672,8 @@ pub fn em(em_info: &EMInfo, presence: Option<PresenceOpts>, nthreads: usize) -> 
             par.pf,
             par.pu,
             par.lenu.mean(),
-            par.k3.w,
-            1.0 / par.k3.rho1,
-            1.0 - par.k3.w,
-            1.0 / par.k3.rho2,
-            par.k5.w,
-            1.0 / par.k5.rho1,
-            1.0 - par.k5.w,
-            1.0 / par.k5.rho2
+            par.k3,
+            par.k5
         );
         counts
     })
@@ -1026,16 +1041,8 @@ fn moved(a: &Params, b: &Params) -> f64 {
         .max(a.len3.moved(&b.len3))
         .max(a.len5.moved(&b.len5))
         .max(a.lenu.moved(&b.lenu))
-        .max(kmoved(&a.k3, &b.k3))
-        .max(kmoved(&a.k5, &b.k5))
-}
-
-fn kmoved(a: &Kernel, b: &Kernel) -> f64 {
-    let rel = |x: f64, y: f64| (x - y).abs() / y.abs().max(1e-12);
-    (a.w - b.w)
-        .abs()
-        .max(rel(a.rho1, b.rho1))
-        .max(rel(a.rho2, b.rho2))
+        .max(a.k3.moved(&b.k3))
+        .max(a.k5.moved(&b.k5))
 }
 
 /// Refresh the presence posteriors if due at iteration `niter`, then fill `eff` with
