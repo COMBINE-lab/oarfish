@@ -103,6 +103,24 @@ fn perform_inference_and_write_output(
         None
     };
 
+    // Put reads that share their likeliest target next to each other: the EM's
+    // transcript-major passes then read nearby memory (see `InMemoryAlignmentStore::reorder_reads`).
+    let t_order = std::time::Instant::now();
+    let order = crate::em_read::read_order(store.len(), |r| {
+        let (alns, probs, _) = store.read(r);
+        alns.iter()
+            .zip(probs)
+            .max_by(|x, y| x.1.total_cmp(y.1))
+            .map_or(0, |x| x.0.ref_id)
+    });
+    store.reorder_reads(&order);
+    drop(order);
+    crate::util::oarfish_types::release_freed_memory();
+    info!(
+        "reads ordered by likeliest target in {:.2}s",
+        t_order.elapsed().as_secs_f64()
+    );
+
     if store.filter_opts.model_coverage {
         //obtaining the Cumulative Distribution Function (CDF) for each transcript
         logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);

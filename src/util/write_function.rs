@@ -280,7 +280,7 @@ pub fn write_out_prob(
     // shown as 0.000 (see `prob_display_decimals` / oarfish#71).
     let prob_decimals = prob_display_decimals(display_thresh);
 
-    for ((alns, probs, coverage_probs), name) in izip!(emi.eq_map.iter(), names_iter) {
+    for ((alns, probs, coverage_probs), name) in izip!(emi.eq_map.iter_input_order(), names_iter) {
         let mut denom = 0.0_f64;
 
         for (a, p, cp) in izip!(alns, probs, coverage_probs) {

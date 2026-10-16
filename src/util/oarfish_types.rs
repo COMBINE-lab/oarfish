@@ -15,6 +15,7 @@ use typed_builder::TypedBuilder;
 use bio_types::strand::Strand;
 use bstr::{B, ByteSlice};
 use noodles_sam as sam;
+use rayon::prelude::*;
 use sam::{Header, alignment::record::data::field::tag::Tag as AlnTag};
 
 #[allow(unused_imports)]
@@ -356,7 +357,7 @@ impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AlnInfo {
     pub ref_id: u32,
     pub start: u32,
@@ -584,8 +585,21 @@ pub struct InMemoryAlignmentStore<'h> {
     zeros: Vec<f64>,
     // holds the boundaries between records for different reads
     boundaries: Vec<usize>,
+    /// After [`InMemoryAlignmentStore::reorder_reads`], the input position of each read
+    /// (`input_pos[r]` for read `r`); `None` while reads are in input order.
+    input_pos: Option<Vec<u32>>,
     pub discard_table: DiscardTable,
     pub num_unique_alignments: usize,
+}
+
+/// Asks the allocator to return freed memory to the OS now (mimalloc otherwise purges freed
+/// blocks only after a delay, during which they still count as resident).
+pub fn release_freed_memory() {
+    #[cfg(feature = "mimalloc")]
+    // SAFETY: `mi_collect` only releases memory the allocator no longer hands out.
+    unsafe {
+        libmimalloc_sys::mi_collect(true)
+    };
 }
 
 impl InMemoryAlignmentStore<'_> {
@@ -685,9 +699,84 @@ impl<'h> InMemoryAlignmentStore<'h> {
             coverage_probabilities: vec![],
             zeros: vec![],
             boundaries: vec![0],
+            input_pos: None,
             discard_table: DiscardTable::new(),
             num_unique_alignments: 0,
         }
+    }
+
+    /// Rearranges the reads so that read `i` is the current read `order[i]` (`order` a
+    /// permutation of the reads), keeping each read's alignments together. The EM passes visit
+    /// reads in store order; putting reads that share their likeliest target next to each
+    /// other (see `crate::em_read::read_order`) lets the transcript-major passes read nearby
+    /// memory. The arrays are rebuilt one at a time, each in parallel by read, so at most one
+    /// extra array exists at once. The input order is kept for output that lists reads
+    /// ([`InMemoryAlignmentStore::iter_input_order`]).
+    pub fn reorder_reads(&mut self, order: &[u32]) {
+        let nreads = self.len();
+        assert_eq!(
+            order.len(),
+            nreads,
+            "reorder_reads needs one entry per read"
+        );
+        let mut nb = Vec::with_capacity(nreads + 1);
+        nb.push(0usize);
+        for &r in order {
+            let r = r as usize;
+            nb.push(nb.last().unwrap() + (self.boundaries[r + 1] - self.boundaries[r]));
+        }
+        fn permute<T: Copy + Send + Sync>(
+            src: &[T],
+            old: &[usize],
+            new: &[usize],
+            order: &[u32],
+        ) -> Vec<T> {
+            let n = src.len();
+            let mut dst: Vec<T> = Vec::with_capacity(n);
+            let p = dst.as_mut_ptr() as usize;
+            order.par_iter().enumerate().for_each(|(i, &r)| {
+                let r = r as usize;
+                let s = &src[old[r]..old[r + 1]];
+                // SAFETY: slots new[i]..new[i + 1] belong to read i alone, and the ranges
+                // cover 0..n exactly (each read moves whole).
+                unsafe {
+                    std::ptr::copy_nonoverlapping(s.as_ptr(), (p as *mut T).add(new[i]), s.len())
+                };
+            });
+            // SAFETY: every slot was written above.
+            unsafe { dst.set_len(n) };
+            dst
+        }
+        // Each replaced array is handed back to the OS before the next is built, so that only
+        // one extra array is ever resident (the allocator would otherwise keep freed blocks
+        // for a while).
+        self.alignments = permute(&self.alignments, &self.boundaries, &nb, order);
+        release_freed_memory();
+        self.as_probabilities = permute(&self.as_probabilities, &self.boundaries, &nb, order);
+        release_freed_memory();
+        if !self.coverage_probabilities.is_empty() {
+            self.coverage_probabilities =
+                permute(&self.coverage_probabilities, &self.boundaries, &nb, order);
+            release_freed_memory();
+        }
+        self.input_pos = Some(match self.input_pos.take() {
+            Some(prev) => order.iter().map(|&r| prev[r as usize]).collect(),
+            None => order.to_vec(),
+        });
+        self.boundaries = nb;
+    }
+
+    /// The reads in the order they were added (input order), whatever
+    /// [`InMemoryAlignmentStore::reorder_reads`] did since.
+    pub fn iter_input_order(&self) -> impl Iterator<Item = (&[AlnInfo], &[f32], &[f64])> + '_ {
+        let at: Option<Vec<u32>> = self.input_pos.as_ref().map(|pos| {
+            let mut at = vec![0u32; pos.len()];
+            for (r, &p) in pos.iter().enumerate() {
+                at[p as usize] = r as u32;
+            }
+            at
+        });
+        (0..self.len()).map(move |i| self.read(at.as_ref().map_or(i, |a| a[i] as usize)))
     }
 
     /// Positions of read `i`'s alignments in `alignments`.
@@ -1406,5 +1495,64 @@ mod tests {
         let seqs: Vec<Vec<u8>> = rg.iter().map(|(_, s)| s.to_vec()).collect();
         assert_eq!(seqs[0], b"ACGTacgtNn", "U/u should become T/t");
         assert_eq!(seqs[1], b"ACGTacgtNn", "DNA bases unchanged");
+    }
+
+    /// Reordering moves whole reads, and the input order is recovered after one or two
+    /// reorderings, with coverage probabilities following their alignments.
+    #[test]
+    fn reorder_reads_keeps_reads_whole_and_recovers_input_order() {
+        use super::{AlignmentFilters, InMemoryAlignmentStore, TranscriptInfo};
+        use std::num::NonZeroUsize;
+        let header = noodles_sam::Header::default();
+        let fo = AlignmentFilters::builder()
+            .five_prime_clip(u32::MAX)
+            .three_prime_clip(i64::MAX)
+            .score_threshold(0.0)
+            .min_aligned_fraction(0.0)
+            .min_aligned_len(1)
+            .which_strand(Strand::Unknown)
+            .model_coverage(false)
+            .logistic_growth_rate(2.0)
+            .write_assignment_probs(false)
+            .write_assignment_probs_type(None)
+            .build();
+        let mut store = InMemoryAlignmentStore::new(fo, &header);
+        let mut txps: Vec<TranscriptInfo> = (0..4)
+            .map(|_| TranscriptInfo::with_len_and_bin_width(NonZeroUsize::new(1000).unwrap(), 100))
+            .collect();
+        let aln = |t: u32, s: u32| AlnInfo {
+            ref_id: t,
+            start: s,
+            end: s + 100,
+            strand: Strand::Forward,
+        };
+        // read i: alignments to targets (i + j) % 4, j < i % 3 + 1, starting at 10 * i
+        let reads: Vec<Vec<AlnInfo>> = (0..7u32)
+            .map(|i| (0..i % 3 + 1).map(|j| aln((i + j) % 4, 10 * i)).collect())
+            .collect();
+        for r in &reads {
+            let probs: Vec<f32> = r.iter().map(|a| a.start as f32).collect();
+            store.add_filtered_group(r, &probs, &mut txps);
+        }
+        store.coverage_probabilities = store.alignments.iter().map(|a| a.start as f64).collect();
+        let snapshot = |st: &InMemoryAlignmentStore| -> Vec<(Vec<AlnInfo>, Vec<f32>, Vec<f64>)> {
+            st.iter_input_order()
+                .map(|(a, p, c)| (a.to_vec(), p.to_vec(), c.to_vec()))
+                .collect()
+        };
+        let before = snapshot(&store);
+        store.reorder_reads(&[3, 0, 6, 1, 5, 2, 4]);
+        assert_eq!(store.read(0).0, &reads[3][..]);
+        assert_eq!(store.read(2).0, &reads[6][..]);
+        assert_eq!(snapshot(&store), before);
+        store.reorder_reads(&[6, 5, 4, 3, 2, 1, 0]);
+        assert_eq!(store.read(0).0, &reads[4][..]);
+        assert_eq!(snapshot(&store), before);
+        for r in 0..store.len() {
+            let (a, p, c) = store.read(r);
+            for ((a, &p), &c) in a.iter().zip(p).zip(c) {
+                assert_eq!((p, c), (a.start as f32, a.start as f64));
+            }
+        }
     }
 }

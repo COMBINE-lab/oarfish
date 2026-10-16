@@ -100,11 +100,13 @@ humantime = "2.3.0"
 # that into large peak RSS. mimalloc handles the churn and returns memory to the
 # OS far better. On by default; disable with `--no-default-features`.
 mimalloc = { version = "0.1.43", default-features = false, optional = true }
+# Direct access to mimalloc's `mi_collect`, to return large freed blocks to the OS promptly.
+libmimalloc-sys = { version = "0.1.49", default-features = false, features = ["extended"], optional = true }
 
 [features]
 default = ["mimalloc"]
 # Use mimalloc as the global allocator (large peak-RSS reduction in genome mode).
-mimalloc = ["dep:mimalloc"]
+mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
 
 [[bin]]
 name = "oarfish"
