@@ -197,6 +197,11 @@ pub trait AlnRecordLike {
     fn aln_start(&self) -> u32;
     fn aln_end(&self) -> u32;
     fn is_supp(&self) -> bool;
+    /// What this alignment says about the read's ends (see [`crate::util::read_ends`]);
+    /// backends that cannot tell keep the default, which leaves every end adjustment off.
+    fn end_evidence(&self) -> crate::util::read_ends::EndEvidence {
+        crate::util::read_ends::EndEvidence::UNKNOWN
+    }
     #[allow(dead_code)]
     fn name(&self) -> Option<String>;
 }
@@ -320,6 +325,30 @@ impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for
         self.flags()
             .expect("alignment record should have flags")
             .is_supplementary()
+    }
+
+    fn end_evidence(&self) -> crate::util::read_ends::EndEvidence {
+        use noodles_sam::alignment::record::cigar::op::Kind;
+        let (mut first, mut last) = (None, None);
+        for op in self.cigar().iter().filter_map(Result::ok) {
+            if first.is_none() {
+                first = Some(op);
+            }
+            last = Some(op);
+        }
+        let clip = |op: Option<noodles_sam::alignment::record::cigar::Op>| {
+            op.filter(|op| matches!(op.kind(), Kind::SoftClip | Kind::HardClip))
+                .map_or(0, |op| op.len() as u32)
+        };
+        // SEQ is stored in reference orientation, so the molecule's tail is an A-run at its
+        // right end whichever strand the read aligned to; secondary records carry no SEQ.
+        let seq: Vec<u8> = self.sequence().iter().collect();
+        crate::util::read_ends::EndEvidence {
+            clip_left: Some(clip(first)),
+            clip_right: Some(clip(last)),
+            tail: (!seq.is_empty())
+                .then(|| crate::util::read_ends::terminal_run(seq.into_iter().rev(), b'A')),
+        }
     }
 
     fn name(&self) -> Option<String> {
@@ -814,6 +843,10 @@ pub struct AlignmentFilters {
     /// Larger flattens, smaller sharpens. Exposed via `--score-prob-denom`.
     #[builder(default = 5.0)]
     pub score_prob_denom: f32,
+    /// Remove the score credit a read's poly(A) tail earns where it aligns to a transcript
+    /// (see `crate::util::read_ends::TailNeutral`); `None` leaves scores as the aligner gave them.
+    #[builder(default)]
+    pub tail_neutral: Option<crate::util::read_ends::TailNeutral>,
 }
 
 /// This structure records information about
@@ -994,6 +1027,24 @@ impl AlignmentFilters {
             .find_map(|x| x.opt_sequence_len().map(|y| y as u32))
             .unwrap_or(0_u32);
 
+        // Tail-neutral scores (see `crate::util::read_ends::TailNeutral`): the read's tail, from
+        // whichever record can measure it, and each alignment's score without its tail credit.
+        let tail_neutral = self.tail_neutral;
+        let tail = tail_neutral.and_then(|_| {
+            crate::util::read_ends::TailNeutral::read_tail(
+                ag.iter()
+                    .map(|x| (x.end_evidence(), x.is_reverse_complemented())),
+            )
+        });
+        let adjusted = |x: &T, score: i32| -> i32 {
+            match (tail_neutral, tail) {
+                (Some(tn), Some(_)) => {
+                    tn.adjust(score, tail, &x.end_evidence(), x.is_reverse_complemented())
+                }
+                _ => score,
+            }
+        };
+
         // apply the filter criteria to determine what alignments to retain
         ag.retain(|x| {
             // we ony want to retain mapped reads
@@ -1004,7 +1055,7 @@ impl AlignmentFilters {
                 let aln_span = x.aln_span().unwrap() as u32;
 
                 // get the alignment score, as computed by the aligner
-                let score = x.aln_score().unwrap_or(i32::MIN as i64) as i32;
+                let score = adjusted(x, x.aln_score().unwrap_or(i32::MIN as i64) as i32);
 
                 // the alignment is to the - strand
                 let is_rc = x.is_reverse_complemented();
@@ -1110,7 +1161,7 @@ impl AlignmentFilters {
         // get a vector of all of the scores
         let mut scores: Vec<i32> = ag
             .iter_mut()
-            .map(|a| a.aln_score().unwrap_or(0) as i32)
+            .map(|a| adjusted(a, a.aln_score().unwrap_or(0) as i32))
             .collect();
 
         let _min_allowed_score = self.score_threshold * mscore;

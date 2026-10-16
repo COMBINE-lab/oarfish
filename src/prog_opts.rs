@@ -407,6 +407,12 @@ pub struct Args {
     #[arg(long, value_parser = parse_pos_f32, help_heading = "filters")]
     pub score_prob_denom: Option<f32>,
 
+    /// aligner match score; when positive, the credit a read's poly(A) tail earns by aligning
+    /// to a transcript (one whose sequence ends in an A-run) is removed from that alignment's
+    /// score (prototype; 0 disables)
+    #[arg(long, hide = true, default_value_t = 0)]
+    pub tail_match_score: i32,
+
     /// genome mode: per-internal-junction-mismatch discount in (0,1] applied to a
     /// transcript's projection similarity (sharpens isoform discrimination).
     /// 1.0 = off (default).

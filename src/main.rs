@@ -124,6 +124,11 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
+                .tail_neutral((args.tail_match_score > 0).then_some(
+                    crate::util::read_ends::TailNeutral {
+                        match_score: args.tail_match_score,
+                    },
+                ))
                 .build())
         }
         Some(FilterGroup::NanocountFilters) => {
@@ -160,6 +165,11 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
+                .tail_neutral((args.tail_match_score > 0).then_some(
+                    crate::util::read_ends::TailNeutral {
+                        match_score: args.tail_match_score,
+                    },
+                ))
                 .build())
         }
         None => {
@@ -176,6 +186,11 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
                 .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
+                .tail_neutral((args.tail_match_score > 0).then_some(
+                    crate::util::read_ends::TailNeutral {
+                        match_score: args.tail_match_score,
+                    },
+                ))
                 .build())
         }
     }
