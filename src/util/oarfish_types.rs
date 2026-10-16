@@ -195,6 +195,8 @@ pub trait AlnRecordLike {
     fn ref_id(&self, header: &Header) -> anyhow::Result<usize>;
     fn aln_span(&self) -> Option<usize>;
     fn aln_score(&self) -> Option<i64>;
+    /// Start and end of the alignment on the target, zero-based and half-open (`[start, end)`),
+    /// whatever convention the backend uses, so that every source places reads alike.
     fn aln_start(&self) -> u32;
     fn aln_end(&self) -> u32;
     fn is_supp(&self) -> bool;
@@ -308,11 +310,14 @@ impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for
             .as_int()
     }
 
+    // SAM positions are one-based and inclusive: the zero-based start is one less, and the
+    // inclusive end is already the zero-based exclusive end.
     fn aln_start(&self) -> u32 {
         self.alignment_start()
             .unwrap()
             .expect("valid aln start")
             .get() as u32
+            - 1
     }
 
     fn aln_end(&self) -> u32 {
@@ -1387,8 +1392,8 @@ impl AlignmentFilters {
                 continue;
             }
 
-            // not too far from the 5' end
-            if r.start >= self.five_prime_clip {
+            // not too far from the 5' end (projected starts are one-based)
+            if r.start.saturating_sub(1) >= self.five_prime_clip {
                 discard_table.discard_5p += 1;
                 continue;
             }
@@ -1432,10 +1437,13 @@ impl AlignmentFilters {
             // Defensively clamp the projected interval to the transcript bounds.
             // With a correct projection `1 <= start <= end <= len` always holds;
             // this guard just prevents a stray out-of-range coordinate from
-            // panicking the coverage binning during a long run.
+            // panicking the coverage binning during a long run. Projected
+            // coordinates are one-based and inclusive; `AlnInfo` holds zero-based,
+            // half-open ones (see `AlnRecordLike::aln_start`).
             let tlen = txps[r.ref_id as usize].len.get() as u32;
             let start = r.start.clamp(1, tlen);
             let end = r.end.clamp(start, tlen);
+            let start = start - 1;
 
             // log-weight of this alignment relative to the read's best hit.
             // `score` discriminates paralogous genomic loci (similarity saturates
