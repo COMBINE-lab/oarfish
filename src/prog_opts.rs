@@ -45,6 +45,9 @@ pub enum PresenceModel {
     /// Spike-and-slab: per-transcript Bernoulli presence posterior with a fixed prior; the EM
     /// sees presence-discounted abundances (zero-inflated EM).
     SpikeSlab,
+    /// Spike-and-slab with a marginal-likelihood Bayes factor per transcript and a learned
+    /// base rate (see `crate::presence`).
+    Bayes,
 }
 
 #[derive(Debug, Clone, clap::ValueEnum, Serialize)]

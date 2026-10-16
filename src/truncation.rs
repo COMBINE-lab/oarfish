@@ -1056,17 +1056,20 @@ fn refresh_presence(
     let counts: Vec<f64> = prev.iter().map(|x| x.load(Ordering::Relaxed)).collect();
     if p.due(niter) {
         let e = ws.is_none().then(|| Exps::new(par, max_len));
-        p.update(&counts, f.off.len() - 1, |r, buf| {
-            for k in f.off[r]..f.off[r + 1] {
-                let w = match (ws, &e) {
-                    (Some(ws), _) => ws[k],
-                    (None, Some(e)) => f.prob[k] as f64 * par.terms(f, k, e).total(),
-                    (None, None) => unreachable!(),
-                };
-                buf.push((f.target[k], w));
-            }
-            mult.map_or(1.0, |m| m[r] as f64)
-        });
+        let reads = crate::presence::ReadAlns {
+            off: &f.off,
+            target: &f.target,
+        };
+        p.refresh(
+            &counts,
+            reads,
+            |k| match (ws, &e) {
+                (Some(ws), _) => ws[k],
+                (None, Some(e)) => f.prob[k] as f64 * par.terms(f, k, e).total(),
+                (None, None) => unreachable!(),
+            },
+            |r| mult.map_or(1.0, |m| m[r] as f64),
+        );
     }
     eff.par_iter()
         .zip(counts.par_iter().zip(&p.q))
@@ -1190,8 +1193,10 @@ fn run(
     if let Some(p) = &pres {
         if mult.is_none() {
             info!(
-                "presence model: {} transcripts called absent (q < 0.5)",
-                p.n_absent().to_formatted_string(&Locale::en)
+                "presence model: {} transcripts called absent (q < 0.5){}",
+                p.n_absent().to_formatted_string(&Locale::en),
+                p.base_rate()
+                    .map_or(String::new(), |pi| format!("; base rate {pi:.3}"))
             );
         }
         let counts: Vec<f64> = prev.iter().map(|x| x.load(Ordering::Relaxed)).collect();

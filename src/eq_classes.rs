@@ -188,11 +188,11 @@ fn run(
         match &mut pres {
             Some(p) => {
                 if p.due(niter) {
-                    p.update(&prev, eqc.len(), |c, buf| {
-                        let (ts, ps) = eqc.class(c);
-                        buf.extend(ts.iter().zip(ps).map(|(&t, &p)| (t, p as f64)));
-                        counts[c]
-                    });
+                    let reads = crate::presence::ReadAlns {
+                        off: &eqc.offsets,
+                        target: &eqc.targets,
+                    };
+                    p.refresh(&prev, reads, |k| eqc.probs[k] as f64, |c| counts[c]);
                 }
                 p.effective(&prev, &mut eff);
                 m_step(eqc, counts, &eff, &mut scale, &mut curr);
@@ -237,8 +237,10 @@ fn run(
         Some(p) => {
             if do_log {
                 info!(
-                    "presence model: {} transcripts called absent (q < 0.5)",
-                    p.n_absent().to_formatted_string(&Locale::en)
+                    "presence model: {} transcripts called absent (q < 0.5){}",
+                    p.n_absent().to_formatted_string(&Locale::en),
+                    p.base_rate()
+                        .map_or(String::new(), |pi| format!("; base rate {pi:.3}"))
                 );
             }
             p.effective(&prev, &mut eff);

@@ -173,7 +173,8 @@ fn perform_inference_and_write_output(
 
     let presence = match args.presence_model {
         crate::prog_opts::PresenceModel::None => None,
-        crate::prog_opts::PresenceModel::SpikeSlab => {
+        model @ (crate::prog_opts::PresenceModel::SpikeSlab
+        | crate::prog_opts::PresenceModel::Bayes) => {
             if eqc.is_none() && !args.model_truncation {
                 warn!(
                     "--presence-model is supported by the equivalence-class EM and \
@@ -182,6 +183,11 @@ fn perform_inference_and_write_output(
                 None
             } else {
                 Some(crate::presence::PresenceOpts {
+                    kind: if model == crate::prog_opts::PresenceModel::Bayes {
+                        crate::presence::PresenceKind::Bayes
+                    } else {
+                        crate::presence::PresenceKind::SpikeSlab
+                    },
                     rho: args.presence_rho,
                     warmup: args.presence_warmup,
                     period: args.presence_period,
