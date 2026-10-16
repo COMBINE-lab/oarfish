@@ -1157,20 +1157,163 @@ fn step_static(
 const FREEZE_TOL: f64 = 1e-6;
 const FREEZE_AFTER: u32 = 3;
 
-/// How far the parameters moved: absolute change for the mixture weights, relative change for
-/// the rates. (A fraction decaying toward its floor changes by large relative amounts long after
-/// its effect on the likelihood is negligible.)
+/// How far the parameters moved: absolute change for the mixture weights; for each length law,
+/// its change scaled by the weight of the one component that uses it, as that bounds its effect
+/// on the likelihood (the law of a component holding a negligible share of the reads drifts for
+/// as long as the EM runs, and must not hold the parameters open). The end kernels enter
+/// several components and count in full.
 fn moved(a: &Params, b: &Params) -> f64 {
     (a.p3 - b.p3)
         .abs()
         .max((a.p5 - b.p5).abs())
         .max((a.pf - b.pf).abs())
         .max((a.pu - b.pu).abs())
-        .max(a.len3.moved(&b.len3))
-        .max(a.len5.moved(&b.len5))
-        .max(a.lenu.moved(&b.lenu))
+        .max(a.p3.max(b.p3) * a.len3.moved(&b.len3))
+        .max(a.p5.max(b.p5) * a.len5.moved(&b.len5))
+        .max(a.pu.max(b.pu) * a.lenu.moved(&b.lenu))
         .max(a.k3.moved(&b.k3))
         .max(a.k5.moved(&b.k5))
+}
+
+/// State of the SQUAREM acceleration (Varadhan & Roland 2008, scheme S3) of the frozen-weight
+/// EM: buffers for the iterates of a cycle, and the bound on the extrapolation step length,
+/// which grows while long steps pay off and shrinks when one is rejected.
+struct Squarem {
+    t0: Vec<f64>,
+    t1: Vec<f64>,
+    t2: Vec<f64>,
+    step_max: f64,
+    /// Cycles that extrapolated and kept the result, rejected it, or did not extrapolate.
+    acc: u32,
+    rej: u32,
+    plain: u32,
+}
+
+impl Squarem {
+    const STEP_GROW: f64 = 4.0;
+
+    fn new(n: usize) -> Self {
+        Squarem {
+            t0: vec![0.0; n],
+            t1: vec![0.0; n],
+            t2: vec![0.0; n],
+            step_max: 1.0,
+            acc: 0,
+            rej: 0,
+            plain: 0,
+        }
+    }
+}
+
+fn load_into(dst: &mut [f64], src: &[AtomicF64]) {
+    dst.par_iter_mut()
+        .zip(src.par_iter())
+        .for_each(|(d, s)| *d = s.load(Ordering::Relaxed));
+}
+
+fn store_from(dst: &[AtomicF64], src: &[f64]) {
+    dst.par_iter()
+        .zip(src.par_iter())
+        .for_each(|(d, &s)| d.store(s, Ordering::Relaxed));
+}
+
+/// Log-likelihood of abundances `theta` (normalized to proportions) under the fixed weights
+/// `ws`, up to a constant: the objective the frozen-weight EM ascends.
+fn loglik_static(f: &Flat, ws: &[f64], theta: &[f64], mult: Option<&[u32]>) -> f64 {
+    let total: f64 = theta.par_iter().sum();
+    let (ll, n) = (0..f.off.len() - 1)
+        .into_par_iter()
+        .map(|r| {
+            let m = mult.map_or(1.0, |m| m[r] as f64);
+            let (lo, hi) = (f.off[r], f.off[r + 1]);
+            let d: f64 = f.target[lo..hi]
+                .iter()
+                .zip(&ws[lo..hi])
+                .map(|(&t, &w)| theta[t as usize] * w)
+                .sum();
+            if m > 0.0 && d > constants::EM_DENOM_THRESH {
+                (m * d.ln(), m)
+            } else {
+                (0.0, 0.0)
+            }
+        })
+        .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+    ll - n * total.ln()
+}
+
+/// One SQUAREM cycle from the abundances in `prev`: two EM steps (θ1, θ2), a step along the
+/// extrapolated path from θ0, and one EM step from there to stabilize it. The result is kept
+/// only if its likelihood is at least that of θ2, the result of plain EM; otherwise θ2 is kept
+/// and the step bound shrinks. On return `curr` holds the new abundances and `prev` the input
+/// of the cycle's last EM step, so their difference is a one-step change as in plain EM.
+fn squarem_cycle(
+    lay: &mut Layout,
+    f: &Flat,
+    ws: &[f64],
+    prev: &[AtomicF64],
+    curr: &[AtomicF64],
+    mult: Option<&[u32]>,
+    sq: &mut Squarem,
+) {
+    load_into(&mut sq.t0, prev);
+    step_static(lay, f, ws, prev, curr, mult);
+    load_into(&mut sq.t1, curr);
+    store_from(prev, &sq.t1);
+    step_static(lay, f, ws, prev, curr, mult);
+    load_into(&mut sq.t2, curr);
+    let (rr, vv) = sq
+        .t0
+        .par_iter()
+        .zip(sq.t1.par_iter().zip(sq.t2.par_iter()))
+        .map(|(&a, (&b, &c))| {
+            let (r, v) = (b - a, c - 2.0 * b + a);
+            (r * r, v * v)
+        })
+        .reduce(|| (0.0, 0.0), |x, y| (x.0 + y.0, x.1 + y.1));
+    // Step length -alpha in [1, step_max]; 1 reproduces θ2 exactly.
+    let mut s = if vv > 0.0 { (rr / vv).sqrt() } else { 1.0 };
+    if !s.is_finite() || s < 1.0 {
+        s = 1.0;
+    }
+    let hit = s > 1.0 && s >= sq.step_max;
+    s = s.min(sq.step_max);
+    if s == 1.0 {
+        // Plain EM: θ2 stands; report its last step. A step held back by the bound lets the
+        // bound grow, as after an accepted long step.
+        if hit {
+            sq.step_max *= Squarem::STEP_GROW;
+        }
+        sq.plain += 1;
+        store_from(prev, &sq.t1);
+        return;
+    }
+    let ext: Vec<f64> = sq
+        .t0
+        .par_iter()
+        .zip(sq.t1.par_iter().zip(sq.t2.par_iter()))
+        .map(|(&a, (&b, &c))| {
+            let (r, v) = (b - a, c - 2.0 * b + a);
+            (a + 2.0 * s * r + s * s * v).max(0.0)
+        })
+        .collect();
+    store_from(prev, &ext);
+    step_static(lay, f, ws, prev, curr, mult);
+    let t3: Vec<f64> = curr.par_iter().map(|x| x.load(Ordering::Relaxed)).collect();
+    let (l3, l2) = (
+        loglik_static(f, ws, &t3, mult),
+        loglik_static(f, ws, &sq.t2, mult),
+    );
+    if l3.is_finite() && l3 >= l2 {
+        sq.acc += 1;
+        if hit {
+            sq.step_max *= Squarem::STEP_GROW;
+        }
+    } else {
+        sq.rej += 1;
+        sq.step_max = (sq.step_max / Squarem::STEP_GROW).max(1.0);
+        store_from(prev, &sq.t1);
+        store_from(curr, &sq.t2);
+    }
 }
 
 /// Refresh the presence posteriors if due at iteration `niter`, then fill `eff` with
@@ -1244,6 +1387,7 @@ fn run(
     } else {
         Vec::new()
     };
+    let mut sq = Squarem::new(tinfo.len());
     while niter < em_info.max_iter {
         if let Some(p) = &mut pres {
             refresh_presence(
@@ -1260,6 +1404,12 @@ fn run(
         }
         let src = if pres.is_some() { &eff } else { &prev };
         match &frozen {
+            // With the weights fixed, the abundance update is a fixed-point map; accelerate
+            // it (the presence model rescales the abundances between steps, so it does not).
+            Some(ws) if pres.is_none() => {
+                squarem_cycle(&mut lay, f, ws, &prev, &curr, mult, &mut sq);
+                niter += 2;
+            }
             Some(ws) => step_static(&mut lay, f, ws, src, &curr, mult),
             None => {
                 let e = Exps::new(&par, max_len);
@@ -1317,6 +1467,12 @@ fn run(
                 rel_diff
             );
         }
+    }
+    if sq.acc + sq.rej + sq.plain > 0 {
+        info!(
+            "truncation EM: {} iterations; SQUAREM cycles {} extrapolated, {} rejected, {} plain (step bound {})",
+            niter, sq.acc, sq.rej, sq.plain, sq.step_max
+        );
     }
     // Zero very small abundances, then one more round with the parameters fixed, as the
     // per-read EM does.
@@ -1554,5 +1710,68 @@ mod tests {
             assert!((x - y).abs() < 1e-9 * x.max(1.0), "{a:?} {b:?}");
         }
         assert!(pa.len3.moved(&pb.len3) < 1e-12 && pa.lenu.moved(&pb.lenu) < 1e-12);
+    }
+
+    /// SQUAREM reaches the fixed point of the frozen-weight EM, in fewer EM evaluations, and
+    /// never lowers the likelihood from one cycle to the next.
+    #[test]
+    fn squarem_reaches_the_em_fixed_point() {
+        use crate::em_read::Impl;
+        let lens = [2000.0, 1800.0, 1500.0, 900.0];
+        let mut reads = Vec::new();
+        for i in 0..60 {
+            let s = (i % 60) as f64 * 10.0;
+            // Nested, nearly indistinguishable targets: the slow case for plain EM.
+            reads.push(vec![
+                (0, 1.0, s, s + 700.0),
+                (1, 1.0, s, s + 700.0),
+                (2, 0.9, s, s + 700.0),
+            ]);
+            if i % 3 == 0 {
+                reads.push(vec![(0, 1.0, 1300.0 + s, 2000.0)]);
+            }
+            if i % 5 == 0 {
+                reads.push(vec![(3, 1.0, 0.0, 900.0), (2, 0.5, 600.0, 1500.0)]);
+            }
+        }
+        let f = flat(&reads, &lens);
+        let par = Params::initial(f.max_len());
+        let e = Exps::new(&par, f.max_len());
+        let ws: Vec<f64> = (0..f.target.len())
+            .map(|k| f.prob[k] as f64 * par.terms(&f, k, &e).total())
+            .collect();
+        let init = || -> Vec<AtomicF64> { (0..4).map(|_| AtomicF64::new(100.0)).collect() };
+        let fresh = || -> Vec<AtomicF64> { (0..4).map(|_| AtomicF64::new(0.0)).collect() };
+        let get = |v: &[AtomicF64]| {
+            v.iter()
+                .map(|x| x.load(Ordering::Relaxed))
+                .collect::<Vec<_>>()
+        };
+
+        let mut lay = Layout::with(&f, 4, Some(Impl::Csr)).frozen(&f, &ws);
+        let (prev, curr) = (init(), fresh());
+        for _ in 0..5_000 {
+            step_static(&mut lay, &f, &ws, &prev, &curr, None);
+            store_from(&prev, &get(&curr));
+        }
+        let plain = get(&prev);
+
+        let mut lay = Layout::with(&f, 4, Some(Impl::Csr)).frozen(&f, &ws);
+        let (prev, curr) = (init(), fresh());
+        let mut sq = Squarem::new(4);
+        let mut last = f64::NEG_INFINITY;
+        for _ in 0..100 {
+            squarem_cycle(&mut lay, &f, &ws, &prev, &curr, None, &mut sq);
+            let now = get(&curr);
+            let ll = loglik_static(&f, &ws, &now, None);
+            assert!(ll >= last - 1e-9, "likelihood fell: {last} -> {ll}");
+            last = ll;
+            store_from(&prev, &now);
+        }
+        let fast = get(&prev);
+        assert!(sq.acc > 0, "never extrapolated");
+        for (x, y) in plain.iter().zip(&fast) {
+            assert!((x - y).abs() < 1e-3 * x.max(1.0), "{plain:?} {fast:?}");
+        }
     }
 }
