@@ -2,11 +2,7 @@ use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
 use tracing::{error, info, instrument};
 
 #[instrument(skip(store, txp_info))]
-pub fn normalize_read_probs(
-    store: &mut InMemoryAlignmentStore,
-    txp_info: &[TranscriptInfo],
-    bin_width: &u32,
-) {
+pub fn normalize_read_probs(store: &mut InMemoryAlignmentStore, txp_info: &[TranscriptInfo]) {
     let mut normalize_probs_temp: Vec<f64> = vec![];
     let mut normalized_coverage_prob: Vec<f64> = vec![];
 
@@ -21,36 +17,28 @@ pub fn normalize_read_probs(
             let end_aln: f64 = a.end as f64;
             let tlen: f64 = txp_info[target_id].len.get() as f64;
             let coverage_probability: &Vec<f64> = &txp_info[target_id].coverage_prob;
-            let bin_length: f64 = *bin_width as f64; //txp_info[target_id].len.get() as f32;
-            let start_bin: usize = (start_aln / bin_length) as usize;
-            let end_bin: usize =
-                ((end_aln / bin_length) as usize).min(coverage_probability.len() - 1);
-
-            let bin_end = |i| -> f64 { ((bin_length * (i as f64)) + bin_length).min(tlen) };
-
-            let bin_start = |i| -> f64 { (bin_length * (i as f64)).min(tlen) };
-
-            let (total_weight, cov_prob): (f64, f64) = if start_bin == end_bin {
-                let w = (end_aln - start_aln) / bin_length;
-                (w, w * coverage_probability[start_bin])
-            } else {
-                (start_bin..end_bin).fold((0f64, 0f64), |acc, i| {
-                    let w = if i == start_bin {
-                        (bin_end(start_bin) - start_aln) / bin_length
-                    } else if i == end_bin {
-                        (end_aln - bin_start(end_bin)) / bin_length
-                    } else {
-                        1.0
-                    };
-                    (acc.0 + w, acc.1 + (w * coverage_probability[i]))
-                })
-            };
+            // The read's weight on this transcript is the coverage probability of its evidence
+            // bins, averaged by how much of each it covers.
+            let (mut total_weight, mut cov_prob) = (0.0f64, 0.0f64);
+            crate::util::oarfish_types::for_each_evidence_bin(
+                tlen,
+                coverage_probability.len(),
+                start_aln,
+                end_aln,
+                |b, frac| {
+                    total_weight += frac;
+                    cov_prob += frac * coverage_probability[b];
+                },
+            );
+            if total_weight <= 0.0 {
+                // A degenerate span: no evidence either way.
+                total_weight = 1.0;
+                cov_prob = 0.5;
+            }
 
             if cov_prob.is_nan() || cov_prob.is_infinite() {
                 error!("cov_prob: {:?}", cov_prob);
-                error!("length: {:?}", ((end_aln - start_aln) / bin_length));
-                error!("length2: {:?}", (tlen / bin_length));
-                error!("start_bin: {}, end_bin: {}", start_bin, end_bin);
+                error!("tlen: {:?}, bins: {}", tlen, coverage_probability.len());
                 error!("start_aln: {}, end_aln: {}", start_aln, end_aln);
                 panic!("Error: Invalid result. normalize_read_probs function.");
             }

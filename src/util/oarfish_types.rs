@@ -459,6 +459,70 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     pub kde_model: Option<KDEModel>,
 }
 
+/// The coverage bins of a transcript of length `len` split it into `nbins` equal bins. Calls
+/// `f(bin, frac)` for each bin that `[start, end)` overlaps, with `frac` the fraction of the
+/// bin covered. Filling the coverage profile and weighting a read by it both go through this
+/// (via [`for_each_evidence_bin`]), so the two agree on where every bin lies.
+#[inline]
+pub fn for_each_bin_overlap(
+    len: f64,
+    nbins: usize,
+    start: f64,
+    end: f64,
+    mut f: impl FnMut(usize, f64),
+) {
+    if nbins == 0 || len <= 0.0 {
+        return;
+    }
+    let w = len / nbins as f64;
+    let (s, e) = (start.min(end).max(0.0), start.max(end).min(len));
+    if e <= s {
+        return;
+    }
+    let first = ((s / w).floor() as usize).min(nbins - 1);
+    let last = ((e / w).ceil() as usize).clamp(first + 1, nbins);
+    for b in first..last {
+        let (bs, be) = (b as f64 * w, ((b + 1) as f64 * w).min(len));
+        let ov = e.min(be) - s.max(bs);
+        if ov > 0.0 {
+            f(b, ov / (be - bs));
+        }
+    }
+}
+
+/// The bins whose coverage an alignment `[start, end)` contributes to, and by which it is
+/// weighted: those it overlaps ([`for_each_bin_overlap`]), except the bin where it ends (its
+/// highest-coordinate bin) when it covers that bin only partly and covers some other bin fully.
+/// Coverage there reflects where reads happen to stop rather than which transcripts are
+/// present; counting it costs accuracy in our benchmarks. The earlier code left
+/// this bin out implicitly, through its bin arithmetic; here it is a stated rule, applied
+/// alike to filling the profile and to weighting reads.
+#[inline]
+pub fn for_each_evidence_bin(
+    len: f64,
+    nbins: usize,
+    start: f64,
+    end: f64,
+    mut f: impl FnMut(usize, f64),
+) {
+    const FULL: f64 = 1.0 - 1e-9;
+    // The overlaps arrive in bin order; hold each back until the next one shows whether it
+    // was the last.
+    let (mut held, mut any_full): (Option<(usize, f64)>, bool) = (None, false);
+    for_each_bin_overlap(len, nbins, start, end, |b, frac| {
+        if let Some((hb, hf)) = held.replace((b, frac)) {
+            f(hb, hf);
+        }
+        any_full |= frac >= FULL;
+    });
+    if let Some((b, frac)) = held {
+        let partial = frac < FULL;
+        if !(partial && any_full) {
+            f(b, frac);
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TranscriptInfo {
     pub len: NonZeroUsize,
@@ -499,73 +563,26 @@ impl TranscriptInfo {
         }
     }
 
+    /// Coverage per bin and each bin's width (the bins split the transcript evenly; see
+    /// [`for_each_bin_overlap`]).
     #[inline(always)]
     pub fn get_normalized_counts_and_lengths(&self) -> (Vec<f32>, Vec<f32>) {
-        let num_intervals = self.coverage_bins.len();
-        let num_intervals_f = num_intervals as f64;
-        let tlen_f = self.lenf;
-        let bin_width = (tlen_f / num_intervals_f).round() as f32;
-
+        let n = self.coverage_bins.len();
+        let w = (self.lenf / n.max(1) as f64) as f32;
         let cov_f32 = self.coverage_bins.iter().map(|f| *f as f32).collect();
-        let mut widths_f32 = Vec::<f32>::with_capacity(num_intervals);
-        for bidx in 0..num_intervals {
-            let bidxf = bidx as f32;
-            let bin_start = bidxf * bin_width;
-            let bin_end = ((bidxf + 1.0) * bin_width).min(self.lenf as f32);
-            widths_f32.push(bin_end - bin_start);
-            if bin_end < bin_start {
-                warn!("tlen_f: {:?}", tlen_f);
-                warn!("num_intervals_f: {:?}", num_intervals_f);
-                warn!("bin_width: {:?}", bin_width);
-                warn!("bidxf: {:?}", bidxf);
-            }
-            assert!(bin_end > bin_start);
-        }
-        (cov_f32, widths_f32)
+        (cov_f32, vec![w; n])
     }
 
+    /// Adds an alignment spanning `[start, stop)` (zero-based, half-open) to the coverage
+    /// profile: each of its evidence bins ([`for_each_evidence_bin`]) gains `weight` times the
+    /// fraction of the bin it covers.
     #[inline(always)]
     pub fn add_interval(&mut self, start: u32, stop: u32, weight: f64) {
-        const ONE_PLUS_EPSILON: f64 = 1.0_f64 + f64::EPSILON;
-        let num_intervals = self.coverage_bins.len();
-        let num_intervals_f = num_intervals as f64;
-        let tlen_f = self.lenf;
-        let bin_width = (tlen_f / num_intervals_f).round();
-        let start = start.min(stop);
-        let stop = start.max(stop);
-        let start_bin = (((start as f64) / tlen_f) * num_intervals_f).floor() as usize;
-        let end_bin = (((stop as f64) / tlen_f) * num_intervals_f).floor() as usize;
-
-        let get_overlap = |s1: u32, e1: u32, s2: u32, e2: u32| -> u32 {
-            if s1 <= e2 {
-                e1.min(e2) - s1.max(s2)
-            } else {
-                0_u32
-            }
-        };
-
-        for (bidx, bin) in self.coverage_bins[start_bin..end_bin]
-            .iter_mut()
-            .enumerate()
-        {
-            let bidxf = (start_bin + bidx) as f64;
-            let curr_bin_start = (bidxf * bin_width) as u32;
-            let curr_bin_end = ((bidxf + 1.0) * bin_width).min(tlen_f) as u32;
-
-            let olap = get_overlap(start, stop, curr_bin_start, curr_bin_end);
-            let olfrac = (olap as f64) / ((curr_bin_end - curr_bin_start) as f64);
-            *bin += olfrac;
-            if olfrac > ONE_PLUS_EPSILON {
-                error!("first_bin = {start_bin}, last_bin = {end_bin}");
-                error!(
-                    "bin = {}, olfrac = {}, olap = {}, curr_bin_start = {}, curr_bin_end = {}, start = {start}, stop = {stop}",
-                    *bin, olfrac, olap, curr_bin_start, curr_bin_end
-                );
-                panic!(
-                    "coverage computation error; please report this error at https://github.com/COMBINE-lab/oarfish."
-                )
-            }
-        }
+        let (lenf, n) = (self.lenf, self.coverage_bins.len());
+        let bins = &mut self.coverage_bins;
+        for_each_evidence_bin(lenf, n, start as f64, stop as f64, |b, frac| {
+            bins[b] += weight * frac;
+        });
         self.total_weight += weight;
     }
 
@@ -1503,6 +1520,55 @@ mod tests {
         let seqs: Vec<Vec<u8>> = rg.iter().map(|(_, s)| s.to_vec()).collect();
         assert_eq!(seqs[0], b"ACGTacgtNn", "U/u should become T/t");
         assert_eq!(seqs[1], b"ACGTacgtNn", "DNA bases unchanged");
+    }
+
+    /// Bin overlaps tile a span exactly: fractions times bin width sum to the span's length,
+    /// partly covered end bins included, and spans are clipped to the transcript.
+    #[test]
+    fn bin_overlaps_cover_the_span_exactly() {
+        use super::for_each_bin_overlap;
+        let span = |len: f64, n: usize, s: f64, e: f64| {
+            let (mut tot, mut bins) = (0.0, vec![]);
+            for_each_bin_overlap(len, n, s, e, |b, f| {
+                tot += f * len / n as f64;
+                bins.push(b);
+            });
+            (tot, bins)
+        };
+        let (t, b) = span(1104.0, 12, 51.0, 959.0);
+        assert!((t - 908.0).abs() < 1e-9, "{t}");
+        assert_eq!(b, (0..11).collect::<Vec<_>>());
+        let (t, b) = span(1104.0, 12, 1000.0, 1104.0);
+        assert!((t - 104.0).abs() < 1e-9);
+        assert_eq!(b, vec![10, 11]);
+        let (t, _) = span(1104.0, 12, 0.0, 5000.0);
+        assert!((t - 1104.0).abs() < 1e-9);
+        let (t, b) = span(1104.0, 12, 92.0, 184.0);
+        assert!((t - 92.0).abs() < 1e-9);
+        assert_eq!(b, vec![1]);
+        assert_eq!(span(1104.0, 12, 500.0, 500.0).1, Vec::<usize>::new());
+        // Evidence bins: the partly covered bin where a span ends is left out when the span
+        // fully covers another bin; a partly covered first bin stays.
+        let ev = |len: f64, n: usize, st: f64, en: f64| {
+            let mut v = vec![];
+            super::for_each_evidence_bin(len, n, st, en, |b, f| {
+                v.push((b, (f * 1e6).round() / 1e6))
+            });
+            v
+        };
+        let w = 1104.0 / 12.0;
+        assert_eq!(ev(1104.0, 12, 46.0, 2.5 * w), vec![(0, 0.5), (1, 1.0)]);
+        assert_eq!(ev(1104.0, 12, 0.0, 1104.0).len(), 12);
+        assert_eq!(ev(1104.0, 12, w, 3.0 * w), vec![(1, 1.0), (2, 1.0)]);
+        // No fully covered bin: everything it touches counts.
+        assert_eq!(ev(1104.0, 12, 0.5 * w, 1.5 * w), vec![(0, 0.5), (1, 0.5)]);
+        let mut txp = super::TranscriptInfo::with_len_and_bin_width(
+            std::num::NonZeroUsize::new(100).unwrap(),
+            25,
+        );
+        txp.add_interval(75, 100, 0.5);
+        assert_eq!(txp.coverage_bins, vec![0.0, 0.0, 0.0, 0.5]);
+        assert!((txp.total_weight - 0.5).abs() < 1e-12);
     }
 
     /// Reordering moves whole reads, and the input order is recovered after one or two

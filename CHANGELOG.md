@@ -28,6 +28,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Coverage model (`logistic`): corrected bin arithmetic.** Coverage was filled on bins of rounded
+  width but read weights were looked up on a fixed 100-nt grid, so the two disagreed about where
+  bins lie; the bin where each read ends was dropped by accident; and the overlap was computed in
+  unsigned integers that could underflow. Both now use one exact bin layout (`len / nbins`), with
+  the one behaviour the accident encoded made a stated rule: a read's partly covered end bin is
+  left out of both its coverage and its weight when it fully covers another bin (counting it
+  costs accuracy). Versus 0.10.3's coverage model: TKSM SQ2 0.9500 to 0.9503,
+  NanoSim NA12878 cDNA 0.8861 to 0.8857, SIRV E2 over-annotation 0.786 to 0.799, SIRV E2 0.842 to
+  0.841; LongBench better on 12 of 17 samples.
 - **`--coverage-model none|logistic|truncation`** selects the positional model in one flag;
   `--model-coverage` and `--model-truncation` remain as shorthands. Contradictory combinations,
   and the truncation model in single-cell mode (previously ignored silently), are errors.

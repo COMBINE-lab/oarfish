@@ -125,7 +125,7 @@ fn perform_inference_and_write_output(
         //obtaining the Cumulative Distribution Function (CDF) for each transcript
         logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
         //Normalize the probabilities for the records of each read
-        normalize_read_probs(store, txps, &args.bin_width);
+        normalize_read_probs(store, txps);
     }
 
     info!(
