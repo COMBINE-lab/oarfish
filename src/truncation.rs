@@ -12,15 +12,16 @@
 //! `l = e - s` and gaps `d5 = s`, `d3 = L - e`: each end has a kernel `K3(d3)`, `K5(d5)`, the
 //! distribution of a read's gap to that end when the read sits at it (a mixture of a short- and
 //! a long-scale geometric law, learned: it absorbs both how tightly molecules are anchored and
-//! how many bases the aligner trims). Every component draws a read length from an exponential
-//! law, censored at the length available to it (a read that would be longer runs to the far
-//! end), and places the read by its own rule:
+//! how many bases the aligner trims). Every component draws a read length from its own law,
+//! censored at the length available to it (a read that would be longer runs to the far
+//! end), and places the read by its own rule. With `f_c`, `S_c` the density and survival of
+//! component `c`'s read-length law (a histogram, see [`LenLaw`]):
 //!
 //! ```text
-//! 3'-anchored  K3(d3) ( h3 e^(-h3 l)  +  e^(-h3 (L - d3)) K5(d5) )
-//! 5'-anchored  K5(d5) ( h5 e^(-h5 l)  +  e^(-h5 (L - d5)) K3(d3) )
+//! 3'-anchored  K3(d3) ( f_3(l)  +  S_3(L - d3) K5(d5) )
+//! 5'-anchored  K5(d5) ( f_5(l)  +  S_5(L - d5) K3(d3) )
 //! full length  K3(d3) K5(d5)
-//! uniform      lam e^(-lam l) / (L - l + 1)  +  e^(-lam L) K3(d3) K5(d5)
+//! uniform      f_u(l) / (L - l + 1)  +  S_u(L) K3(d3) K5(d5)
 //! P(s, e | t) = p3 · 3'-anchored + p5 · 5'-anchored + pf · full length + pu · uniform
 //! ```
 //!
@@ -31,7 +32,7 @@
 //! not anchored (`pu` near one) the model reduces to uniform placement; when they are (`p3` near
 //! one) it is a 3'-anchored truncation model. The parameters are fitted in the EM together with
 //! the abundances (mixture weights from the components' posterior shares, rates by
-//! censored-exponential M-steps, kernels by geometric-mixture M-steps); each alignment's
+//! censored-histogram M-steps, kernels by geometric-mixture M-steps); each alignment's
 //! likelihood is its alignment-score probability times `P(s, e | t)`.
 
 use std::sync::atomic::Ordering;
@@ -157,19 +158,159 @@ impl Kernel {
     const MAX_SCALE: f64 = 500.0;
 }
 
+/// A read-length law: a histogram over lengths in bins of [`LenLaw::W`] nt, uniform within a
+/// bin. Lengths are right-censored at the length a transcript makes available (a read that
+/// would be longer runs to the transcript's end), so the law is fitted by the censored-data EM
+/// (each censored read is spread over the bins at or above its censoring length).
+#[derive(Clone)]
+struct LenLaw {
+    h: Vec<f64>,
+}
+
+impl std::fmt::Debug for LenLaw {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "LenLaw(mean {:.0} nt)", self.mean())
+    }
+}
+
+impl LenLaw {
+    const W: f64 = 50.0;
+
+    /// Discretized exponential law with the given mean, over lengths up to `max_len`.
+    fn exponential(mean: f64, max_len: u32) -> Self {
+        let nb = (max_len as f64 / Self::W) as usize + 1;
+        let h: Vec<f64> = (0..nb)
+            .map(|b| {
+                let (a, z) = (b as f64 * Self::W, (b + 1) as f64 * Self::W);
+                (-a / mean).exp() - (-z / mean).exp()
+            })
+            .collect();
+        let s: f64 = h.iter().sum();
+        LenLaw {
+            h: h.into_iter().map(|x| x / s).collect(),
+        }
+    }
+
+    #[inline]
+    fn bin(x: f64) -> usize {
+        (x / Self::W) as usize
+    }
+
+    fn mean(&self) -> f64 {
+        self.h
+            .iter()
+            .enumerate()
+            .map(|(b, p)| p * (b as f64 + 0.5) * Self::W)
+            .sum()
+    }
+
+    /// Per-nt density `dens[x]` and survival `surv[x] = P(length >= x)` for `x` up to `max_len`.
+    fn tables(&self, max_len: u32) -> (Vec<f64>, Vec<f64>) {
+        let nb = self.h.len();
+        let mut tail = vec![0.0; nb + 1];
+        for b in (0..nb).rev() {
+            tail[b] = tail[b + 1] + self.h[b];
+        }
+        let dens = (0..=max_len)
+            .map(|x| self.h.get(Self::bin(x as f64)).map_or(0.0, |p| p / Self::W))
+            .collect();
+        let surv = (0..=max_len)
+            .map(|x| {
+                let b = Self::bin(x as f64);
+                if b >= nb {
+                    return 0.0;
+                }
+                let within = (x as f64 - b as f64 * Self::W) / Self::W;
+                (tail[b + 1] + self.h[b] * (1.0 - within)).max(0.0)
+            })
+            .collect();
+        (dens, surv)
+    }
+
+    /// Total-variation distance between two laws.
+    fn moved(&self, o: &LenLaw) -> f64 {
+        0.5 * self
+            .h
+            .iter()
+            .zip(&o.h)
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f64>()
+    }
+}
+
+/// Expected sufficient statistics of a length law: observed lengths and censoring lengths,
+/// binned.
+#[derive(Default, Clone)]
+struct LStats {
+    stop: Vec<f64>,
+    cens: Vec<f64>,
+}
+
+impl LStats {
+    #[inline]
+    fn add(v: &mut Vec<f64>, b: usize, w: f64) {
+        if w <= 0.0 {
+            return;
+        }
+        if v.len() <= b {
+            v.resize(b + 1, 0.0);
+        }
+        v[b] += w;
+    }
+
+    fn merge(mut self, o: LStats) -> LStats {
+        for (dst, src) in [(&mut self.stop, o.stop), (&mut self.cens, o.cens)] {
+            if dst.len() < src.len() {
+                dst.resize(src.len(), 0.0);
+            }
+            dst.iter_mut().zip(src).for_each(|(a, b)| *a += b);
+        }
+        self
+    }
+
+    /// Censored-histogram EM step from `old`: an observed length counts in its bin; a read
+    /// censored in bin `c` is spread over the bins `b >= c` in proportion to `old.h[b]`.
+    fn law(&self, old: &LenLaw) -> LenLaw {
+        let nb = old.h.len();
+        let mut tail = vec![0.0; nb + 1];
+        for b in (0..nb).rev() {
+            tail[b] = tail[b + 1] + old.h[b];
+        }
+        let mut n = vec![0.0; nb];
+        // running sum over c <= b of cens[c] / P(length in bins >= c)
+        let mut acc = 0.0;
+        for b in 0..nb {
+            let c = self.cens.get(b).copied().unwrap_or(0.0);
+            if c > 0.0 && tail[b] > 0.0 {
+                acc += c / tail[b];
+            }
+            n[b] = self.stop.get(b).copied().unwrap_or(0.0) + acc * old.h[b];
+        }
+        let tot: f64 = n.iter().sum();
+        if tot <= 0.0 {
+            return old.clone();
+        }
+        // A small floor keeps every length possible.
+        let eps = 1e-9 * tot;
+        let z = tot + eps * nb as f64;
+        LenLaw {
+            h: n.into_iter().map(|x| (x + eps) / z).collect(),
+        }
+    }
+}
+
 /// The positional model's parameters.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Params {
     /// Mixture weights: 3'-anchored, 5'-anchored, full length, uniformly placed.
     p3: f64,
     p5: f64,
     pf: f64,
     pu: f64,
-    /// Per-base stop rates of the 3'-anchored and 5'-anchored components, and the rate of the
-    /// uniform component's read-length law.
-    h3: f64,
-    h5: f64,
-    lam: f64,
+    /// Read-length laws of the 3'-anchored, 5'-anchored and uniform components.
+    len3: LenLaw,
+    len5: LenLaw,
+    lenu: LenLaw,
     /// End kernels at the 3' and 5' ends.
     k3: Kernel,
     k5: Kernel,
@@ -207,15 +348,15 @@ impl Terms {
 }
 
 impl Params {
-    fn initial() -> Self {
+    fn initial(max_len: u32) -> Self {
         Params {
             p3: 0.25,
             p5: 0.25,
             pf: 0.25,
             pu: 0.25,
-            h3: 1e-3,
-            h5: 1e-3,
-            lam: 1e-3,
+            len3: LenLaw::exponential(1000.0, max_len),
+            len5: LenLaw::exponential(1000.0, max_len),
+            lenu: LenLaw::exponential(1000.0, max_len),
             k3: Kernel::initial(),
             k5: Kernel::initial(),
         }
@@ -233,13 +374,13 @@ impl Params {
         let k5b = (1.0 - self.k5.w) * self.k5.rho2 * e.k5b[d5_us];
         let (kk3, kk5) = (k3a + k3b, k5a + k5b);
         Terms {
-            a3_stop: self.p3 * kk3 * self.h3 * e.h3[l_us],
-            a3_cens: self.p3 * kk3 * e.h3[(len - d3) as usize] * kk5,
-            a5_stop: self.p5 * kk5 * self.h5 * e.h5[l_us],
-            a5_cens: self.p5 * kk5 * e.h5[(len - d5) as usize] * kk3,
+            a3_stop: self.p3 * kk3 * e.d3[l_us],
+            a3_cens: self.p3 * kk3 * e.s3[(len - d3) as usize] * kk5,
+            a5_stop: self.p5 * kk5 * e.d5[l_us],
+            a5_cens: self.p5 * kk5 * e.s5[(len - d5) as usize] * kk3,
             full: self.pf * kk3 * kk5,
-            u_stop: self.pu * self.lam * e.lam[l_us] / ((len - l) as f64 + 1.0),
-            u_cens: self.pu * e.lam[len_us] * kk3 * kk5,
+            u_stop: self.pu * e.du[l_us] / ((len - l) as f64 + 1.0),
+            u_cens: self.pu * e.su[len_us] * kk3 * kk5,
             k3a,
             k3b,
             k5a,
@@ -252,9 +393,13 @@ impl Params {
 /// of bases `x` up to the longest transcript, built once per iteration so that no alignment
 /// computes an exponential.
 struct Exps {
-    h3: Vec<f64>,
-    h5: Vec<f64>,
-    lam: Vec<f64>,
+    /// Length-law densities and survivals of the three components.
+    d3: Vec<f64>,
+    s3: Vec<f64>,
+    d5: Vec<f64>,
+    s5: Vec<f64>,
+    du: Vec<f64>,
+    su: Vec<f64>,
     k3a: Vec<f64>,
     k3b: Vec<f64>,
     k5a: Vec<f64>,
@@ -270,10 +415,16 @@ impl Exps {
                 .collect()
         };
         let geo = |rho: f64| tab(-(1.0 - rho).ln());
+        let (d3, s3) = par.len3.tables(max_len);
+        let (d5, s5) = par.len5.tables(max_len);
+        let (du, su) = par.lenu.tables(max_len);
         Exps {
-            h3: tab(par.h3),
-            h5: tab(par.h5),
-            lam: tab(par.lam),
+            d3,
+            s3,
+            d5,
+            s5,
+            du,
+            su,
             k3a: geo(par.k3.rho1),
             k3b: geo(par.k3.rho2),
             k5a: geo(par.k5.rho1),
@@ -361,13 +512,10 @@ struct Stats {
     n5: f64,
     nf: f64,
     nu: f64,
-    /// Observed stops (events) and exposure (bases) for each rate.
-    ev_h3: f64,
-    ex_h3: f64,
-    ev_h5: f64,
-    ex_h5: f64,
-    ev_lam: f64,
-    ex_lam: f64,
+    /// Length laws.
+    l3: LStats,
+    l5: LStats,
+    lu: LStats,
     /// End kernels.
     k3: KStats,
     k5: KStats,
@@ -380,12 +528,9 @@ impl Stats {
         self.n5 += o.n5;
         self.nf += o.nf;
         self.nu += o.nu;
-        self.ev_h3 += o.ev_h3;
-        self.ex_h3 += o.ex_h3;
-        self.ev_h5 += o.ev_h5;
-        self.ex_h5 += o.ex_h5;
-        self.ev_lam += o.ev_lam;
-        self.ex_lam += o.ex_lam;
+        self.l3 = self.l3.merge(o.l3);
+        self.l5 = self.l5.merge(o.l5);
+        self.lu = self.lu.merge(o.lu);
         self.k3 = self.k3.merge(o.k3);
         self.k5 = self.k5.merge(o.k5);
         self
@@ -411,39 +556,32 @@ impl Stats {
         self.nu += us + uc;
         // A read reaching the far end is right-censored at the length available to it; any
         // other read is an observed stop after `l` bases.
-        self.ev_h3 += a3s;
-        self.ex_h3 += a3s * l + a3c * (len - d3);
-        self.ev_h5 += a5s;
-        self.ex_h5 += a5s * l + a5c * (len - d5);
-        self.ev_lam += us;
-        self.ex_lam += us * l + uc * len;
+        LStats::add(&mut self.l3.stop, LenLaw::bin(l), a3s);
+        LStats::add(&mut self.l3.cens, LenLaw::bin(len - d3), a3c);
+        LStats::add(&mut self.l5.stop, LenLaw::bin(l), a5s);
+        LStats::add(&mut self.l5.cens, LenLaw::bin(len - d5), a5c);
+        LStats::add(&mut self.lu.stop, LenLaw::bin(l), us);
+        LStats::add(&mut self.lu.cens, LenLaw::bin(len), uc);
         // Every part that places the read at an end through that end's kernel observes its gap.
         self.k3.add(a3s + a3c + a5c + fl + uc, d3, t.k3a, t.k3b);
         self.k5.add(a5s + a5c + a3c + fl + uc, d5, t.k5a, t.k5b);
     }
 
-    fn params(&self, old: Params) -> Params {
+    fn params(&self, old: &Params) -> Params {
         if self.n <= 0.0 {
-            return old;
+            return old.clone();
         }
         let frac = |x: f64| (x / self.n).clamp(1e-6, 1.0);
         let (p3, p5, pf, pu) = (frac(self.n3), frac(self.n5), frac(self.nf), frac(self.nu));
         let z = p3 + p5 + pf + pu;
-        let rate = |ev: f64, ex: f64, old: f64| {
-            if ex > 0.0 && ev > 0.0 {
-                (ev / ex).clamp(1e-7, 1.0)
-            } else {
-                old
-            }
-        };
         Params {
             p3: p3 / z,
             p5: p5 / z,
             pf: pf / z,
             pu: pu / z,
-            h3: rate(self.ev_h3, self.ex_h3, old.h3),
-            h5: rate(self.ev_h5, self.ex_h5, old.h5),
-            lam: rate(self.ev_lam, self.ex_lam, old.lam),
+            len3: self.l3.law(&old.len3),
+            len5: self.l5.law(&old.len5),
+            lenu: self.lu.law(&old.lenu),
             k3: self.k3.kernel(old.k3),
             k5: self.k5.kernel(old.k5),
         }
@@ -503,16 +641,16 @@ pub fn em(em_info: &EMInfo, presence: Option<PresenceOpts>, nthreads: usize) -> 
     pool.install(|| {
         let (counts, par) = run(em_info, &Flat::new(em_info), None, presence);
         info!(
-            "truncation model: 3'-anchored {:.3} (stop rate {:.2e}/nt), 5'-anchored {:.3} \
-             (stop rate {:.2e}/nt), full length {:.3}, uniformly placed {:.3} (mean length {:.0} nt); \
+            "truncation model: 3'-anchored {:.3} (mean length {:.0} nt), 5'-anchored {:.3} \
+             (mean length {:.0} nt), full length {:.3}, uniformly placed {:.3} (mean length {:.0} nt); \
              3' end kernel {:.2}x{:.0}nt + {:.2}x{:.0}nt, 5' end kernel {:.2}x{:.0}nt + {:.2}x{:.0}nt",
             par.p3,
-            par.h3,
+            par.len3.mean(),
             par.p5,
-            par.h5,
+            par.len5.mean(),
             par.pf,
             par.pu,
-            1.0 / par.lam,
+            par.lenu.mean(),
             par.k3.w,
             1.0 / par.k3.rho1,
             1.0 - par.k3.w,
@@ -880,15 +1018,14 @@ const FREEZE_AFTER: u32 = 3;
 /// the rates. (A fraction decaying toward its floor changes by large relative amounts long after
 /// its effect on the likelihood is negligible.)
 fn moved(a: &Params, b: &Params) -> f64 {
-    let rel = |x: f64, y: f64| (x - y).abs() / y.abs().max(1e-12);
     (a.p3 - b.p3)
         .abs()
         .max((a.p5 - b.p5).abs())
         .max((a.pf - b.pf).abs())
         .max((a.pu - b.pu).abs())
-        .max(rel(a.h3, b.h3))
-        .max(rel(a.h5, b.h5))
-        .max(rel(a.lam, b.lam))
+        .max(a.len3.moved(&b.len3))
+        .max(a.len5.moved(&b.len5))
+        .max(a.lenu.moved(&b.lenu))
         .max(kmoved(&a.k3, &b.k3))
         .max(kmoved(&a.k5, &b.k5))
 }
@@ -956,10 +1093,10 @@ fn run(
         "truncation EM layout set up in {:.2}s",
         t_setup.elapsed().as_secs_f64()
     );
-    let mut par = Params::initial();
+    let max_len = f.max_len();
+    let mut par = Params::initial(max_len);
 
     let mut niter = 0_u32;
-    let max_len = f.max_len();
     let can_freeze = !matches!(lay, Layout::Atomic);
     let (mut still, mut frozen): (u32, Option<Vec<f64>>) = (0, None);
     // With the presence model the EM sees `q * prev` (see `crate::presence`); `eff` holds it.
@@ -988,7 +1125,7 @@ fn run(
             Some(ws) => step_static(&mut lay, f, ws, src, &curr, mult),
             None => {
                 let e = Exps::new(&par, max_len);
-                let next = step_with(&mut lay, f, &par, src, &curr, mult, &e).params(par);
+                let next = step_with(&mut lay, f, &par, src, &curr, mult, &e).params(&par);
                 still = if moved(&next, &par) < FREEZE_TOL {
                     still + 1
                 } else {
@@ -1117,10 +1254,10 @@ mod tests {
         let n = mult.map_or((f.off.len() - 1) as f64, |m| m.iter().sum::<u32>() as f64);
         let mut prev: Vec<AtomicF64> = (0..ntx).map(|_| AtomicF64::new(n / ntx as f64)).collect();
         let mut curr: Vec<AtomicF64> = (0..ntx).map(|_| AtomicF64::new(0.0)).collect();
-        let mut par = Params::initial();
+        let mut par = Params::initial(f.max_len());
         for _ in 0..iters {
             let e = Exps::new(&par, f.max_len());
-            par = step_with(&mut lay, f, &par, &prev, &curr, mult, &e).params(par);
+            par = step_with(&mut lay, f, &par, &prev, &curr, mult, &e).params(&par);
             std::mem::swap(&mut prev, &mut curr);
             curr.iter().for_each(|x| x.store(0.0, Ordering::Relaxed));
         }
@@ -1199,7 +1336,7 @@ mod tests {
             assert!((x - y).abs() < 1e-6 * y.max(1.0), "{a:?} {b:?}");
         }
         assert!(
-            (pa.h3 - pb.h3).abs() < 1e-9 && (pa.p3 - pb.p3).abs() < 1e-9,
+            pa.len3.moved(&pb.len3) < 1e-9 && (pa.p3 - pb.p3).abs() < 1e-9,
             "{pa:?} {pb:?}"
         );
     }
@@ -1225,7 +1362,7 @@ mod tests {
                     assert!((x - y).abs() < 1e-9 * x.max(1.0), "{how:?} {a:?} {b:?}");
                 }
                 assert!(
-                    (pa.h3 - pb.h3).abs() < 1e-12 && (pa.p3 - pb.p3).abs() < 1e-12,
+                    pa.len3.moved(&pb.len3) < 1e-12 && (pa.p3 - pb.p3).abs() < 1e-12,
                     "{how:?}"
                 );
             }
@@ -1246,7 +1383,7 @@ mod tests {
             reads.push(vec![(1, 1.0, 400.0, 1000.0), (2, 0.8, 900.0, 1500.0)]);
         }
         let f = flat(&reads, &lens);
-        let par = Params::initial();
+        let par = Params::initial(f.max_len());
         let e = Exps::new(&par, f.max_len());
         let ws: Vec<f64> = (0..f.target.len())
             .map(|k| {
@@ -1276,6 +1413,6 @@ mod tests {
         for (x, y) in a.iter().zip(&b) {
             assert!((x - y).abs() < 1e-9 * x.max(1.0), "{a:?} {b:?}");
         }
-        assert!((pa.h3 - pb.h3).abs() < 1e-12 && (pa.lam - pb.lam).abs() < 1e-12);
+        assert!(pa.len3.moved(&pb.len3) < 1e-12 && pa.lenu.moved(&pb.lenu) < 1e-12);
     }
 }
