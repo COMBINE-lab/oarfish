@@ -1,30 +1,35 @@
-//! EM with a positional likelihood for 3'-anchored, possibly 5'-truncated long reads.
+//! EM with a positional likelihood: a mixture of the ways long reads can sit on a transcript.
 //!
 //! Long-read protocols sequence one read per captured molecule, so read counts need no
 //! fragmentation-style length correction. What does depend on the transcript is where a read
-//! can land on it. Reads end near the transcript's 3' end (poly(A) priming, or direct RNA
-//! sequencing from the 3' end), and they extend toward the 5' end until reverse transcription,
-//! degradation or the pore stops them, at a roughly constant rate per base. For an alignment of a
-//! read to transcript `t` of length `len` covering `[start, end)`, with `ext = len - start` the
-//! read's extent from the transcript's 3' end:
+//! can land on it, and that differs by protocol: direct RNA and oligo(dT)-primed cDNA give reads
+//! anchored at the 3' end and truncated toward the 5' end; some library preparations keep the
+//! 5' end and lose the 3' end; full-length selection gives reads spanning the whole molecule;
+//! and fragmentation (or a simulator that places reads uniformly) gives reads anywhere on it.
+//! Which of these a sample contains is learned from the sample, as a mixture.
+//!
+//! For an alignment covering `[s, e)` of a transcript of length `L`, with read length
+//! `l = e - s` and gaps `d5 = s`, `d3 = L - e`, let `F5 = [d5 < BW]`, `F3 = [d3 < BW]`. Every
+//! component draws a read length from an exponential law, censored at the transcript length (a
+//! read that would be longer spans the transcript), and places the read by its own rule:
 //!
 //! ```text
-//! P(start | t) = [start < BW] (w + (1 - w) e^(-h len)) / BW     reached the 5' end
-//!              + (1 - w) h e^(-h ext)                           stopped after ext bases
-//! P(end | t)   = r [len - end < BW] / BW + (1 - r) g e^(-g (len - end))
+//! 3'-anchored  F3 / BW · ( h3 e^(-h3 l)  +  F5 e^(-h3 L) / BW )
+//! 5'-anchored  F5 / BW · ( h5 e^(-h5 l)  +  F3 e^(-h5 L) / BW )
+//! full length  F3 F5 / BW²
+//! uniform      lam e^(-lam l) / (L - l + 1)  +  F3 F5 e^(-lam L) / BW²
+//! P(s, e | t) = p3 · 3'-anchored + p5 · 5'-anchored + pf · full length + pu · uniform
 //! ```
 //!
-//! `w` is the fraction of molecules that are full length regardless of length (full-length
-//! selection in some protocols), `h` the per-base stop rate, `r` the fraction of reads ending at
-//! the 3' end, and `g` the decay of the rest. For each transcript the start term is a
-//! distribution over the starts it can produce, so a long transcript pays for its many possible
-//! truncation points: a read that is full length for a short isoform but truncated for a longer
-//! one favors the short one, by as much as the learned stop rate says truncation is unlikely.
-//! The parametric (exponential) form keeps the model from explaining reads shared by two
-//! isoforms as truncations that all stop at the same base, which a free-form truncation
-//! histogram can learn. The four parameters are fitted in the EM together with the abundances
-//! (censored-exponential M-steps); each alignment's likelihood is its alignment-score
-//! probability times `P(start | t) P(end | t)`.
+//! Each component sums to one over the placements a transcript of length `L` allows, so a
+//! transcript is never favored merely because one of its ends happens to coincide with a read's
+//! end: under the uniform component every placement of a read of length `l` is equally likely,
+//! and a candidate is judged only by how much room it gave the read. When the reads are not
+//! anchored (`pu` near one) the model reduces to uniform placement; when they are (`p3` near one)
+//! it is a 3'-anchored truncation model. The seven parameters are fitted in the EM together with
+//! the abundances (mixture weights from the components' posterior shares, rates by
+//! censored-exponential M-steps); each alignment's likelihood is its alignment-score probability
+//! times `P(s, e | t)`.
 
 use std::sync::atomic::Ordering;
 
@@ -67,6 +72,13 @@ impl Flat {
     #[inline]
     fn len(&self, k: usize) -> u32 {
         self.tlen[self.target[k] as usize]
+    }
+
+    /// Aligned length `l` and the gap `d5` from the transcript's 5' end.
+    #[inline]
+    fn l_d5(&self, k: usize) -> (u32, u32) {
+        let (len, ext, d3) = (self.len(k), self.ext[k], self.d3[k]);
+        (ext.saturating_sub(d3), len.saturating_sub(ext))
     }
 
     fn max_len(&self) -> u32 {
@@ -123,72 +135,91 @@ impl Flat {
 /// The positional model's parameters.
 #[derive(Clone, Copy, Debug)]
 struct Params {
-    /// Fraction of molecules full length regardless of length.
-    w: f64,
-    /// Per-base stop rate toward the 5' end.
-    h: f64,
-    /// Fraction of reads ending at the 3' end, and the decay of the others' distance from it.
-    r: f64,
-    g: f64,
+    /// Mixture weights: 3'-anchored, 5'-anchored, full length, uniformly placed.
+    p3: f64,
+    p5: f64,
+    pf: f64,
+    pu: f64,
+    /// Per-base stop rates of the 3'-anchored and 5'-anchored components, and the rate of the
+    /// uniform component's read-length law.
+    h3: f64,
+    h5: f64,
+    lam: f64,
 }
 
-/// Per-alignment terms of the positional likelihood.
+/// Per-alignment terms of the positional likelihood, each already weighted by its mixture
+/// weight. `*_stop` is the part where the read's length was observed, `*_cens` the part where
+/// it spans the transcript (length censored at `L`).
 struct Terms {
-    /// Reached the 5' end because the molecule is full length by protocol (`w`), or by not
-    /// stopping (`(1 - w) e^(-h len)`); stopped after `ext` bases.
-    full_w: f64,
-    full_surv: f64,
-    stopped: f64,
-    /// Ends at the 3' end; ends `d3` bases before it.
-    at3: f64,
-    off3: f64,
+    a3_stop: f64,
+    a3_cens: f64,
+    a5_stop: f64,
+    a5_cens: f64,
+    full: f64,
+    u_stop: f64,
+    u_cens: f64,
 }
 
 impl Terms {
-    fn start(&self) -> f64 {
-        self.full_w + self.full_surv + self.stopped
-    }
-    fn end(&self) -> f64 {
-        self.at3 + self.off3
+    #[inline]
+    fn total(&self) -> f64 {
+        self.a3_stop + self.a3_cens + self.a5_stop + self.a5_cens + self.full + self.u_stop
+            + self.u_cens
     }
 }
 
 impl Params {
     fn initial() -> Self {
         Params {
-            w: 0.5,
-            h: 1e-3,
-            r: 0.5,
-            g: 2e-3,
+            p3: 0.25,
+            p5: 0.25,
+            pf: 0.25,
+            pu: 0.25,
+            h3: 1e-3,
+            h5: 1e-3,
+            lam: 1e-3,
         }
     }
 
     #[inline]
     fn terms(&self, f: &Flat, k: usize, e: &Exps) -> Terms {
-        let full = f.ext[k] as f64 > f.len(k) as f64 - BW;
+        let len = f.len(k);
+        let (l, d5) = f.l_d5(k);
+        let f3 = (f.d3[k] as f64) < BW;
+        let f5 = (d5 as f64) < BW;
+        let both = f3 && f5;
+        let (l_us, len_us) = (l as usize, len as usize);
+        let bw2 = BW * BW;
         Terms {
-            full_w: if full { self.w / BW } else { 0.0 },
-            full_surv: if full {
-                (1.0 - self.w) * e.h[f.len(k) as usize] / BW
+            a3_stop: if f3 {
+                self.p3 * self.h3 * e.h3[l_us] / BW
             } else {
                 0.0
             },
-            stopped: (1.0 - self.w) * self.h * e.h[f.ext[k] as usize],
-            at3: if (f.d3[k] as f64) < BW {
-                self.r / BW
+            a3_cens: if both { self.p3 * e.h3[len_us] / bw2 } else { 0.0 },
+            a5_stop: if f5 {
+                self.p5 * self.h5 * e.h5[l_us] / BW
             } else {
                 0.0
             },
-            off3: (1.0 - self.r) * self.g * e.g[f.d3[k] as usize],
+            a5_cens: if both { self.p5 * e.h5[len_us] / bw2 } else { 0.0 },
+            full: if both { self.pf / bw2 } else { 0.0 },
+            u_stop: self.pu * self.lam * e.lam[l_us] / ((len - l) as f64 + 1.0),
+            u_cens: if both {
+                self.pu * e.lam[len_us] / bw2
+            } else {
+                0.0
+            },
         }
     }
 }
 
-/// `exp(-h x)` and `exp(-g x)` for every whole number of bases `x` up to the longest
+/// `exp(-rate x)` for each rate and every whole number of bases `x` up to the longest
 /// transcript, built once per iteration so that no alignment computes an exponential.
 struct Exps {
-    h: Vec<f64>,
-    g: Vec<f64>,
+    h3: Vec<f64>,
+    h5: Vec<f64>,
+    lam: Vec<f64>,
 }
 
 impl Exps {
@@ -200,8 +231,9 @@ impl Exps {
                 .collect()
         };
         Exps {
-            h: tab(par.h),
-            g: tab(par.g),
+            h3: tab(par.h3),
+            h5: tab(par.h5),
+            lam: tab(par.lam),
         }
     }
 }
@@ -209,76 +241,89 @@ impl Exps {
 /// Expected sufficient statistics for the M-step, accumulated per thread.
 #[derive(Default)]
 struct Stats {
-    /// Posterior mass, and its parts: full length by protocol, full length by not stopping,
-    /// stopped; ending at the 3' end, ending before it.
+    /// Posterior mass, and its share in each component.
     n: f64,
-    n_w: f64,
-    n_surv: f64,
-    n_stop: f64,
-    n_at3: f64,
-    n_off3: f64,
-    /// Exposure (bases) for the stop rate and for the 3' decay.
-    expo_h: f64,
-    expo_g: f64,
+    n3: f64,
+    n5: f64,
+    nf: f64,
+    nu: f64,
+    /// Observed stops (events) and exposure (bases) for each rate.
+    ev_h3: f64,
+    ex_h3: f64,
+    ev_h5: f64,
+    ex_h5: f64,
+    ev_lam: f64,
+    ex_lam: f64,
 }
 
 impl Stats {
     fn merge(mut self, o: Stats) -> Stats {
         self.n += o.n;
-        self.n_w += o.n_w;
-        self.n_surv += o.n_surv;
-        self.n_stop += o.n_stop;
-        self.n_at3 += o.n_at3;
-        self.n_off3 += o.n_off3;
-        self.expo_h += o.expo_h;
-        self.expo_g += o.expo_g;
+        self.n3 += o.n3;
+        self.n5 += o.n5;
+        self.nf += o.nf;
+        self.nu += o.nu;
+        self.ev_h3 += o.ev_h3;
+        self.ex_h3 += o.ex_h3;
+        self.ev_h5 += o.ev_h5;
+        self.ex_h5 += o.ex_h5;
+        self.ev_lam += o.ev_lam;
+        self.ex_lam += o.ex_lam;
         self
     }
 
     fn add(&mut self, f: &Flat, k: usize, t: &Terms, post: f64) {
-        let (s, e) = (t.start(), t.end());
-        if s <= 0.0 || e <= 0.0 {
+        let tot = t.total();
+        if tot <= 0.0 {
             return;
         }
-        let (pw, psurv, pstop) = (
-            post * t.full_w / s,
-            post * t.full_surv / s,
-            post * t.stopped / s,
-        );
-        let (pat, poff) = (post * t.at3 / e, post * t.off3 / e);
+        let q = post / tot;
+        let (l, _) = f.l_d5(k);
+        let (l, len) = (l as f64, f.len(k) as f64);
+        let (a3s, a3c) = (q * t.a3_stop, q * t.a3_cens);
+        let (a5s, a5c) = (q * t.a5_stop, q * t.a5_cens);
+        let (us, uc) = (q * t.u_stop, q * t.u_cens);
         self.n += post;
-        self.n_w += pw;
-        self.n_surv += psurv;
-        self.n_stop += pstop;
-        // A surviving read is right-censored at the transcript length; a stopped one is an
-        // observed stop after `ext` bases.
-        self.expo_h += psurv * f.len(k) as f64 + pstop * f.ext[k] as f64;
-        self.n_at3 += pat;
-        self.n_off3 += poff;
-        self.expo_g += poff * f.d3[k] as f64;
+        self.n3 += a3s + a3c;
+        self.n5 += a5s + a5c;
+        self.nf += q * t.full;
+        self.nu += us + uc;
+        // A read spanning the transcript is right-censored at its length; any other read is
+        // an observed stop after `l` bases.
+        self.ev_h3 += a3s;
+        self.ex_h3 += a3s * l + a3c * len;
+        self.ev_h5 += a5s;
+        self.ex_h5 += a5s * l + a5c * len;
+        self.ev_lam += us;
+        self.ex_lam += us * l + uc * len;
     }
 
     fn params(&self, old: Params) -> Params {
         if self.n <= 0.0 {
             return old;
         }
-        let clamp = |x: f64| x.clamp(1e-6, 1.0 - 1e-6);
+        let frac = |x: f64| (x / self.n).clamp(1e-6, 1.0);
+        let (p3, p5, pf, pu) = (frac(self.n3), frac(self.n5), frac(self.nf), frac(self.nu));
+        let z = p3 + p5 + pf + pu;
+        let rate = |ev: f64, ex: f64, old: f64| {
+            if ex > 0.0 && ev > 0.0 {
+                (ev / ex).clamp(1e-7, 1.0)
+            } else {
+                old
+            }
+        };
         Params {
-            w: clamp(self.n_w / self.n),
-            h: if self.expo_h > 0.0 {
-                (self.n_stop / self.expo_h).clamp(1e-7, 1.0)
-            } else {
-                old.h
-            },
-            r: clamp(self.n_at3 / self.n),
-            g: if self.expo_g > 0.0 {
-                (self.n_off3 / self.expo_g).clamp(1e-7, 1.0)
-            } else {
-                old.g
-            },
+            p3: p3 / z,
+            p5: p5 / z,
+            pf: pf / z,
+            pu: pu / z,
+            h3: rate(self.ev_h3, self.ex_h3, old.h3),
+            h5: rate(self.ev_h5, self.ex_h5, old.h5),
+            lam: rate(self.ev_lam, self.ex_lam, old.lam),
         }
     }
 }
+
 
 /// One EM round: distribute each read over its alignments, accumulating abundances into `curr`
 /// and the positional statistics into the returned `Stats`. With `mult`, read `r` counts
@@ -305,8 +350,7 @@ fn step(
                 let t = par.terms(f, k, e);
                 denom += prev[f.target[k] as usize].load(Ordering::Relaxed)
                     * f.prob[k] as f64
-                    * t.start()
-                    * t.end();
+                    * t.total();
             }
             if denom > constants::EM_DENOM_THRESH {
                 for k in lo..hi {
@@ -315,8 +359,7 @@ fn step(
                     let post = m
                         * prev[tid].load(Ordering::Relaxed)
                         * f.prob[k] as f64
-                        * t.start()
-                        * t.end()
+                        * t.total()
                         / denom;
                     curr[tid].fetch_add(post, Ordering::AcqRel);
                     st.add(f, k, &t, post);
@@ -338,13 +381,15 @@ pub fn em(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
     pool.install(|| {
         let (counts, par) = run(em_info, &Flat::new(em_info), None);
         info!(
-            "truncation model: full length by protocol {:.3}; stop rate {:.2e}/nt (mean extent {:.0} nt); \
-             ending within {} nt of the 3' end {:.3}",
-            par.w,
-            par.h,
-            1.0 / par.h,
-            BW as u32,
-            par.r
+            "truncation model: 3'-anchored {:.3} (stop rate {:.2e}/nt), 5'-anchored {:.3} \
+             (stop rate {:.2e}/nt), full length {:.3}, uniformly placed {:.3} (mean length {:.0} nt)",
+            par.p3,
+            par.h3,
+            par.p5,
+            par.h5,
+            par.pf,
+            par.pu,
+            1.0 / par.lam
         );
         counts
     })
@@ -512,7 +557,7 @@ fn step_with(
         for k in lo..hi {
             let tid = f.target[k] as usize;
             let t = par.terms(f, k, e);
-            let w = prev[tid].load(Ordering::Relaxed) * f.prob[k] as f64 * t.start() * t.end();
+            let w = prev[tid].load(Ordering::Relaxed) * f.prob[k] as f64 * t.total();
             denom += w;
             scratch.push((t, w));
         }
@@ -695,16 +740,19 @@ fn step_static(
 const FREEZE_TOL: f64 = 1e-6;
 const FREEZE_AFTER: u32 = 3;
 
-/// How far the parameters moved: absolute change for the fractions `w` and `r`, relative change
-/// for the rates `h` and `g`. (A fraction decaying toward its floor changes by large relative
-/// amounts long after its effect on the likelihood is negligible.)
+/// How far the parameters moved: absolute change for the mixture weights, relative change for
+/// the rates. (A fraction decaying toward its floor changes by large relative amounts long after
+/// its effect on the likelihood is negligible.)
 fn moved(a: &Params, b: &Params) -> f64 {
     let rel = |x: f64, y: f64| (x - y).abs() / y.abs().max(1e-12);
-    (a.w - b.w)
+    (a.p3 - b.p3)
         .abs()
-        .max((a.r - b.r).abs())
-        .max(rel(a.h, b.h))
-        .max(rel(a.g, b.g))
+        .max((a.p5 - b.p5).abs())
+        .max((a.pf - b.pf).abs())
+        .max((a.pu - b.pu).abs())
+        .max(rel(a.h3, b.h3))
+        .max(rel(a.h5, b.h5))
+        .max(rel(a.lam, b.lam))
 }
 
 fn run(em_info: &EMInfo, f: &Flat, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
@@ -746,7 +794,7 @@ fn run(em_info: &EMInfo, f: &Flat, mult: Option<&[u32]>) -> (Vec<f64>, Params) {
                         .into_par_iter()
                         .map(|k| {
                             let t = par.terms(f, k, &e);
-                            f.prob[k] as f64 * t.start() * t.end()
+                            f.prob[k] as f64 * t.total()
                         })
                         .collect();
                     info!(
@@ -885,8 +933,10 @@ mod tests {
         let f = flat(&reads, &lens);
         let (est, par) = fit(&f, 2, 300);
         assert!((est[0] + est[1] - 1000.0).abs() < 1e-6);
+        // With exactly placed ends the mixture weights are not identifiable here (uniform
+        // placement explains a full-length read as well as anchoring does), so only the
+        // estimates are checked.
         assert!(est[1] > 500.0, "{est:?} {par:?}");
-        assert!(par.r > 0.9, "{par:?}");
     }
 
     /// With every read full length and unambiguous, estimates are the read counts.
@@ -929,7 +979,7 @@ mod tests {
             assert!((x - y).abs() < 1e-6 * y.max(1.0), "{a:?} {b:?}");
         }
         assert!(
-            (pa.h - pb.h).abs() < 1e-9 && (pa.r - pb.r).abs() < 1e-9,
+            (pa.h3 - pb.h3).abs() < 1e-9 && (pa.p3 - pb.p3).abs() < 1e-9,
             "{pa:?} {pb:?}"
         );
     }
@@ -955,7 +1005,7 @@ mod tests {
                     assert!((x - y).abs() < 1e-9 * x.max(1.0), "{how:?} {a:?} {b:?}");
                 }
                 assert!(
-                    (pa.h - pb.h).abs() < 1e-12 && (pa.r - pb.r).abs() < 1e-12,
+                    (pa.h3 - pb.h3).abs() < 1e-12 && (pa.p3 - pb.p3).abs() < 1e-12,
                     "{how:?}"
                 );
             }
@@ -981,7 +1031,7 @@ mod tests {
         let ws: Vec<f64> = (0..f.target.len())
             .map(|k| {
                 let t = par.terms(&f, k, &e);
-                f.prob[k] as f64 * t.start() * t.end()
+                f.prob[k] as f64 * t.total()
             })
             .collect();
         let prev: Vec<AtomicF64> = [3.0, 1.0, 2.0].into_iter().map(AtomicF64::new).collect();
@@ -1006,6 +1056,6 @@ mod tests {
         for (x, y) in a.iter().zip(&b) {
             assert!((x - y).abs() < 1e-9 * x.max(1.0), "{a:?} {b:?}");
         }
-        assert!((pa.h - pb.h).abs() < 1e-12 && (pa.g - pb.g).abs() < 1e-12);
+        assert!((pa.h3 - pb.h3).abs() < 1e-12 && (pa.lam - pb.lam).abs() < 1e-12);
     }
 }
