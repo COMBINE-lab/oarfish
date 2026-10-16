@@ -9,27 +9,30 @@
 //! Which of these a sample contains is learned from the sample, as a mixture.
 //!
 //! For an alignment covering `[s, e)` of a transcript of length `L`, with read length
-//! `l = e - s` and gaps `d5 = s`, `d3 = L - e`, let `F5 = [d5 < BW]`, `F3 = [d3 < BW]`. Every
-//! component draws a read length from an exponential law, censored at the transcript length (a
-//! read that would be longer spans the transcript), and places the read by its own rule:
+//! `l = e - s` and gaps `d5 = s`, `d3 = L - e`: each end has a kernel `K3(d3)`, `K5(d5)`, the
+//! distribution of a read's gap to that end when the read sits at it (a mixture of a short- and
+//! a long-scale geometric law, learned: it absorbs both how tightly molecules are anchored and
+//! how many bases the aligner trims). Every component draws a read length from an exponential
+//! law, censored at the length available to it (a read that would be longer runs to the far
+//! end), and places the read by its own rule:
 //!
 //! ```text
-//! 3'-anchored  F3 / BW · ( h3 e^(-h3 l)  +  F5 e^(-h3 L) / BW )
-//! 5'-anchored  F5 / BW · ( h5 e^(-h5 l)  +  F3 e^(-h5 L) / BW )
-//! full length  F3 F5 / BW²
-//! uniform      lam e^(-lam l) / (L - l + 1)  +  F3 F5 e^(-lam L) / BW²
+//! 3'-anchored  K3(d3) ( h3 e^(-h3 l)  +  e^(-h3 (L - d3)) K5(d5) )
+//! 5'-anchored  K5(d5) ( h5 e^(-h5 l)  +  e^(-h5 (L - d5)) K3(d3) )
+//! full length  K3(d3) K5(d5)
+//! uniform      lam e^(-lam l) / (L - l + 1)  +  e^(-lam L) K3(d3) K5(d5)
 //! P(s, e | t) = p3 · 3'-anchored + p5 · 5'-anchored + pf · full length + pu · uniform
 //! ```
 //!
-//! Each component sums to one over the placements a transcript of length `L` allows, so a
-//! transcript is never favored merely because one of its ends happens to coincide with a read's
-//! end: under the uniform component every placement of a read of length `l` is equally likely,
-//! and a candidate is judged only by how much room it gave the read. When the reads are not
-//! anchored (`pu` near one) the model reduces to uniform placement; when they are (`p3` near one)
-//! it is a 3'-anchored truncation model. The seven parameters are fitted in the EM together with
+//! Each component sums to (about) one over the placements a transcript of length `L` allows, so
+//! a transcript is never favored merely because one of its ends happens to coincide with a
+//! read's end: under the uniform component every placement of a read of length `l` is equally
+//! likely, and a candidate is judged only by how much room it gave the read. When the reads are
+//! not anchored (`pu` near one) the model reduces to uniform placement; when they are (`p3` near
+//! one) it is a 3'-anchored truncation model. The parameters are fitted in the EM together with
 //! the abundances (mixture weights from the components' posterior shares, rates by
-//! censored-exponential M-steps); each alignment's likelihood is its alignment-score probability
-//! times `P(s, e | t)`.
+//! censored-exponential M-steps, kernels by geometric-mixture M-steps); each alignment's
+//! likelihood is its alignment-score probability times `P(s, e | t)`.
 
 use std::sync::atomic::Ordering;
 
@@ -41,9 +44,6 @@ use tracing::{info, span, trace};
 use crate::presence::{Presence, PresenceOpts};
 use crate::util::constants;
 use crate::util::oarfish_types::{EMInfo, TranscriptInfo};
-
-/// Width (nt) of the windows at the transcript ends that count as "at the end".
-const BW: f64 = 50.0;
 
 /// Alignments flattened with the positional quantities the model needs.
 struct Flat {
@@ -133,6 +133,30 @@ impl Flat {
     }
 }
 
+/// An end kernel: the distribution of the gap `d` (nt) between a read's end and the transcript's
+/// end, for reads at that end. A mixture of two geometric laws, a short and a long scale:
+/// `K(d) = w rho1 (1 - rho1)^d + (1 - w) rho2 (1 - rho2)^d`.
+#[derive(Clone, Copy, Debug)]
+struct Kernel {
+    w: f64,
+    rho1: f64,
+    rho2: f64,
+}
+
+impl Kernel {
+    fn initial() -> Self {
+        Kernel {
+            w: 0.5,
+            rho1: 1.0 / 20.0,
+            rho2: 1.0 / 200.0,
+        }
+    }
+
+    /// Longest scale (`1 / rho`, nt) a kernel may take, so that an end kernel
+    /// stays an end effect rather than a slowly decaying placement preference.
+    const MAX_SCALE: f64 = 500.0;
+}
+
 /// The positional model's parameters.
 #[derive(Clone, Copy, Debug)]
 struct Params {
@@ -146,11 +170,15 @@ struct Params {
     h3: f64,
     h5: f64,
     lam: f64,
+    /// End kernels at the 3' and 5' ends.
+    k3: Kernel,
+    k5: Kernel,
 }
 
 /// Per-alignment terms of the positional likelihood, each already weighted by its mixture
 /// weight. `*_stop` is the part where the read's length was observed, `*_cens` the part where
-/// it spans the transcript (length censored at `L`).
+/// it spans the transcript (length censored at `L`). `k3a`, `k3b` are the two parts of the
+/// 3' kernel at this alignment's 3' gap (`K3 = k3a + k3b`), likewise `k5a`, `k5b`.
 struct Terms {
     a3_stop: f64,
     a3_cens: f64,
@@ -159,6 +187,10 @@ struct Terms {
     full: f64,
     u_stop: f64,
     u_cens: f64,
+    k3a: f64,
+    k3b: f64,
+    k5a: f64,
+    k5b: f64,
 }
 
 impl Terms {
@@ -184,6 +216,8 @@ impl Params {
             h3: 1e-3,
             h5: 1e-3,
             lam: 1e-3,
+            k3: Kernel::initial(),
+            k5: Kernel::initial(),
         }
     }
 
@@ -191,49 +225,40 @@ impl Params {
     fn terms(&self, f: &Flat, k: usize, e: &Exps) -> Terms {
         let len = f.len(k);
         let (l, d5) = f.l_d5(k);
-        let f3 = (f.d3[k] as f64) < BW;
-        let f5 = (d5 as f64) < BW;
-        let both = f3 && f5;
-        let (l_us, len_us) = (l as usize, len as usize);
-        let bw2 = BW * BW;
+        let d3 = f.d3[k];
+        let (l_us, len_us, d3_us, d5_us) = (l as usize, len as usize, d3 as usize, d5 as usize);
+        let k3a = self.k3.w * self.k3.rho1 * e.k3a[d3_us];
+        let k3b = (1.0 - self.k3.w) * self.k3.rho2 * e.k3b[d3_us];
+        let k5a = self.k5.w * self.k5.rho1 * e.k5a[d5_us];
+        let k5b = (1.0 - self.k5.w) * self.k5.rho2 * e.k5b[d5_us];
+        let (kk3, kk5) = (k3a + k3b, k5a + k5b);
         Terms {
-            a3_stop: if f3 {
-                self.p3 * self.h3 * e.h3[l_us] / BW
-            } else {
-                0.0
-            },
-            a3_cens: if both {
-                self.p3 * e.h3[len_us] / bw2
-            } else {
-                0.0
-            },
-            a5_stop: if f5 {
-                self.p5 * self.h5 * e.h5[l_us] / BW
-            } else {
-                0.0
-            },
-            a5_cens: if both {
-                self.p5 * e.h5[len_us] / bw2
-            } else {
-                0.0
-            },
-            full: if both { self.pf / bw2 } else { 0.0 },
+            a3_stop: self.p3 * kk3 * self.h3 * e.h3[l_us],
+            a3_cens: self.p3 * kk3 * e.h3[(len - d3) as usize] * kk5,
+            a5_stop: self.p5 * kk5 * self.h5 * e.h5[l_us],
+            a5_cens: self.p5 * kk5 * e.h5[(len - d5) as usize] * kk3,
+            full: self.pf * kk3 * kk5,
             u_stop: self.pu * self.lam * e.lam[l_us] / ((len - l) as f64 + 1.0),
-            u_cens: if both {
-                self.pu * e.lam[len_us] / bw2
-            } else {
-                0.0
-            },
+            u_cens: self.pu * e.lam[len_us] * kk3 * kk5,
+            k3a,
+            k3b,
+            k5a,
+            k5b,
         }
     }
 }
 
-/// `exp(-rate x)` for each rate and every whole number of bases `x` up to the longest
-/// transcript, built once per iteration so that no alignment computes an exponential.
+/// `exp(-rate x)` for each rate, and `(1 - rho)^x` for each kernel scale, for every whole number
+/// of bases `x` up to the longest transcript, built once per iteration so that no alignment
+/// computes an exponential.
 struct Exps {
     h3: Vec<f64>,
     h5: Vec<f64>,
     lam: Vec<f64>,
+    k3a: Vec<f64>,
+    k3b: Vec<f64>,
+    k5a: Vec<f64>,
+    k5b: Vec<f64>,
 }
 
 impl Exps {
@@ -244,10 +269,85 @@ impl Exps {
                 .map(|x| (-rate * x as f64).exp())
                 .collect()
         };
+        let geo = |rho: f64| tab(-(1.0 - rho).ln());
         Exps {
             h3: tab(par.h3),
             h5: tab(par.h5),
             lam: tab(par.lam),
+            k3a: geo(par.k3.rho1),
+            k3b: geo(par.k3.rho2),
+            k5a: geo(par.k5.rho1),
+            k5b: geo(par.k5.rho2),
+        }
+    }
+}
+
+/// Expected sufficient statistics of one end kernel: posterior weight and weighted gap sum for
+/// each of its two geometric parts.
+#[derive(Default, Clone, Copy)]
+struct KStats {
+    na: f64,
+    sa: f64,
+    nb: f64,
+    sb: f64,
+}
+
+impl KStats {
+    fn merge(self, o: KStats) -> KStats {
+        KStats {
+            na: self.na + o.na,
+            sa: self.sa + o.sa,
+            nb: self.nb + o.nb,
+            sb: self.sb + o.sb,
+        }
+    }
+
+    /// Weight `wt` of an observation at gap `d`, split between the parts in proportion `a : b`.
+    #[inline]
+    fn add(&mut self, wt: f64, d: f64, a: f64, b: f64) {
+        let z = a + b;
+        if wt <= 0.0 || z <= 0.0 {
+            return;
+        }
+        let (wa, wb) = (wt * a / z, wt * b / z);
+        self.na += wa;
+        self.sa += wa * d;
+        self.nb += wb;
+        self.sb += wb * d;
+    }
+
+    /// Geometric M-steps (`rho = n / (n + sum d)`), ordered so that part one is the shorter
+    /// scale.
+    fn kernel(&self, old: Kernel) -> Kernel {
+        let n = self.na + self.nb;
+        if n <= 0.0 {
+            return old;
+        }
+        let lo = 1.0 / Kernel::MAX_SCALE;
+        let rho = |n: f64, s: f64, old: f64| {
+            if n > 0.0 {
+                (n / (n + s)).clamp(lo, 0.999)
+            } else {
+                old
+            }
+        };
+        let (w, r1, r2) = (
+            (self.na / n).clamp(1e-6, 1.0 - 1e-6),
+            rho(self.na, self.sa, old.rho1),
+            rho(self.nb, self.sb, old.rho2),
+        );
+        if r1 >= r2 {
+            Kernel {
+                w,
+                rho1: r1,
+                rho2: r2,
+            }
+        } else {
+            Kernel {
+                w: 1.0 - w,
+                rho1: r2,
+                rho2: r1,
+            }
         }
     }
 }
@@ -268,6 +368,9 @@ struct Stats {
     ex_h5: f64,
     ev_lam: f64,
     ex_lam: f64,
+    /// End kernels.
+    k3: KStats,
+    k5: KStats,
 }
 
 impl Stats {
@@ -283,6 +386,8 @@ impl Stats {
         self.ex_h5 += o.ex_h5;
         self.ev_lam += o.ev_lam;
         self.ex_lam += o.ex_lam;
+        self.k3 = self.k3.merge(o.k3);
+        self.k5 = self.k5.merge(o.k5);
         self
     }
 
@@ -292,24 +397,29 @@ impl Stats {
             return;
         }
         let q = post / tot;
-        let (l, _) = f.l_d5(k);
-        let (l, len) = (l as f64, f.len(k) as f64);
+        let (l, d5) = f.l_d5(k);
+        let d3 = f.d3[k];
+        let (l, len, d3, d5) = (l as f64, f.len(k) as f64, d3 as f64, d5 as f64);
         let (a3s, a3c) = (q * t.a3_stop, q * t.a3_cens);
         let (a5s, a5c) = (q * t.a5_stop, q * t.a5_cens);
         let (us, uc) = (q * t.u_stop, q * t.u_cens);
+        let fl = q * t.full;
         self.n += post;
         self.n3 += a3s + a3c;
         self.n5 += a5s + a5c;
-        self.nf += q * t.full;
+        self.nf += fl;
         self.nu += us + uc;
-        // A read spanning the transcript is right-censored at its length; any other read is
-        // an observed stop after `l` bases.
+        // A read reaching the far end is right-censored at the length available to it; any
+        // other read is an observed stop after `l` bases.
         self.ev_h3 += a3s;
-        self.ex_h3 += a3s * l + a3c * len;
+        self.ex_h3 += a3s * l + a3c * (len - d3);
         self.ev_h5 += a5s;
-        self.ex_h5 += a5s * l + a5c * len;
+        self.ex_h5 += a5s * l + a5c * (len - d5);
         self.ev_lam += us;
         self.ex_lam += us * l + uc * len;
+        // Every part that places the read at an end through that end's kernel observes its gap.
+        self.k3.add(a3s + a3c + a5c + fl + uc, d3, t.k3a, t.k3b);
+        self.k5.add(a5s + a5c + a3c + fl + uc, d5, t.k5a, t.k5b);
     }
 
     fn params(&self, old: Params) -> Params {
@@ -334,6 +444,8 @@ impl Stats {
             h3: rate(self.ev_h3, self.ex_h3, old.h3),
             h5: rate(self.ev_h5, self.ex_h5, old.h5),
             lam: rate(self.ev_lam, self.ex_lam, old.lam),
+            k3: self.k3.kernel(old.k3),
+            k5: self.k5.kernel(old.k5),
         }
     }
 }
@@ -392,14 +504,23 @@ pub fn em(em_info: &EMInfo, presence: Option<PresenceOpts>, nthreads: usize) -> 
         let (counts, par) = run(em_info, &Flat::new(em_info), None, presence);
         info!(
             "truncation model: 3'-anchored {:.3} (stop rate {:.2e}/nt), 5'-anchored {:.3} \
-             (stop rate {:.2e}/nt), full length {:.3}, uniformly placed {:.3} (mean length {:.0} nt)",
+             (stop rate {:.2e}/nt), full length {:.3}, uniformly placed {:.3} (mean length {:.0} nt); \
+             3' end kernel {:.2}x{:.0}nt + {:.2}x{:.0}nt, 5' end kernel {:.2}x{:.0}nt + {:.2}x{:.0}nt",
             par.p3,
             par.h3,
             par.p5,
             par.h5,
             par.pf,
             par.pu,
-            1.0 / par.lam
+            1.0 / par.lam,
+            par.k3.w,
+            1.0 / par.k3.rho1,
+            1.0 - par.k3.w,
+            1.0 / par.k3.rho2,
+            par.k5.w,
+            1.0 / par.k5.rho1,
+            1.0 - par.k5.w,
+            1.0 / par.k5.rho2
         );
         counts
     })
@@ -768,6 +889,16 @@ fn moved(a: &Params, b: &Params) -> f64 {
         .max(rel(a.h3, b.h3))
         .max(rel(a.h5, b.h5))
         .max(rel(a.lam, b.lam))
+        .max(kmoved(&a.k3, &b.k3))
+        .max(kmoved(&a.k5, &b.k5))
+}
+
+fn kmoved(a: &Kernel, b: &Kernel) -> f64 {
+    let rel = |x: f64, y: f64| (x - y).abs() / y.abs().max(1e-12);
+    (a.w - b.w)
+        .abs()
+        .max(rel(a.rho1, b.rho1))
+        .max(rel(a.rho2, b.rho2))
 }
 
 /// Refresh the presence posteriors if due at iteration `niter`, then fill `eff` with
