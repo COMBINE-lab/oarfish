@@ -108,8 +108,8 @@ impl Index {
         let mut aln = vec![0u32; reads.target.len()];
         let mut read_of = vec![0u32; reads.target.len()];
         for (r, w) in reads.off.windows(2).enumerate() {
-            for k in w[0]..w[1] {
-                let t = reads.target[k] as usize;
+            for (k, &t) in reads.target.iter().enumerate().take(w[1]).skip(w[0]) {
+                let t = t as usize;
                 aln[fill[t]] = k as u32;
                 fill[t] += 1;
                 read_of[k] = r as u32;
