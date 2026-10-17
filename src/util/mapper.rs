@@ -163,9 +163,14 @@ pub(crate) enum Mapper {
 }
 
 /// spearfish scores are real-valued; oarfish's filter takes integers. Scores are scaled by
-/// this factor, and the default score→probability denominator for spearfish is
-/// `SPEARFISH_SCORE_SCALE * 2` (spearfish's own EM uses exp(Δ / 2)).
+/// this factor.
 pub(crate) const SPEARFISH_SCORE_SCALE: f32 = 10.0;
+
+/// Default score→probability denominator for spearfish hits (scaled scores): a hit Δ below
+/// the read's best (spearfish units) weighs exp(-Δ). Swept on simulated reads (ONT 95%, ONT 90%,
+/// HiFi) and spike-ins, as `--score-prob-denom` was for alignments (5 -> 3): exp(-Δ) was best or
+/// tied on every set; exp(-Δ / 2), the previous default, spread reads over near-tied isoforms.
+pub(crate) const SPEARFISH_SCORE_DENOM: f32 = SPEARFISH_SCORE_SCALE;
 
 /// A spearfish hit plus the read length (for the aligned-fraction filter).
 #[derive(Debug, Clone)]
