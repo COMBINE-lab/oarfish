@@ -380,9 +380,10 @@ fn main() -> anyhow::Result<()> {
                 "--mapper spearfish builds its index in seconds; use `spearfish index` to write one"
             );
         }
-        // spearfish scores are scaled by SPEARFISH_SCORE_SCALE; spearfish's EM uses exp(Δ / 2).
+        // spearfish scores are scaled by SPEARFISH_SCORE_SCALE; a hit Δ below the best weighs
+        // exp(-Δ) in spearfish units.
         if args.score_prob_denom.is_none() && args.reads.is_some() {
-            args.score_prob_denom = Some(2.0 * crate::util::mapper::SPEARFISH_SCORE_SCALE);
+            args.score_prob_denom = Some(crate::util::mapper::SPEARFISH_SCORE_DENOM);
         }
     }
 
