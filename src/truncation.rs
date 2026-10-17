@@ -911,7 +911,7 @@ pub fn em(em_info: &EMInfo, presence: Option<PresenceOpts>, nthreads: usize) -> 
             // The sample's tables are freed; return them to the OS before the full-data ones
             // are built (the allocator would otherwise keep them resident for a while).
             crate::util::oarfish_types::release_freed_memory();
-            Start::Frozen(par, warm_start(&a, nreads as f64))
+            Start::Frozen(Box::new(par), warm_start(&a, nreads as f64))
         } else {
             Start::Estimate
         };
@@ -1508,7 +1508,7 @@ enum Start {
     /// As `Estimate`, but return as soon as the parameters freeze, with the abundances then.
     EstimateOnly,
     /// With these parameters fixed from the start, and these initial abundances.
-    Frozen(Params, Vec<f64>),
+    Frozen(Box<Params>, Vec<f64>),
 }
 
 /// Initial abundances for all reads from the abundances `a` estimated on a sample: `a` scaled to
@@ -1581,7 +1581,7 @@ fn run_from(
         Start::Frozen(par, _) => {
             let fx = Fixed::new(f, &par);
             let lay = Layout::frozen_new(f, &fx, tinfo.len());
-            (par, lay, Some(fx), false)
+            (*par, lay, Some(fx), false)
         }
         s => (
             Params::initial(max_len),
