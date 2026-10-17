@@ -113,35 +113,40 @@ fn perform_inference_and_write_output(
     // Put reads that share their likeliest target (under their EM weights, see
     // `em_read::aln_weight`) next to each other: the EM's transcript-major passes then read
     // nearby memory (see `InMemoryAlignmentStore::reorder_reads`), and the per-read EM reads
-    // the store in this order directly.
-    let t_order = std::time::Instant::now();
-    let order = {
-        let cov = store.filter_opts.model_coverage;
-        let kde = kde_opt.as_ref();
-        let tinfo: &[TranscriptInfo] = txps;
-        let store: &InMemoryAlignmentStore = store;
-        crate::em_read::read_order(store.len(), |r| {
-            let (alns, probs, cps) = store.read(r);
-            alns.iter()
-                .zip(probs)
-                .zip(cps)
-                .map(|((a, &p), &cp)| {
-                    (
-                        crate::em_read::aln_weight(a, p, cp, cov, kde, tinfo),
-                        a.ref_id,
-                    )
-                })
-                .max_by(|x, y| x.0.total_cmp(&y.0))
-                .map_or(0, |x| x.1)
-        })
-    };
-    store.reorder_reads(&order);
-    drop(order);
-    crate::util::oarfish_types::release_freed_memory();
-    info!(
-        "reads ordered by likeliest target in {:.2}s",
-        t_order.elapsed().as_secs_f64()
-    );
+    // the store in this order directly. The equivalence-class EM (no per-read model term) does
+    // not read the store, so it skips this, and the transient copy of each array it makes.
+    let per_read_terms =
+        store.filter_opts.model_coverage || kde_opt.is_some() || args.model_truncation;
+    if per_read_terms || args.per_read_em {
+        let t_order = std::time::Instant::now();
+        let order = {
+            let cov = store.filter_opts.model_coverage;
+            let kde = kde_opt.as_ref();
+            let tinfo: &[TranscriptInfo] = txps;
+            let store: &InMemoryAlignmentStore = store;
+            crate::em_read::read_order(store.len(), |r| {
+                let (alns, probs, cps) = store.read(r);
+                alns.iter()
+                    .zip(probs)
+                    .zip(cps)
+                    .map(|((a, &p), &cp)| {
+                        (
+                            crate::em_read::aln_weight(a, p, cp, cov, kde, tinfo),
+                            a.ref_id,
+                        )
+                    })
+                    .max_by(|x, y| x.0.total_cmp(&y.0))
+                    .map_or(0, |x| x.1)
+            })
+        };
+        store.reorder_reads(&order);
+        drop(order);
+        crate::util::oarfish_types::release_freed_memory();
+        info!(
+            "reads ordered by likeliest target in {:.2}s",
+            t_order.elapsed().as_secs_f64()
+        );
+    }
 
     info!(
         "Total number of alignment records : {}",
@@ -190,8 +195,6 @@ fn perform_inference_and_write_output(
 
     // Without per-read model terms, reads with the same (target, probability) multiset are
     // interchangeable: run the EM over equivalence classes.
-    let per_read_terms =
-        emi.eq_map.filter_opts.model_coverage || emi.kde_model.is_some() || args.model_truncation;
     let eqc = (!per_read_terms && !args.per_read_em).then(|| {
         let eqc = EqClasses::from_store(emi.eq_map, emi.txp_info.len());
         info!(
