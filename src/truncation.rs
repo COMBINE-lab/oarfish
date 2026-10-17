@@ -131,6 +131,26 @@ impl<'a> Flat<'a> {
         }
     }
 
+    /// Every `k`-th read (from the first), as a table of its own. Reads are in store order, by
+    /// likeliest target, so the sample spreads over the transcripts in proportion to their reads.
+    fn every(&self, k: usize) -> Flat<'static> {
+        let nreads = self.off.len() - 1;
+        let picked = (0..nreads).step_by(k.max(1));
+        let (mut off, mut alns, mut probs) = (vec![0usize], Vec::new(), Vec::new());
+        for r in picked {
+            let (lo, hi) = (self.off[r], self.off[r + 1]);
+            alns.extend_from_slice(&self.alns[lo..hi]);
+            probs.extend_from_slice(&self.probs[lo..hi]);
+            off.push(alns.len());
+        }
+        Flat {
+            off,
+            alns: Cow::Owned(alns),
+            probs: Cow::Owned(probs),
+            tlen: self.tlen.clone(),
+        }
+    }
+
     #[cfg(test)]
     fn empty(lens: &[f64]) -> Self {
         Flat {
@@ -875,7 +895,27 @@ pub fn em(em_info: &EMInfo, presence: Option<PresenceOpts>, nthreads: usize) -> 
         .build()
         .unwrap();
     pool.install(|| {
-        let (counts, par) = run(em_info, &Flat::new(em_info), None, presence);
+        let f = Flat::new(em_info);
+        let nreads = f.off.len() - 1;
+        let sample = sample_reads();
+        let start = if sample > 0 && nreads > sample && Layout::can_freeze_default() {
+            let k = nreads.div_ceil(sample);
+            let (a, par) = {
+                let sub = f.every(k);
+                info!(
+                    "estimating the positional parameters on every {k}th read ({} reads)",
+                    (sub.off.len() - 1).to_formatted_string(&Locale::en)
+                );
+                run_from(em_info, &sub, None, None, Start::EstimateOnly)
+            };
+            // The sample's tables are freed; return them to the OS before the full-data ones
+            // are built (the allocator would otherwise keep them resident for a while).
+            crate::util::oarfish_types::release_freed_memory();
+            Start::Frozen(par, warm_start(&a, nreads as f64))
+        } else {
+            Start::Estimate
+        };
+        let (counts, par) = run_from(em_info, &f, None, presence, start);
         info!(
             "truncation model: 3'-anchored {:.3} (mean length {:.0} nt), 5'-anchored {:.3} \
              (mean length {:.0} nt), full length {:.3}, uniformly placed {:.3} (mean length {:.0} nt); \
@@ -1002,6 +1042,34 @@ impl Layout {
 }
 
 impl Layout {
+    /// Whether the default layout freezes its parameters (all but the atomic one do).
+    fn can_freeze_default() -> bool {
+        crate::em_read::Impl::from_env().is_some()
+    }
+
+    /// The default layout for frozen weights `fx`, built directly (as [`Layout::frozen`]
+    /// would make it from the estimating layout).
+    fn frozen_new(f: &Flat, fx: &Fixed, ntx: usize) -> Self {
+        match crate::em_read::Impl::from_env() {
+            Some(crate::em_read::Impl::Csr) => {
+                let mut off = vec![0usize; ntx + 1];
+                for &t in &fx.t {
+                    off[t as usize + 1] += 1;
+                }
+                for i in 0..ntx {
+                    off[i + 1] += off[i];
+                }
+                Layout::Csr {
+                    post: Vec::new(),
+                    off,
+                    aln: Vec::new(),
+                }
+                .frozen(fx)
+            }
+            how => Layout::with(f, ntx, how),
+        }
+    }
+
     /// The layout for frozen weights `ws`: `Csr` becomes `CsrFrozen`, the others stay. The
     /// per-alignment posteriors and indices are freed first and the transpose is refilled
     /// from read order, so the two layouts do not coexist.
@@ -1433,32 +1501,103 @@ fn refresh_presence(
         .for_each(|(e, (c, q))| e.store(q * c, Ordering::Relaxed));
 }
 
+/// How [`run_from`] begins.
+enum Start {
+    /// Estimate the parameters, freeze them once they settle, and continue with them fixed.
+    Estimate,
+    /// As `Estimate`, but return as soon as the parameters freeze, with the abundances then.
+    EstimateOnly,
+    /// With these parameters fixed from the start, and these initial abundances.
+    Frozen(Params, Vec<f64>),
+}
+
+/// Initial abundances for all reads from the abundances `a` estimated on a sample: `a` scaled to
+/// `total` reads, with a share spread evenly over the transcripts, so that those the sample
+/// missed can still gain reads (the EM cannot revive a zero).
+fn warm_start(a: &[f64], total: f64) -> Vec<f64> {
+    let lambda = WARM_EVEN;
+    let sum: f64 = a.iter().sum();
+    let even = total / a.len().max(1) as f64;
+    if sum <= 0.0 {
+        return vec![even; a.len()];
+    }
+    a.iter()
+        .map(|&x| (1.0 - lambda) * x * total / sum + lambda * even)
+        .collect()
+}
+
+/// With more reads than this, the positional parameters are estimated on a sample of about
+/// this many (every k-th read), and the EM over all reads starts with them fixed
+/// ([`Start::Frozen`]). They are a few global laws, which a million reads determine about as
+/// well as all of them: on simulated cDNA, direct RNA and HiFi samples the mixture weights and
+/// the laws of the components holding reads match the full-data fit, and the estimates agree
+/// once both have converged, while each estimating iteration costs several frozen ones.
+const SAMPLE_READS: usize = 1_000_000;
+/// Share of the reads spread evenly over the transcripts in the initial abundances after a
+/// sample ([`warm_start`]).
+const WARM_EVEN: f64 = 0.1;
+/// Plain EM steps before SQUAREM, when the EM starts with the parameters fixed. Without them the
+/// estimates of transcripts with few or no reads have not settled within the default iteration
+/// limit (as they have after the estimating iterations of a full-data fit).
+const PLAIN_FIRST: u32 = 100;
+
+/// [`SAMPLE_READS`], or `OARFISH_TRUNC_SAMPLE` if set (0: estimate on all reads).
+fn sample_reads() -> usize {
+    std::env::var("OARFISH_TRUNC_SAMPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(SAMPLE_READS)
+}
+
 fn run(
     em_info: &EMInfo,
     f: &Flat,
     mult: Option<&[u32]>,
     presence: Option<PresenceOpts>,
 ) -> (Vec<f64>, Params) {
+    run_from(em_info, f, mult, presence, Start::Estimate)
+}
+
+fn run_from(
+    em_info: &EMInfo,
+    f: &Flat,
+    mult: Option<&[u32]>,
+    presence: Option<PresenceOpts>,
+    start: Start,
+) -> (Vec<f64>, Params) {
     let tinfo: &[TranscriptInfo] = em_info.txp_info;
     let total_weight = em_info.eq_map.num_aligned_reads() as f64;
-    let init = match em_info.init_abundances {
-        Some(ref v) => v.clone(),
-        None => vec![total_weight / (tinfo.len() as f64); tinfo.len()],
+    let init = match (&start, &em_info.init_abundances) {
+        (Start::Frozen(_, a), _) => a.clone(),
+        (_, Some(v)) => v.clone(),
+        (_, None) => vec![total_weight / (tinfo.len() as f64); tinfo.len()],
     };
     let mut prev: Vec<AtomicF64> = init.into_iter().map(AtomicF64::new).collect();
     let mut curr: Vec<AtomicF64> = (0..tinfo.len()).map(|_| AtomicF64::new(0.0)).collect();
     let t_setup = std::time::Instant::now();
-    let mut lay = Layout::new(f, tinfo.len());
+    let max_len = f.max_len();
+    let started_frozen = matches!(start, Start::Frozen(..));
+    let (mut par, mut lay, mut frozen, estimate_only) = match start {
+        Start::Frozen(par, _) => {
+            let fx = Fixed::new(f, &par);
+            let lay = Layout::frozen_new(f, &fx, tinfo.len());
+            (par, lay, Some(fx), false)
+        }
+        s => (
+            Params::initial(max_len),
+            Layout::new(f, tinfo.len()),
+            None,
+            matches!(s, Start::EstimateOnly),
+        ),
+    };
     info!(
         "truncation EM layout set up in {:.2}s",
         t_setup.elapsed().as_secs_f64()
     );
-    let max_len = f.max_len();
-    let mut par = Params::initial(max_len);
 
     let mut niter = 0_u32;
     let can_freeze = !matches!(lay, Layout::Atomic);
-    let (mut still, mut frozen): (u32, Option<Fixed>) = (0, None);
+    let mut still: u32 = 0;
     // Log-likelihood gain of the last parameter-updating step.
     let (mut last_ll, mut ll_gain) = (f64::NEG_INFINITY, f64::INFINITY);
     // With the presence model the EM sees `q * prev` (see `crate::presence`); `eff` holds it.
@@ -1469,6 +1608,7 @@ fn run(
         Vec::new()
     };
     let mut sq = Squarem::new(tinfo.len());
+    let plain_first = if started_frozen { PLAIN_FIRST } else { 0 };
     while niter < em_info.max_iter {
         if let Some(p) = &mut pres {
             refresh_presence(
@@ -1487,7 +1627,7 @@ fn run(
         match &frozen {
             // With the weights fixed, the abundance update is a fixed-point map; accelerate
             // it (the presence model rescales the abundances between steps, so it does not).
-            Some(ws) if pres.is_none() => {
+            Some(ws) if pres.is_none() && niter >= plain_first => {
                 squarem_cycle(&mut lay, ws, &prev, &curr, mult, &mut sq);
                 niter += 2;
             }
@@ -1513,6 +1653,10 @@ fn run(
                         niter + 1,
                         par
                     );
+                    if estimate_only {
+                        let a = curr.iter().map(|x| x.load(Ordering::Relaxed)).collect();
+                        return (a, par);
+                    }
                     lay = std::mem::replace(&mut lay, Layout::Atomic).frozen(&fx);
                     frozen = Some(fx);
                 }
@@ -1644,6 +1788,32 @@ mod tests {
             prev.iter().map(|x| x.load(Ordering::Relaxed)).collect(),
             par,
         )
+    }
+
+    /// A sample keeps every k-th read whole, and the warm start spreads the full read count
+    /// over all transcripts, none of them at zero.
+    #[test]
+    fn sample_keeps_whole_reads_and_warm_start_covers_every_transcript() {
+        let lens = [2000.0, 1000.0, 1500.0];
+        let reads: Vec<Vec<_>> = (0..10)
+            .map(|i| {
+                (0..i % 3 + 1)
+                    .map(|j| (j as u32, 1.0, 10.0 * i as f64, 900.0))
+                    .collect()
+            })
+            .collect();
+        let f = flat(&reads, &lens);
+        let s = f.every(3);
+        assert_eq!(s.off.len() - 1, 4);
+        for (i, r) in [0, 3, 6, 9].into_iter().enumerate() {
+            assert_eq!(
+                &s.alns[s.off[i]..s.off[i + 1]],
+                &f.alns[f.off[r]..f.off[r + 1]]
+            );
+        }
+        let a = warm_start(&[4.0, 0.0, 1.0], 100.0);
+        assert!((a.iter().sum::<f64>() - 100.0).abs() < 1e-9);
+        assert!(a.iter().all(|&x| x > 0.0) && a[0] > a[2]);
     }
 
     /// A short isoform (1,000 nt) is the 3' half of a long one (2,000 nt). 300 reads are full

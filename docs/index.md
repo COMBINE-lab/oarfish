@@ -154,7 +154,10 @@ Where a read is "at" an end, the gap to that end follows a learned end-gap law (
 log-spaced bins, with a part that scales with transcript length), which absorbs aligner clipping
 and annotation imprecision; a read longer than its transcript is treated as censored. The
 mixture weights and laws are estimated in the EM together with the abundances, and the fitted
-mixture is written to the log. Because each transcript's placement distribution sums to one over
+mixture is written to the log. With more than a million reads they are estimated on a sample of
+about a million (every k-th read) and then held fixed while the abundances are estimated from all
+reads, which gives the same estimates as fitting them on all reads in about half the time
+(`OARFISH_TRUNC_SAMPLE=0` fits them on all reads). Because each transcript's placement distribution sums to one over
 the placements it can produce, a read that fits a short isoform end to end but would be
 truncated on a longer one favors the short isoform, by as much as the fitted mixture says
 truncation is unlikely.
