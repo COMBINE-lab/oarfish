@@ -1285,8 +1285,8 @@ fn step_static(
 
 /// Parameters stop being re-estimated once none moves by more than this (see [`moved`]) for
 /// `FREEZE_AFTER` consecutive iterations; the remaining iterations use fixed weights. Updating
-/// the parameters less often is still a generalized EM; on K562 PacBio (truncation model)
-/// freezing at 1e-6 moves no transcript estimate by more than 0.07% and cuts EM time 3.6x.
+/// the parameters less often is still a generalized EM; on a PacBio cDNA sample (truncation
+/// model) freezing at 1e-6 moves no transcript estimate by more than 0.07% and cuts EM time 3.6x.
 /// Only the atomic-free layouts freeze.
 const FREEZE_TOL: f64 = 1e-6;
 const FREEZE_AFTER: u32 = 3;
