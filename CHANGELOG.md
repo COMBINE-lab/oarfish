@@ -54,19 +54,37 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   layout); per-read models use an atomic-free CSR layout (`OARFISH_READ_EM=local|atomic` selects
   the alternatives; `--per-read-em` forces the per-read EM). Estimates match the previous
   release up to summation order.
-- **Reads are ordered by likeliest transcript before inference**, which speeds up every EM;
-  `--write-assignment-probs` still lists reads in input order.
+- **Reads are ordered by likeliest transcript before the per-read and truncation EMs**, which
+  speeds them up; `--write-assignment-probs` still lists reads in input order.
 
 ### Performance
 
-- Lower peak memory: the per-alignment record shrinks from 24 to 16 bytes (an unused field
-  removed), coverage probabilities are only allocated by the coverage model, and the truncation
-  EM no longer copies the alignments. Default model, versus 0.10.3: 2.36 to 1.62 GB on the NanoSim
-  NA12878 cDNA simulation, 3.52 to 3.12 GB on TKSM SQ2.
-- The truncation EM freezes its placement parameters once they stop improving the likelihood and
-  then accelerates the abundance updates (SQUAREM).
-- Genome-mode quantification of the NanoSim NA12878 cDNA simulation runs in 1:04 instead of
-  2:26 (wall time), with identical estimates.
+Versus 0.10.3, 16 threads, transcriptome BAMs (NanoSim NA12878 cDNA, 35M alignments; TKSM SQ2,
+75M alignments):
+
+| | NanoSim, 0.10.3 | NanoSim, now | SQ2, 0.10.3 | SQ2, now |
+|---|---|---|---|---|
+| default model | 193 s, 2.35 GB | 13 s, 1.58 GB | 336 s, 3.51 GB | 21 s, 2.56 GB |
+| coverage model | 190 s, 2.53 GB | 22 s, 1.97 GB | 349 s, 3.87 GB | 36 s, 3.79 GB |
+| truncation model | | 23 s, 1.96 GB | | 35 s, 3.80 GB |
+
+- **BAM parsing about 4x faster than 0.10.3** (NanoSim 41 s to 9 s). Parsing is serial (only BGZF
+  decompression is threaded), so per-record work is wall time: records are now read undecoded into
+  reused buffers, the CIGAR, tags and sequence are read from their bytes only where a filter needs
+  them, and records are no longer cloned.
+- **Lower peak memory**: the per-alignment record shrinks from 24 to 16 bytes (an unused field
+  removed); coverage probabilities exist only under the coverage model; the per-read EM reads the
+  alignment store instead of copying it; the truncation EM keeps its frozen weights in store order.
+- **EM engines**: the equivalence-class and per-read EMs run without atomics (see above); the
+  truncation EM fits its placement parameters on a 1M-read sample when there are more reads,
+  then holds them fixed and accelerates the abundance updates (SQUAREM); estimates match a fit on
+  all reads (`OARFISH_TRUNC_SAMPLE=0`).
+- **Deterministic**: the truncation EM (and the spike-slab presence model) give byte-identical
+  output from run to run and across thread counts.
+- All parallel work stays within `--threads` (the store reorder and coverage normalization
+  previously used every core).
+- Genome-BAM and raw-read modes are as fast or faster than 0.10.3 with the same memory
+  (genome-BAM NanoSim NA12878 cDNA: 142 s to 61 s).
 
 ## 0.10.3 - 2026-07-16
 
