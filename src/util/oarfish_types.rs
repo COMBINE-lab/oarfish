@@ -269,43 +269,116 @@ impl CigarOp {
     }
 }
 
-pub trait NoodlesAlignmentLike {}
-impl NoodlesAlignmentLike for noodles_sam::alignment::record_buf::RecordBuf {}
-
-/// implement the AlnRecordLike trait for the underlying noodles Record type
-impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for T {
+/// The BAM backend. Implemented on `RecordBuf` itself rather than through noodles' `Record`
+/// trait, whose accessors hand back boxed iterators: the CIGAR, sequence and tags are then
+/// read from their buffers directly, which the per-record filters do several times.
+impl AlnRecordLike for noodles_sam::alignment::record_buf::RecordBuf {
     fn opt_sequence_len(&self) -> Option<usize> {
         Some(self.sequence().len())
     }
 
     fn is_reverse_complemented(&self) -> bool {
-        self.flags().expect("valid flags").is_reverse_complemented()
+        self.flags().is_reverse_complemented()
     }
 
     fn is_unmapped(&self) -> bool {
-        self.flags()
-            .expect("alignment record should have flags")
-            .is_unmapped()
+        self.flags().is_unmapped()
     }
 
-    fn ref_id(&self, header: &Header) -> anyhow::Result<usize> {
-        self.reference_sequence_id(header)
-            .unwrap()
-            .map_err(anyhow::Error::from)
+    fn ref_id(&self, _header: &Header) -> anyhow::Result<usize> {
+        self.reference_sequence_id()
+            .ok_or_else(|| anyhow::anyhow!("alignment record has no reference sequence id"))
     }
 
     fn aln_span(&self) -> Option<usize> {
-        // NOTE: The transpose here is because noodles_sam
-        // switched from returning Result<Option<usize>> to
-        // Option<Result<usize>> --- think if there is a
-        // better way to handle the new return type directly
-        self.alignment_span().transpose().expect("valid span")
+        self.alignment_span()
     }
 
     fn aln_score(&self) -> Option<i64> {
         self.data()
             .get(&AlnTag::ALIGNMENT_SCORE)
-            .unwrap()
+            .expect("alignment record should have an AS tag")
+            .as_int()
+    }
+
+    // SAM positions are one-based and inclusive: the zero-based start is one less, and the
+    // inclusive end is already the zero-based exclusive end.
+    fn aln_start(&self) -> u32 {
+        self.alignment_start().expect("valid aln start").get() as u32 - 1
+    }
+
+    fn aln_end(&self) -> u32 {
+        self.alignment_end().expect("valid aln end").get() as u32
+    }
+
+    fn is_supp(&self) -> bool {
+        self.flags().is_supplementary()
+    }
+
+    fn end_evidence(&self) -> crate::util::read_ends::EndEvidence {
+        use noodles_sam::alignment::record::cigar::op::Kind;
+        let ops = self.cigar().as_ref();
+        let clip = |op: Option<&noodles_sam::alignment::record::cigar::Op>| {
+            op.filter(|op| matches!(op.kind(), Kind::SoftClip | Kind::HardClip))
+                .map_or(0, |op| op.len() as u32)
+        };
+        // SEQ is stored in reference orientation, so the molecule's tail is an A-run at its
+        // right end whichever strand the read aligned to; secondary records carry no SEQ.
+        let seq: &[u8] = self.sequence().as_ref();
+        crate::util::read_ends::EndEvidence {
+            clip_left: Some(clip(ops.first())),
+            clip_right: Some(clip(ops.last())),
+            tail: (!seq.is_empty())
+                .then(|| crate::util::read_ends::terminal_run(seq.iter().rev().copied(), b'A')),
+        }
+    }
+
+    fn name(&self) -> Option<String> {
+        self.name().map(|n| n.to_string())
+    }
+}
+
+/// The BAM backend over undecoded records (`noodles_bam::Record`), which the bulk parser reads
+/// into reused buffers: each field is read from the record's bytes when asked for, so the
+/// tags, qualities and sequence a filter never looks at are never decoded.
+impl AlnRecordLike for noodles_bam::Record {
+    fn opt_sequence_len(&self) -> Option<usize> {
+        Some(self.sequence().len())
+    }
+
+    fn is_reverse_complemented(&self) -> bool {
+        self.flags().is_reverse_complemented()
+    }
+
+    fn is_unmapped(&self) -> bool {
+        self.flags().is_unmapped()
+    }
+
+    fn ref_id(&self, _header: &Header) -> anyhow::Result<usize> {
+        self.reference_sequence_id()
+            .ok_or_else(|| anyhow::anyhow!("alignment record has no reference sequence id"))?
+            .map_err(anyhow::Error::from)
+    }
+
+    fn aln_span(&self) -> Option<usize> {
+        // Straight from the packed ops (`len << 4 | kind`): M, D, N, = and X (kinds 0, 2, 3, 7
+        // and 8) consume the reference.
+        const CONSUMES_REF: u32 = 1 << 0 | 1 << 2 | 1 << 3 | 1 << 7 | 1 << 8;
+        let cigar = self.cigar();
+        let (ops, _) = cigar.as_ref().as_chunks::<4>();
+        let span: usize = ops
+            .iter()
+            .map(|b| u32::from_le_bytes(*b))
+            .filter(|n| CONSUMES_REF >> (n & 0xf) & 1 == 1)
+            .map(|n| (n >> 4) as usize)
+            .sum();
+        (span > 0).then_some(span)
+    }
+
+    fn aln_score(&self) -> Option<i64> {
+        self.data()
+            .get(&AlnTag::ALIGNMENT_SCORE)
+            .expect("alignment record should have an AS tag")
             .expect("could not get value")
             .as_int()
     }
@@ -314,46 +387,44 @@ impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for
     // inclusive end is already the zero-based exclusive end.
     fn aln_start(&self) -> u32 {
         self.alignment_start()
-            .unwrap()
+            .expect("valid aln start")
             .expect("valid aln start")
             .get() as u32
             - 1
     }
 
     fn aln_end(&self) -> u32 {
-        self.alignment_end()
-            .unwrap()
-            .expect("valid aln start")
-            .get() as u32
+        self.aln_start() + self.aln_span().unwrap_or(1) as u32
     }
 
     fn is_supp(&self) -> bool {
-        self.flags()
-            .expect("alignment record should have flags")
-            .is_supplementary()
+        self.flags().is_supplementary()
     }
 
     fn end_evidence(&self) -> crate::util::read_ends::EndEvidence {
-        use noodles_sam::alignment::record::cigar::op::Kind;
-        let (mut first, mut last) = (None, None);
-        for op in self.cigar().iter().filter_map(Result::ok) {
-            if first.is_none() {
-                first = Some(op);
-            }
-            last = Some(op);
-        }
-        let clip = |op: Option<noodles_sam::alignment::record::cigar::Op>| {
-            op.filter(|op| matches!(op.kind(), Kind::SoftClip | Kind::HardClip))
-                .map_or(0, |op| op.len() as u32)
+        // A packed CIGAR op is `len << 4 | kind`; kinds 4 and 5 are soft and hard clips.
+        let cigar = self.cigar();
+        let ops = cigar.as_ref();
+        let clip = |op: Option<&[u8]>| {
+            op.map(|b| u32::from_le_bytes(b.try_into().expect("4-byte CIGAR op")))
+                .filter(|n| matches!(n & 0xf, 4 | 5))
+                .map_or(0, |n| n >> 4)
         };
         // SEQ is stored in reference orientation, so the molecule's tail is an A-run at its
         // right end whichever strand the read aligned to; secondary records carry no SEQ.
-        let seq: Vec<u8> = self.sequence().iter().collect();
+        let seq = self.sequence();
+        let n = seq.len();
         crate::util::read_ends::EndEvidence {
-            clip_left: Some(clip(first)),
-            clip_right: Some(clip(last)),
-            tail: (!seq.is_empty())
-                .then(|| crate::util::read_ends::terminal_run(seq.into_iter().rev(), b'A')),
+            clip_left: Some(clip(ops.get(..4))),
+            clip_right: Some(clip(ops.len().checked_sub(4).map(|i| &ops[i..]))),
+            tail: (n > 0).then(|| {
+                crate::util::read_ends::terminal_run(
+                    (0..n)
+                        .rev()
+                        .map(|i| seq.get(i).expect("index within the sequence")),
+                    b'A',
+                )
+            }),
         }
     }
 
@@ -839,7 +910,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
     }
 
     #[inline(always)]
-    pub fn add_group<T: NoodlesAlignmentLike + sam::alignment::record::Record + std::fmt::Debug>(
+    pub fn add_group<T: AlnRecordLike + std::fmt::Debug>(
         &mut self,
         txps: &mut [TranscriptInfo],
         ag: &mut Vec<T>,
@@ -892,9 +963,12 @@ impl<'h> InMemoryAlignmentStore<'h> {
         txps: &mut [TranscriptInfo],
     ) -> bool {
         if !alns.is_empty() {
-            for a in alns.iter() {
-                let tid = a.ref_id as usize;
-                txps[tid].add_interval(a.start, a.end, 1.0_f64);
+            // the coverage profiles are read only by the coverage models
+            if self.filter_opts.model_coverage {
+                for a in alns.iter() {
+                    let tid = a.ref_id as usize;
+                    txps[tid].add_interval(a.start, a.end, 1.0_f64);
+                }
             }
             self.alignments.extend_from_slice(alns);
             self.as_probabilities.extend_from_slice(as_probs);

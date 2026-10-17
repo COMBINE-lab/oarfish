@@ -1,6 +1,6 @@
+use crate::prog_opts::ProjProbSource;
 use crate::util::constants::EMPTY_READ_NAME;
 use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
-use crate::prog_opts::ProjProbSource;
 use crate::util::projection::projected_to_records;
 use bramble_rs::g2t::G2TTree;
 use bramble_rs::{GenomicAlignment, ProjectionConfig, ProjectionContext, project_group_with};
@@ -132,7 +132,10 @@ pub fn read_and_verify_genome_header<R: io::BufRead>(
     }
 
     let progs: Vec<_> = header.programs().roots().map(|(prog, _)| prog).collect();
-    info!("genome BAM @PG program(s): {:?}; proceeding with projection.", progs);
+    info!(
+        "genome BAM @PG program(s): {:?}; proceeding with projection.",
+        progs
+    );
     Ok(header)
 }
 
@@ -301,7 +304,7 @@ pub fn parse_alignments_for_barcode<R: io::BufRead>(
 pub fn parse_alignments<R: io::BufRead>(
     store: &mut InMemoryAlignmentStore,
     name_vec: &mut Option<SwapVec<String>>,
-    header: &Header,
+    _header: &Header,
     reader: &mut bam::io::Reader<R>,
     txps: &mut [TranscriptInfo],
     check_order_thresh: usize,
@@ -316,7 +319,7 @@ pub fn parse_alignments<R: io::BufRead>(
 
     // we'll need these to keep track of which alignments belong
     // to which reads.
-    let mut prev_read = String::new();
+    let mut prev_read: Vec<u8> = Vec::new();
     let mut num_unmapped = 0_u64;
     let mut records_for_read = vec![];
 
@@ -338,7 +341,7 @@ pub fn parse_alignments<R: io::BufRead>(
     // Adds the read name for the read corresponding to the provided alignment group
     // `recs`, **if** we are keeping read names for the purpose of reporting read
     // assignment probabilities.
-    let mut add_read_name = |recs: &Vec<noodles_sam::alignment::record_buf::RecordBuf>| {
+    let mut add_read_name = |recs: &Vec<bam::Record>| {
         if let Some(nvec) = name_vec {
             let first_aln = recs.first().expect("alignment group should be non-empty");
             let read_name = first_aln
@@ -354,65 +357,73 @@ pub fn parse_alignments<R: io::BufRead>(
     // by their source read. **Note**: this requires that we have a
     // name-sorted input bam file (currently, aligned against the transcriptome).
     //
-    // *NOTE*: this had to be changed from `records` to `record_bufs` or
-    // critical information was missing from the records. This happened when
-    // moving to the new version of noodles. Track `https://github.com/zaeleus/noodles/issues/230`
-    // to see if it's clear why this is the case
-    for result in reader.record_bufs(header) {
-        let record = result?;
-        pb.inc(1);
+    // Records are read undecoded (`bam::Record`, whose fields are read from its bytes on
+    // demand) into buffers that are reused once their read has been added, so a record costs
+    // no allocation and no decoding of fields the filters never look at.
+    let mut n_records = 0_u64;
+    let mut spare: Vec<bam::Record> = Vec::new();
+    loop {
+        let mut record = spare.pop().unwrap_or_default();
+        if reader.read_record(&mut record)? == 0 {
+            break;
+        }
+        n_records += 1;
+        if n_records.is_multiple_of(4096) {
+            pb.set_position(n_records);
+        }
 
         // unmapped reads don't contribute to quantification
         // but we track them.
         if record.flags().is_unmapped() {
             num_unmapped += 1;
+            spare.push(record);
             continue;
         }
-        let record_copy = record.clone();
-        if let Some(rname) = record.name() {
-            let rstring: String = String::from_utf8_lossy(rname.as_ref()).into_owned();
-            // if this is an alignment for the same read, then
-            // push it onto our temporary vector.
-            if prev_read == rstring {
-                if let Some(_ref_id) = record.reference_sequence_id() {
-                    records_for_read.push(record_copy);
-                }
-            } else {
-                // otherwise, record the alignment range for the
-                // previous read record.
-                if !prev_read.is_empty() {
-                    if store.add_group(txps, &mut records_for_read) {
-                        add_read_name(&records_for_read);
-                        if records_for_read.len() == 1 {
-                            store.inc_unique_alignments();
-                        }
+        let Some(rname) = record.name() else {
+            spare.push(record);
+            continue;
+        };
+        // if this is an alignment for the same read, then
+        // push it onto our temporary vector.
+        if prev_read.as_slice() != <_ as AsRef<[u8]>>::as_ref(rname) {
+            // otherwise, record the alignment range for the
+            // previous read record.
+            if !prev_read.is_empty() {
+                if store.add_group(txps, &mut records_for_read) {
+                    add_read_name(&records_for_read);
+                    if records_for_read.len() == 1 {
+                        store.inc_unique_alignments();
                     }
-                    records_for_read.clear();
                 }
-                // the new "prev_read" name is the current read name
-                // so it becomes the first on the new alignment range
-                // vector.
-                prev_read = rstring;
-                if rg_num < check_order_thresh {
-                    if !read_name_map.insert(prev_read.clone()) {
-                        error!(
-                            "It appears that the input BAM file is not name-collated. oarfish is not designed to process coordinate sorted BAM files."
-                        );
-                        anyhow::bail!(
-                            "You appear to have provided a coordinate-sorted BAM, but oarfish does not support processing these.\n\
-                                    You should provide a BAM file collated by record name (which is the \"natural\" minimap2 order).\n\
-                                    Alignment records for the same read {} were observed twice in a non-contiguous block.",
-                            &prev_read
-                        );
-                    }
-                    rg_num += 1;
+                spare.append(&mut records_for_read);
+            }
+            // the new "prev_read" name is the current read name
+            // so it becomes the first on the new alignment range
+            // vector.
+            prev_read.clear();
+            prev_read.extend_from_slice(rname.as_ref());
+            if rg_num < check_order_thresh {
+                if !read_name_map.insert(prev_read.clone()) {
+                    error!(
+                        "It appears that the input BAM file is not name-collated. oarfish is not designed to process coordinate sorted BAM files."
+                    );
+                    anyhow::bail!(
+                        "You appear to have provided a coordinate-sorted BAM, but oarfish does not support processing these.\n\
+                                You should provide a BAM file collated by record name (which is the \"natural\" minimap2 order).\n\
+                                Alignment records for the same read {} were observed twice in a non-contiguous block.",
+                        String::from_utf8_lossy(&prev_read)
+                    );
                 }
-                if let Some(_ref_id) = record.reference_sequence_id() {
-                    records_for_read.push(record_copy);
-                }
+                rg_num += 1;
             }
         }
+        if record.reference_sequence_id().is_some() {
+            records_for_read.push(record);
+        } else {
+            spare.push(record);
+        }
     }
+    pb.set_position(n_records);
     // if we end with a non-empty alignment range vector, then
     // add that group.
     if !records_for_read.is_empty() {
@@ -648,7 +659,15 @@ pub fn parse_genome_alignments<R: io::BufRead>(
         } else {
             if !prev_read.is_empty()
                 && project_and_add_group(
-                    store, txps, g2t, proj_config, beta, prob_source, &mut pctx, &prev_read, &records_for_read,
+                    store,
+                    txps,
+                    g2t,
+                    proj_config,
+                    beta,
+                    prob_source,
+                    &mut pctx,
+                    &prev_read,
+                    &records_for_read,
                 )
             {
                 add_read_name(&records_for_read);
@@ -661,9 +680,7 @@ pub fn parse_genome_alignments<R: io::BufRead>(
             prev_read = rstring;
             if rg_num < check_order_thresh {
                 if !read_name_map.insert(prev_read.clone()) {
-                    error!(
-                        "It appears that the input genome BAM file is not name-collated."
-                    );
+                    error!("It appears that the input genome BAM file is not name-collated.");
                     anyhow::bail!(
                         "You appear to have provided a coordinate-sorted genome BAM, but genome-projection\n\
                          mode requires a BAM collated by read name. Alignment records for read {} were\n\
@@ -681,7 +698,15 @@ pub fn parse_genome_alignments<R: io::BufRead>(
 
     if !records_for_read.is_empty()
         && project_and_add_group(
-            store, txps, g2t, proj_config, beta, prob_source, &mut pctx, &prev_read, &records_for_read,
+            store,
+            txps,
+            g2t,
+            proj_config,
+            beta,
+            prob_source,
+            &mut pctx,
+            &prev_read,
+            &records_for_read,
         )
     {
         add_read_name(&records_for_read);
