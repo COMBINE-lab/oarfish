@@ -903,10 +903,11 @@ pub fn em(em_info: &EMInfo, presence: Option<PresenceOpts>, nthreads: usize) -> 
             let (a, par) = {
                 let sub = f.every(k);
                 info!(
-                    "estimating the positional parameters on every {k}th read ({} reads)",
+                    "estimating the positional parameters on one read in {k} ({} reads)",
                     (sub.off.len() - 1).to_formatted_string(&Locale::en)
                 );
-                run_from(em_info, &sub, None, None, Start::EstimateOnly)
+                let share = (sub.off.len() - 1) as f64 / nreads as f64;
+                run_from(em_info, &sub, None, None, Start::EstimateOnly(share))
             };
             // The sample's tables are freed; return them to the OS before the full-data ones
             // are built (the allocator would otherwise keep them resident for a while).
@@ -1294,7 +1295,9 @@ const FREEZE_AFTER: u32 = 3;
 /// along directions that barely change any alignment's weight (mass trading between the
 /// full-length component and an anchored one whose read lengths mostly exceed the transcript)
 /// long after their distance test would pass; the likelihood bounds what such drift is worth.
-/// One nat over the whole sample is far below what the data could distinguish.
+/// One nat over all the reads is far below what the data could distinguish. On a sample, whose
+/// gains are smaller by its share of the reads, the threshold shrinks by the same share, so the
+/// sample freezes where a fit to all the reads would.
 const FREEZE_LL_GAIN: f64 = 1.0;
 
 /// How far the parameters moved: absolute change for the mixture weights; for each length law,
@@ -1505,8 +1508,9 @@ fn refresh_presence(
 enum Start {
     /// Estimate the parameters, freeze them once they settle, and continue with them fixed.
     Estimate,
-    /// As `Estimate`, but return as soon as the parameters freeze, with the abundances then.
-    EstimateOnly,
+    /// As `Estimate` on a sample holding this share of the reads, but return as soon as the
+    /// parameters freeze, with the abundances then.
+    EstimateOnly(f64),
     /// With these parameters fixed from the start, and these initial abundances.
     Frozen(Box<Params>, Vec<f64>),
 }
@@ -1577,6 +1581,10 @@ fn run_from(
     let t_setup = std::time::Instant::now();
     let max_len = f.max_len();
     let started_frozen = matches!(start, Start::Frozen(..));
+    let freeze_ll_gain = match start {
+        Start::EstimateOnly(share) => FREEZE_LL_GAIN * share,
+        _ => FREEZE_LL_GAIN,
+    };
     let (mut par, mut lay, mut frozen, estimate_only) = match start {
         Start::Frozen(par, _) => {
             let fx = Fixed::new(f, &par);
@@ -1587,7 +1595,7 @@ fn run_from(
             Params::initial(max_len),
             Layout::new(f, tinfo.len()),
             None,
-            matches!(s, Start::EstimateOnly),
+            matches!(s, Start::EstimateOnly(_)),
         ),
     };
     info!(
@@ -1639,7 +1647,7 @@ fn run_from(
                 last_ll = st.ll;
                 let next = st.params(&par);
                 still = if moved(&next, &par) < FREEZE_TOL
-                    || (0.0..FREEZE_LL_GAIN).contains(&ll_gain)
+                    || (0.0..freeze_ll_gain).contains(&ll_gain)
                 {
                     still + 1
                 } else {
@@ -1679,7 +1687,14 @@ fn run_from(
             break;
         }
         niter += 1;
-        if niter.is_multiple_of(100) {
+        if niter.is_multiple_of(100) && frozen.is_some() {
+            // The parameters were logged when they froze.
+            info!(
+                "iteration {}; rel diff {}",
+                niter.to_formatted_string(&Locale::en),
+                rel_diff
+            );
+        } else if niter.is_multiple_of(100) {
             info!(
                 "iteration {}; rel diff {}; log-likelihood gain {:.3}; {:?}",
                 niter.to_formatted_string(&Locale::en),
