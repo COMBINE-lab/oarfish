@@ -498,6 +498,14 @@ impl LenLaw {
         (x / Self::W) as usize
     }
 
+    /// [`LenLaw::bin`] of a whole number of bases, by integer division (the same bin: `x / W`
+    /// is at least `1 / W` from the next whole number, far beyond rounding).
+    #[inline]
+    fn bin_nt(x: u32) -> usize {
+        const W_NT: u32 = LenLaw::W as u32;
+        (x / W_NT) as usize
+    }
+
     fn mean(&self) -> f64 {
         self.h
             .iter()
@@ -770,7 +778,6 @@ impl Stats {
             return;
         }
         let q = post / tot;
-        let (l, len, d3, d5) = (g.l as f64, g.len as f64, g.d3 as f64, g.d5 as f64);
         let (a3s, a3c) = (q * t.a3_stop, q * t.a3_cens);
         let (a5s, a5c) = (q * t.a5_stop, q * t.a5_cens);
         let (us, uc) = (q * t.u_stop, q * t.u_cens);
@@ -782,17 +789,17 @@ impl Stats {
         self.nu += us + uc;
         // A read reaching the far end is right-censored at the length available to it; any
         // other read is an observed stop after `l` bases.
-        LStats::add(&mut self.l3.stop, LenLaw::bin(l), a3s);
-        LStats::add(&mut self.l3.cens, LenLaw::bin(len - d3), a3c);
-        LStats::add(&mut self.l5.stop, LenLaw::bin(l), a5s);
-        LStats::add(&mut self.l5.cens, LenLaw::bin(len - d5), a5c);
-        LStats::add(&mut self.lu.stop, LenLaw::bin(l), us);
-        LStats::add(&mut self.lu.cens, LenLaw::bin(len), uc);
+        LStats::add(&mut self.l3.stop, LenLaw::bin_nt(g.l), a3s);
+        LStats::add(&mut self.l3.cens, LenLaw::bin_nt(g.len - g.d3), a3c);
+        LStats::add(&mut self.l5.stop, LenLaw::bin_nt(g.l), a5s);
+        LStats::add(&mut self.l5.cens, LenLaw::bin_nt(g.len - g.d5), a5c);
+        LStats::add(&mut self.lu.stop, LenLaw::bin_nt(g.l), us);
+        LStats::add(&mut self.lu.cens, LenLaw::bin_nt(g.len), uc);
         // Every part that places the read at an end through that end's kernel observes its gap.
         let (w3, w5) = (a3s + a3c + a5c + fl + uc, a5s + a5c + a3c + fl + uc);
         let lu = g.len;
-        self.k3.add(w3, d3 as u32, lu, t.k3a, t.k3r);
-        self.k5.add(w5, d5 as u32, lu, t.k5a, t.k5r);
+        self.k3.add(w3, g.d3, lu, t.k3a, t.k3r);
+        self.k5.add(w5, g.d5, lu, t.k5a, t.k5r);
     }
 
     fn params(&self, old: &Params) -> Params {
