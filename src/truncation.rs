@@ -156,61 +156,37 @@ struct Geo {
 }
 
 /// The frozen-parameter EM's inputs: each alignment's target and fixed weight (score
-/// probability times positional likelihood), laid out by read in the order of
-/// `crate::em_read::read_order` (reads of one transcript together, which the transcript-major
-/// pass reads from nearby memory). Read `r` here is read `perm[r]` of [`Flat`] and owns
-/// entries `off[r]..off[r + 1]`.
-struct Fixed {
-    off: Vec<usize>,
-    perm: Vec<u32>,
+/// probability times positional likelihood), in [`Flat`]'s order, whose read boundaries they
+/// share: entry `k` is alignment `k`, and read `r` owns entries `off[r]..off[r + 1]`. That is
+/// store order, reads by likeliest target (`bulk` orders the store so), which the
+/// transcript-major pass reads from nearby memory.
+struct Fixed<'f> {
+    off: &'f [usize],
     t: Vec<u32>,
     w: Vec<f64>,
 }
 
-impl Fixed {
-    /// With `reorder` false the reads keep [`Flat`]'s order, so that entry `k` is alignment
-    /// `k` (as the presence model, which indexes alignments, needs).
-    fn new(f: &Flat, par: &Params, reorder: bool) -> Self {
+impl<'f> Fixed<'f> {
+    fn new(f: &'f Flat, par: &Params) -> Self {
         let e = Exps::new(par, f.max_len());
-        let nreads = f.off.len() - 1;
-        let perm: Vec<u32> = if reorder {
-            crate::em_read::read_order(nreads, |r| {
-                f.read_geos(r)
-                    .max_by(|x, y| x.p.total_cmp(&y.p))
-                    .map_or(0, |g| g.t)
+        let (t, w) = (0..f.n())
+            .into_par_iter()
+            .map(|k| {
+                let g = f.geo(k);
+                (g.t, g.p as f64 * par.terms(&g, &e).total())
             })
-        } else {
-            (0..nreads as u32).collect()
-        };
-        let mut off = Vec::with_capacity(nreads + 1);
-        off.push(0usize);
-        for &r in &perm {
-            let r = r as usize;
-            off.push(off.last().unwrap() + (f.off[r + 1] - f.off[r]));
-        }
-        let n = f.n();
-        let (mut t, mut w) = (vec![0u32; n], vec![0f64; n]);
-        let (tp, wp) = (t.as_mut_ptr() as usize, w.as_mut_ptr() as usize);
-        (0..nreads).into_par_iter().for_each(|i| {
-            for (j, g) in (off[i]..off[i + 1]).zip(f.read_geos(perm[i] as usize)) {
-                // SAFETY: entries off[i]..off[i + 1] belong to read i alone.
-                unsafe {
-                    *(tp as *mut u32).add(j) = g.t;
-                    *(wp as *mut f64).add(j) = g.p as f64 * par.terms(&g, &e).total();
-                }
-            }
-        });
-        Fixed { off, perm, t, w }
+            .unzip();
+        Fixed { off: &f.off, t, w }
     }
 
     fn nreads(&self) -> usize {
         self.off.len() - 1
     }
 
-    /// Multiplicity of read `r` (bootstrap weights are indexed in [`Flat`]'s order).
+    /// Multiplicity of read `r`.
     #[inline]
     fn mult(&self, mult: Option<&[u32]>, r: usize) -> f64 {
-        mult.map_or(1.0, |m| m[self.perm[r] as usize] as f64)
+        mult.map_or(1.0, |m| m[r] as f64)
     }
 }
 
@@ -1531,7 +1507,7 @@ fn run(
                 };
                 par = next;
                 if can_freeze && still >= FREEZE_AFTER {
-                    let fx = Fixed::new(f, &par, pres.is_none());
+                    let fx = Fixed::new(f, &par);
                     info!(
                         "truncation parameters frozen after {} iterations: {:?}",
                         niter + 1,
@@ -1787,7 +1763,7 @@ mod tests {
         }
         let f = flat(&reads, &lens);
         let par = Params::initial(f.max_len());
-        let ws = Fixed::new(&f, &par, true);
+        let ws = Fixed::new(&f, &par);
         let prev: Vec<AtomicF64> = [3.0, 1.0, 2.0].into_iter().map(AtomicF64::new).collect();
         let mult: Vec<u32> = (0..reads.len()).map(|i| (i % 3) as u32).collect();
         for m in [None, Some(&mult[..])] {
@@ -1837,7 +1813,7 @@ mod tests {
         }
         let f = flat(&reads, &lens);
         let par = Params::initial(f.max_len());
-        let ws = Fixed::new(&f, &par, true);
+        let ws = Fixed::new(&f, &par);
         let init = || -> Vec<AtomicF64> { (0..4).map(|_| AtomicF64::new(100.0)).collect() };
         let fresh = || -> Vec<AtomicF64> { (0..4).map(|_| AtomicF64::new(0.0)).collect() };
         let get = |v: &[AtomicF64]| {
