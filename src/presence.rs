@@ -340,15 +340,20 @@ impl Presence {
     {
         let ntx = self.q.len();
         let q = &self.q;
-        let (delta, touched) = (0..nreads)
+        // Reads are split into a fixed number of chunks, accumulated in parallel and merged in
+        // chunk order, so the sums do not depend on scheduling or the thread count.
+        const CHUNKS: usize = 32;
+        let per = nreads.div_ceil(CHUNKS).max(1);
+        let parts: Vec<(Vec<f64>, Vec<bool>)> = (0..nreads.div_ceil(per))
             .into_par_iter()
-            .fold(
-                || (vec![0.0_f64; ntx], vec![false; ntx], Vec::new()),
-                |(mut delta, mut touched, mut buf), r| {
+            .map(|c| {
+                let (mut delta, mut touched, mut buf) =
+                    (vec![0.0_f64; ntx], vec![false; ntx], Vec::new());
+                for r in c * per..((c + 1) * per).min(nreads) {
                     buf.clear();
                     let m = read(r, &mut buf);
                     if m == 0.0 || buf.is_empty() {
-                        return (delta, touched, buf);
+                        continue;
                     }
                     let denom: f64 = buf
                         .iter()
@@ -372,18 +377,18 @@ impl Presence {
                             .min(READ_LOG_CAP);
                         delta[t] += m * term;
                     }
-                    (delta, touched, buf)
-                },
-            )
-            .map(|(d, t, _)| (d, t))
-            .reduce(
-                || (vec![0.0_f64; ntx], vec![false; ntx]),
-                |(mut d1, mut t1), (d2, t2)| {
-                    d1.iter_mut().zip(&d2).for_each(|(a, b)| *a += b);
-                    t1.iter_mut().zip(&t2).for_each(|(a, b)| *a |= b);
-                    (d1, t1)
-                },
-            );
+                }
+                (delta, touched)
+            })
+            .collect();
+        let (delta, touched) = parts
+            .into_iter()
+            .reduce(|(mut d1, mut t1), (d2, t2)| {
+                d1.iter_mut().zip(&d2).for_each(|(a, b)| *a += b);
+                t1.iter_mut().zip(&t2).for_each(|(a, b)| *a |= b);
+                (d1, t1)
+            })
+            .unwrap_or_else(|| (vec![0.0_f64; ntx], vec![false; ntx]));
         let lr = self.logit_rho;
         self.q
             .par_iter_mut()

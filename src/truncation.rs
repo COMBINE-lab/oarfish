@@ -816,6 +816,34 @@ impl Stats {
     }
 }
 
+/// Items per block of [`fold_blocks`].
+const FOLD_BLOCK: usize = 1 << 12;
+
+/// Folds `f` over `0..n` in fixed blocks of [`FOLD_BLOCK`] items: the blocks run in parallel,
+/// each folding its items in order from `init()` (with a reusable `scratch`), and their results
+/// are merged in block order. Floating-point sums so come out the same on every run and for
+/// any number of threads, unlike rayon's `fold`/`reduce`, whose grouping follows the work
+/// stealing.
+fn fold_blocks<T: Send, S>(
+    n: usize,
+    init: impl Fn() -> T + Sync + Send,
+    scratch: impl Fn() -> S + Sync + Send,
+    f: impl Fn(&mut T, &mut S, usize) + Sync + Send,
+    merge: impl Fn(T, T) -> T,
+) -> T {
+    let parts: Vec<T> = (0..n.div_ceil(FOLD_BLOCK))
+        .into_par_iter()
+        .map_init(scratch, |s, b| {
+            let mut acc = init();
+            for i in b * FOLD_BLOCK..((b + 1) * FOLD_BLOCK).min(n) {
+                f(&mut acc, s, i);
+            }
+            acc
+        })
+        .collect();
+    parts.into_iter().reduce(merge).unwrap_or_else(init)
+}
+
 /// One EM round: distribute each read over its alignments, accumulating abundances into `curr`
 /// and the positional statistics into the returned `Stats`. With `mult`, read `r` counts
 /// `mult[r]` times (a bootstrap replicate).
@@ -1077,7 +1105,9 @@ fn step_with(
                     }
                     st
                 })
-                .reduce(Stats::default, Stats::merge);
+                .collect::<Vec<_>>()
+                .into_iter()
+                .fold(Stats::default(), Stats::merge);
             const BLOCK: usize = 4096;
             let bufs = &*bufs;
             curr.par_chunks(BLOCK).enumerate().for_each(|(b, out)| {
@@ -1096,23 +1126,21 @@ fn step_with(
             // only its own alignments' slots), and the sufficient statistics.
             let nreads = f.off.len() - 1;
             let post_ptr = post.as_mut_ptr() as usize;
-            let st = (0..nreads)
-                .into_par_iter()
-                .fold(
-                    || (Stats::default(), Vec::new()),
-                    |(mut st, mut scratch), r| {
-                        for k in f.off[r]..f.off[r + 1] {
-                            // SAFETY: slot k belongs to read r alone.
-                            unsafe { *(post_ptr as *mut f64).add(k) = 0.0 };
-                        }
-                        read(r, &mut st, &mut scratch, &mut |k, _, p| unsafe {
-                            *(post_ptr as *mut f64).add(k) = p
-                        });
-                        (st, scratch)
-                    },
-                )
-                .map(|(st, _)| st)
-                .reduce(Stats::default, Stats::merge);
+            let st = fold_blocks(
+                nreads,
+                Stats::default,
+                Vec::new,
+                |st, scratch, r| {
+                    for k in f.off[r]..f.off[r + 1] {
+                        // SAFETY: slot k belongs to read r alone.
+                        unsafe { *(post_ptr as *mut f64).add(k) = 0.0 };
+                    }
+                    read(r, st, scratch, &mut |k, _, p| unsafe {
+                        *(post_ptr as *mut f64).add(k) = p
+                    });
+                },
+                Stats::merge,
+            );
             // Pass 2, over transcripts: sum their alignments' posteriors.
             let post = &*post;
             curr.par_iter().enumerate().for_each(|(t, c)| {
@@ -1281,10 +1309,12 @@ fn store_from(dst: &[AtomicF64], src: &[f64]) {
 /// Log-likelihood of abundances `theta` (normalized to proportions) under the fixed weights
 /// `ws`, up to a constant: the objective the frozen-weight EM ascends.
 fn loglik_static(fx: &Fixed, theta: &[f64], mult: Option<&[u32]>) -> f64 {
-    let total: f64 = theta.par_iter().sum();
-    let (ll, n) = (0..fx.nreads())
-        .into_par_iter()
-        .map(|r| {
+    let total: f64 = theta.iter().sum();
+    let (ll, n) = fold_blocks(
+        fx.nreads(),
+        || (0.0, 0.0),
+        || (),
+        |acc, _, r| {
             let m = fx.mult(mult, r);
             let (lo, hi) = (fx.off[r], fx.off[r + 1]);
             let d: f64 = fx.t[lo..hi]
@@ -1293,12 +1323,12 @@ fn loglik_static(fx: &Fixed, theta: &[f64], mult: Option<&[u32]>) -> f64 {
                 .map(|(&t, &w)| theta[t as usize] * w)
                 .sum();
             if m > 0.0 && d > constants::EM_DENOM_THRESH {
-                (m * d.ln(), m)
-            } else {
-                (0.0, 0.0)
+                acc.0 += m * d.ln();
+                acc.1 += m;
             }
-        })
-        .reduce(|| (0.0, 0.0), |a, b| (a.0 + b.0, a.1 + b.1));
+        },
+        |a, b| (a.0 + b.0, a.1 + b.1),
+    );
     ll - n * total.ln()
 }
 
@@ -1321,15 +1351,18 @@ fn squarem_cycle(
     store_from(prev, &sq.t1);
     step_static(lay, fx, prev, curr, mult);
     load_into(&mut sq.t2, curr);
-    let (rr, vv) = sq
-        .t0
-        .par_iter()
-        .zip(sq.t1.par_iter().zip(sq.t2.par_iter()))
-        .map(|(&a, (&b, &c))| {
+    let (rr, vv) = fold_blocks(
+        sq.t0.len(),
+        || (0.0, 0.0),
+        || (),
+        |acc, _, i| {
+            let (a, b, c) = (sq.t0[i], sq.t1[i], sq.t2[i]);
             let (r, v) = (b - a, c - 2.0 * b + a);
-            (r * r, v * v)
-        })
-        .reduce(|| (0.0, 0.0), |x, y| (x.0 + y.0, x.1 + y.1));
+            acc.0 += r * r;
+            acc.1 += v * v;
+        },
+        |x, y| (x.0 + y.0, x.1 + y.1),
+    );
     // Step length -alpha in [1, step_max]; 1 reproduces θ2 exactly.
     let mut s = if vv > 0.0 { (rr / vv).sqrt() } else { 1.0 };
     if !s.is_finite() || s < 1.0 {
