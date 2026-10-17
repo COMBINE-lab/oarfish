@@ -346,6 +346,11 @@ fn main() -> anyhow::Result<()> {
 
     let mut args = Args::parse();
     args.resolve_coverage_model()?;
+    // Parallel work outside the explicitly sized pools (reordering the alignment store,
+    // normalizing coverage probabilities) uses at most the requested threads.
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.threads.max(1))
+        .build_global()?;
 
     // change the logging filter if the user specified quiet or
     // verbose.

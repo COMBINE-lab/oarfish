@@ -103,16 +103,38 @@ fn perform_inference_and_write_output(
         None
     };
 
-    // Put reads that share their likeliest target next to each other: the EM's
-    // transcript-major passes then read nearby memory (see `InMemoryAlignmentStore::reorder_reads`).
+    if store.filter_opts.model_coverage {
+        //obtaining the Cumulative Distribution Function (CDF) for each transcript
+        logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
+        //Normalize the probabilities for the records of each read
+        normalize_read_probs(store, txps);
+    }
+
+    // Put reads that share their likeliest target (under their EM weights, see
+    // `em_read::aln_weight`) next to each other: the EM's transcript-major passes then read
+    // nearby memory (see `InMemoryAlignmentStore::reorder_reads`), and the per-read EM reads
+    // the store in this order directly.
     let t_order = std::time::Instant::now();
-    let order = crate::em_read::read_order(store.len(), |r| {
-        let (alns, probs, _) = store.read(r);
-        alns.iter()
-            .zip(probs)
-            .max_by(|x, y| x.1.total_cmp(y.1))
-            .map_or(0, |x| x.0.ref_id)
-    });
+    let order = {
+        let cov = store.filter_opts.model_coverage;
+        let kde = kde_opt.as_ref();
+        let tinfo: &[TranscriptInfo] = txps;
+        let store: &InMemoryAlignmentStore = store;
+        crate::em_read::read_order(store.len(), |r| {
+            let (alns, probs, cps) = store.read(r);
+            alns.iter()
+                .zip(probs)
+                .zip(cps)
+                .map(|((a, &p), &cp)| {
+                    (
+                        crate::em_read::aln_weight(a, p, cp, cov, kde, tinfo),
+                        a.ref_id,
+                    )
+                })
+                .max_by(|x, y| x.0.total_cmp(&y.0))
+                .map_or(0, |x| x.1)
+        })
+    };
     store.reorder_reads(&order);
     drop(order);
     crate::util::oarfish_types::release_freed_memory();
@@ -120,13 +142,6 @@ fn perform_inference_and_write_output(
         "reads ordered by likeliest target in {:.2}s",
         t_order.elapsed().as_secs_f64()
     );
-
-    if store.filter_opts.model_coverage {
-        //obtaining the Cumulative Distribution Function (CDF) for each transcript
-        logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
-        //Normalize the probabilities for the records of each read
-        normalize_read_probs(store, txps);
-    }
 
     info!(
         "Total number of alignment records : {}",

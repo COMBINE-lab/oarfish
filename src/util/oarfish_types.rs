@@ -872,6 +872,12 @@ impl<'h> InMemoryAlignmentStore<'h> {
         (0..self.len()).map(move |i| self.read(at.as_ref().map_or(i, |a| a[i] as usize)))
     }
 
+    /// Read `i` owns alignments `boundaries()[i]..boundaries()[i + 1]`.
+    #[inline]
+    pub fn boundaries(&self) -> &[usize] {
+        &self.boundaries
+    }
+
     /// Positions of read `i`'s alignments in `alignments`.
     #[inline]
     pub fn read_range(&self, i: usize) -> std::ops::Range<usize> {

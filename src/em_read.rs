@@ -42,60 +42,88 @@ impl Impl {
     }
 }
 
-/// Alignments flattened in read order, with their fixed weights.
-pub(crate) struct Flat {
-    /// Read `r` owns alignments `off[r]..off[r + 1]`.
-    pub off: Vec<usize>,
-    pub target: Vec<u32>,
-    pub w: Vec<f64>,
+/// An alignment's fixed weight in the per-read EM: its score probability times, when those
+/// models are on, its coverage probability and its length density.
+#[inline]
+pub(crate) fn aln_weight(
+    a: &AlnInfo,
+    p: f32,
+    cp: f64,
+    cov: bool,
+    kde: Option<&kders::kde::KDEModel>,
+    tinfo: &[TranscriptInfo],
+) -> f64 {
+    p as f64
+        * if cov { cp } else { 1.0 }
+        * match kde {
+            Some(k) => {
+                k[(
+                    tinfo[a.ref_id as usize].lenf as usize,
+                    a.alignment_span() as usize,
+                )]
+            }
+            None => 1.0,
+        }
 }
 
-impl Flat {
-    /// Built in [`read_order`], with capacities reserved up front, so the table exists once.
-    fn new(em_info: &EMInfo) -> Self {
-        let tinfo: &[TranscriptInfo] = em_info.txp_info;
+/// The alignments as the EM reads them: straight from the store, in its order (which `bulk`
+/// arranges by each read's heaviest target under [`aln_weight`], see [`read_order`]), with
+/// each weight computed where it is used. Only the length-density weights, a table lookup,
+/// are tabulated.
+pub(crate) struct Flat<'a> {
+    /// Read `r` owns alignments `off[r]..off[r + 1]`.
+    pub off: &'a [usize],
+    alns: &'a [AlnInfo],
+    p: &'a [f32],
+    /// Coverage probabilities, when the coverage model is on.
+    cp: Option<&'a [f64]>,
+    /// Every weight, when the length density is on.
+    w: Option<Vec<f64>>,
+}
+
+impl<'a> Flat<'a> {
+    fn new(em_info: &'a EMInfo) -> Self {
         let store = &em_info.eq_map;
         let cov = store.filter_opts.model_coverage;
-        let weight = |a: &AlnInfo, p: f32, cp: f64| {
-            p as f64
-                * if cov { cp } else { 1.0 }
-                * match em_info.kde_model {
-                    Some(ref k) => {
-                        k[(
-                            tinfo[a.ref_id as usize].lenf as usize,
-                            a.alignment_span() as usize,
-                        )]
-                    }
-                    None => 1.0,
-                }
-        };
-        let order = read_order(store.len(), |r| {
-            let (alns, probs, cps) = store.read(r);
-            izip!(alns, probs, cps)
-                .map(|(a, &p, &cp)| (weight(a, p, cp), a.ref_id))
-                .max_by(|x, y| x.0.total_cmp(&y.0))
-                .map_or(0, |x| x.1)
+        let w = em_info.kde_model.as_ref().map(|k| {
+            (0..store.len())
+                .flat_map(|r| {
+                    let (alns, probs, cps) = store.read(r);
+                    izip!(alns, probs, cps)
+                        .map(|(a, &p, &cp)| aln_weight(a, p, cp, cov, Some(k), em_info.txp_info))
+                        .collect::<Vec<_>>()
+                })
+                .collect()
         });
-        let n = store.alignments.len();
-        let mut f = Flat {
-            off: Vec::with_capacity(order.len() + 1),
-            target: Vec::with_capacity(n),
-            w: Vec::with_capacity(n),
-        };
-        f.off.push(0);
-        for &r in &order {
-            let (alns, probs, cps) = store.read(r as usize);
-            for (a, &p, &cp) in izip!(alns, probs, cps) {
-                f.target.push(a.ref_id);
-                f.w.push(weight(a, p, cp));
-            }
-            f.off.push(f.target.len());
+        Flat {
+            off: store.boundaries(),
+            alns: &store.alignments,
+            p: &store.as_probabilities,
+            cp: cov.then_some(&store.coverage_probabilities[..]),
+            w,
         }
-        f
     }
 
     fn nreads(&self) -> usize {
         self.off.len() - 1
+    }
+
+    fn n(&self) -> usize {
+        self.alns.len()
+    }
+
+    #[inline(always)]
+    fn target(&self, k: usize) -> u32 {
+        self.alns[k].ref_id
+    }
+
+    /// Alignment `k`'s weight; equal, bit for bit, to [`aln_weight`] (`x * 1.0 == x`).
+    #[inline(always)]
+    fn w(&self, k: usize) -> f64 {
+        match &self.w {
+            Some(w) => w[k],
+            None => self.p[k] as f64 * self.cp.map_or(1.0, |cp| cp[k]),
+        }
     }
 }
 
@@ -122,21 +150,21 @@ struct Transpose {
 impl Transpose {
     fn new(f: &Flat, ntx: usize) -> Self {
         let mut off = vec![0usize; ntx + 1];
-        for &t in &f.target {
-            off[t as usize + 1] += 1;
+        for k in 0..f.n() {
+            off[f.target(k) as usize + 1] += 1;
         }
         for i in 0..ntx {
             off[i + 1] += off[i];
         }
         let mut fill = off.clone();
-        let n = f.target.len();
+        let n = f.n();
         let mut read = vec![0u32; n];
         let mut w = vec![0f64; n];
         for r in 0..f.nreads() {
             for k in f.off[r]..f.off[r + 1] {
-                let t = f.target[k] as usize;
+                let t = f.target(k) as usize;
                 read[fill[t]] = r as u32;
-                w[fill[t]] = f.w[k];
+                w[fill[t]] = f.w(k);
                 fill[t] += 1;
             }
         }
@@ -147,7 +175,7 @@ impl Transpose {
 /// Read chunks of roughly equal alignment counts, `per_thread` per worker.
 fn chunks(f: &Flat, nthreads: usize, per_thread: usize) -> Vec<(usize, usize)> {
     let n = (nthreads * per_thread).max(1);
-    let target = f.target.len().div_ceil(n).max(1);
+    let target = f.n().div_ceil(n).max(1);
     let mut out = Vec::with_capacity(n);
     let mut start = 0;
     for r in 0..f.nreads() {
@@ -195,7 +223,7 @@ fn run(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
     info!(
         "per-read EM ({how:?}): {} reads, {} alignments, setup {:.2}s",
         f.nreads().to_formatted_string(&Locale::en),
-        f.target.len().to_formatted_string(&Locale::en),
+        f.n().to_formatted_string(&Locale::en),
         t0.elapsed().as_secs_f64()
     );
     let t1 = Instant::now();
@@ -261,13 +289,13 @@ fn step_local(
                 let (lo, hi) = (f.off[r], f.off[r + 1]);
                 let mut denom = 0.0;
                 for k in lo..hi {
-                    denom += prev[f.target[k] as usize] * f.w[k];
+                    denom += prev[f.target(k) as usize] * f.w(k);
                 }
                 if denom > constants::EM_DENOM_THRESH {
                     let inv = 1.0 / denom;
                     for k in lo..hi {
-                        let t = f.target[k] as usize;
-                        acc[t] += prev[t] * f.w[k] * inv;
+                        let t = f.target(k) as usize;
+                        acc[t] += prev[t] * f.w(k) * inv;
                     }
                 }
             }
@@ -290,7 +318,7 @@ fn step_csr(f: &Flat, tr: &Transpose, inv: &mut [f64], prev: &[f64], curr: &mut 
     inv.par_iter_mut().enumerate().for_each(|(r, x)| {
         let mut denom = 0.0;
         for k in f.off[r]..f.off[r + 1] {
-            denom += prev[f.target[k] as usize] * f.w[k];
+            denom += prev[f.target(k) as usize] * f.w(k);
         }
         *x = if denom > constants::EM_DENOM_THRESH {
             1.0 / denom
