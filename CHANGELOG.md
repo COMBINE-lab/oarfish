@@ -66,7 +66,7 @@ Versus 0.10.3, 16 threads, transcriptome BAMs (NanoSim NA12878 cDNA, 35M alignme
 |---|---|---|---|---|
 | default model | 193 s, 2.35 GB | 13 s, 1.58 GB | 336 s, 3.51 GB | 21 s, 2.56 GB |
 | coverage model | 190 s, 2.53 GB | 22 s, 1.97 GB | 349 s, 3.87 GB | 36 s, 3.79 GB |
-| truncation model | | 23 s, 1.96 GB | | 35 s, 3.80 GB |
+| truncation model | | 25 s, 1.95 GB | | 43 s, 3.80 GB |
 
 - **BAM parsing about 4x faster than 0.10.3** (NanoSim 41 s to 9 s). Parsing is serial (only BGZF
   decompression is threaded), so per-record work is wall time: records are now read undecoded into
