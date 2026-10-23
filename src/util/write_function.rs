@@ -14,6 +14,7 @@ use path_tools::WithAdditionalExtension;
 use swapvec::SwapVec;
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::{
     fs,
     fs::File,
@@ -22,9 +23,44 @@ use std::{
     io::{self, BufWriter, Write},
 };
 
+/// When this run started, as recorded by [`record_start_time`].
+static START_TIME: OnceLock<String> = OnceLock::new();
+
+/// The local time in the format salmon uses in `meta_info.json` (that of C's `asctime`, e.g.
+/// "Tue Jan 15 11:10:00 2019").
+fn meta_info_time_now() -> String {
+    chrono::Local::now()
+        .format("%a %b %e %H:%M:%S %Y")
+        .to_string()
+}
+
+/// Records the start time written to `meta_info.json`. Called once, when oarfish starts.
+pub fn record_start_time() {
+    START_TIME.get_or_init(meta_info_time_now);
+}
+
+/// Adds the fields salmon records in `meta_info.json` about the run itself: the version that
+/// produced the output, and when the run started and ended (the end being when the metadata is
+/// written).
+fn add_run_info(info: &mut serde_json::Value) {
+    if let Some(m) = info.as_object_mut() {
+        let end_time = meta_info_time_now();
+        let start_time = START_TIME
+            .get()
+            .cloned()
+            .unwrap_or_else(|| end_time.clone());
+        m.insert(
+            "oarfish_version".to_string(),
+            env!("CARGO_PKG_VERSION").into(),
+        );
+        m.insert("start_time".to_string(), start_time.into());
+        m.insert("end_time".to_string(), end_time.into());
+    }
+}
+
 pub fn write_single_cell_output(
     output: &PathBuf,
-    info: serde_json::Value,
+    mut info: serde_json::Value,
     header: &noodles_sam::header::Header,
     counts: &sprs::TriMatI<f32, u32>,
 ) -> io::Result<()> {
@@ -47,6 +83,7 @@ pub fn write_single_cell_output(
             .open(info_path)
             .expect("Couldn't create output file");
 
+        add_run_info(&mut info);
         serde_json::ser::to_writer_pretty(write, &info)?;
     }
 
@@ -72,7 +109,7 @@ pub fn write_single_cell_output(
 //this part is taken from dev branch
 pub fn write_output(
     output: &PathBuf,
-    info: serde_json::Value,
+    mut info: serde_json::Value,
     header: &noodles_sam::header::Header,
     counts: &[f64],
     aux_counts: &[crate::util::aux_counts::CountInfo],
@@ -96,6 +133,7 @@ pub fn write_output(
             .open(info_path)
             .expect("Couldn't create output file");
 
+        add_run_info(&mut info);
         serde_json::ser::to_writer_pretty(write, &info)?;
     }
 
@@ -341,7 +379,23 @@ pub fn write_out_prob(
 
 #[cfg(test)]
 mod tests {
-    use super::prob_display_decimals;
+    use super::{add_run_info, prob_display_decimals};
+
+    #[test]
+    fn run_info_matches_salmon_fields() {
+        let mut info = serde_json::json!({ "prob_model": "no_coverage" });
+        add_run_info(&mut info);
+        assert_eq!(info["prob_model"], "no_coverage");
+        assert_eq!(info["oarfish_version"], env!("CARGO_PKG_VERSION"));
+        for k in ["start_time", "end_time"] {
+            // C's asctime layout, e.g. "Tue Jan 15 11:10:00 2019" or "Fri Nov  6 09:05:00 2026".
+            let t = info[k].as_str().expect("a string");
+            let f: Vec<&str> = t.split_whitespace().collect();
+            assert_eq!(t.len(), 24, "{t}");
+            assert_eq!(f.len(), 5, "{t}");
+            assert_eq!(f[3].len(), 8, "{t}");
+        }
+    }
 
     #[test]
     fn prob_decimals_track_threshold() {
