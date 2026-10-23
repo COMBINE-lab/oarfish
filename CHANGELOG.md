@@ -6,7 +6,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > Release tooling note: `dist` (cargo-dist) extracts the section whose header
 > matches the release tag and uses it as the GitHub Release body. When tagging,
-> rename the `## Unreleased
+> rename the `## Unreleased` heading below to the chosen version, e.g.
+> `## 0.10.0 - 2026-06-06`, so the notes are picked up automatically.
+
+## Unreleased
 
 ### Added
 
