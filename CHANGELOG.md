@@ -9,6 +9,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 > rename the `## Unreleased` heading below to the chosen version, e.g.
 > `## 0.10.0 - 2026-06-06`, so the notes are picked up automatically.
 
+## Unreleased
+
+### Added
+
+- **`meta_info.json` records the oarfish version and the run's start and end
+  times**, in the same fields and format as salmon (`oarfish_version`,
+  `start_time`, `end_time`; e.g. `"Tue Jan 15 11:10:00 2019"`, local time), for
+  bulk and single-cell runs.
+
 ## 0.10.3 - 2026-07-16
 
 Patch release improving the numeric precision of the `--write-assignment-probs`

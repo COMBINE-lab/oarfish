@@ -317,6 +317,7 @@ fn run_genome_reads(args: &mut Args, filter_opts: AlignmentFilters) -> anyhow::R
 }
 
 fn main() -> anyhow::Result<()> {
+    util::write_function::record_start_time();
     let env_filter = EnvFilter::builder()
         .with_default_directive(LevelFilter::INFO.into())
         .from_env_lossy();
