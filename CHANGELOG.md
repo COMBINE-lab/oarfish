@@ -28,6 +28,10 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`--presence-model spike-slab|bayes` (experimental).** A per-transcript presence posterior
   that discounts low-evidence transcripts during the EM; reduces false positives at some cost to
   true low-abundance transcripts. Off by default.
+- **`meta_info.json` records the oarfish version and the run's start and end
+  times**, in the same fields and format as salmon (`oarfish_version`,
+  `start_time`, `end_time`; e.g. `"Tue Jan 15 11:10:00 2019"`, local time), for
+  bulk and single-cell runs.
 
 ### Changed
 

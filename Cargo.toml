@@ -94,6 +94,7 @@ indicatif = "0.18.3"
 rustc-hash = "2.1.1"
 niffler = "3.0.0"
 humantime = "2.3.0"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
 # mimalloc global allocator. Long-read genome-projection mapping does a lot of
 # small alloc/free across many worker threads; glibc malloc retains/fragments
