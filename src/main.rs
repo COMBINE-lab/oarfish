@@ -375,9 +375,9 @@ fn main() -> anyhow::Result<()> {
                 "--mapper spearfish supports transcriptome read mode only (not genome mode)"
             );
         }
-        if args.only_index {
+        if args.only_index || args.index_out.is_some() {
             anyhow::bail!(
-                "--mapper spearfish builds its index in seconds; use `spearfish index` to write one"
+                "--mapper spearfish builds its index in seconds; use `spearfish index` to write one (and pass it with --index)"
             );
         }
         // spearfish scores are scaled by SPEARFISH_SCORE_SCALE; a hit Δ below the best weighs

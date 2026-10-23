@@ -13,6 +13,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`--mapper spearfish`: [spearfish](https://github.com/COMBINE-lab/spearfish) as a read-mode
+  backend.** Maps reads to the transcriptome in process with spearfish (crates `spearfish` and
+  `long-read-rad`, 0.1), building its index from `--annotated`/`--novel` or opening a `.sfi`
+  given as `--index`. The preset follows `--seq-tech`; hits are weighted by their score
+  difference from the read's best, and with `--model-truncation` spans are extended to the read
+  ends. Transcriptome read mode only.
+- **RAD input: `oarfish -a mappings.rad`** quantifies the `bulk_long_read` RAD files that
+  `spearfish map --rad` writes, taking the transcripts, score scale, preset and span settings
+  from the file.
 - **`--model-truncation`: a learned placement model.** Each alignment's score probability is
   multiplied by the probability of where it lands on the transcript under a mixture of
   3'-anchored, 5'-anchored, full-length and uniformly placed reads, whose weights, read-length

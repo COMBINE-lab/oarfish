@@ -91,9 +91,9 @@ rammap = { package = "rammap-core-temp", version = "1.2.0", default-features = f
 
 # spearfish: LCP-based long-read transcriptome mapper, an alternative read-mode backend
 # (`--mapper spearfish`).
-spearfish = { path = "../../../../crates/spearfish", default-features = false }
+spearfish = { version = "0.1", default-features = false }
 # RAD input (`bulk_long_read` records, e.g. from `spearfish map --rad`).
-long-read-rad = { path = "../../../../crates/rad" }
+long-read-rad = "0.1"
 
 needletail = "0.6.3"
 indicatif = "0.18.3"
