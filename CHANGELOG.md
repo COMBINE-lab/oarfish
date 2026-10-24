@@ -11,6 +11,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+## 0.11.0 - 2026-10-24
+
 ### Added
 
 - **`--mapper spearfish`: [spearfish](https://github.com/COMBINE-lab/spearfish) as a read-mode
