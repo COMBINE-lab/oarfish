@@ -307,7 +307,7 @@ The `--seq-tech` value selects the mapping preset:
 
 ### spearfish
 
-With `--mapper spearfish`, read mode maps with [spearfish](https://github.com/COMBINE-lab/spearfish) instead of rammap, in process: a long-read transcriptome mapper that reports, for each read, every compatible transcript with its score difference from the best. It builds its index from `--annotated`/`--novel` in a few seconds, or opens one written by `spearfish index` (`--index transcripts.sfi`; spearfish is installed separately, e.g. `cargo install spearfish-cli`). It supports transcriptome read mode only (not the genome modes), and `--only-index`/`--index-out` are for rammap: write a spearfish index with `spearfish index` instead.
+With `--mapper spearfish`, read mode maps with [spearfish](https://github.com/COMBINE-lab/spearfish) instead of rammap, in process: a long-read transcriptome mapper that reports, for each read, every compatible transcript with its score difference from the best. It builds its index from `--annotated`/`--novel` in a few seconds, or opens one written by `spearfish index` (`--index transcripts.sfi`; spearfish is installed separately, e.g. `conda install -c bioconda spearfish` or `cargo install spearfish-cli`). It supports transcriptome read mode only (not the genome modes), and `--only-index`/`--index-out` are for rammap: write a spearfish index with `spearfish index` instead.
 
 Its preset follows `--seq-tech`:
 

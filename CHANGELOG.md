@@ -26,14 +26,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   multiplied by the probability of where it lands on the transcript under a mixture of
   3'-anchored, 5'-anchored, full-length and uniformly placed reads, whose weights, read-length
   laws and end-gap laws are learned in the EM; the fitted mixture is logged. It adapts to the
-  protocol without settings. On the SIRV E2 direct-RNA spike-ins it raises isoform-level
-  Spearman from 0.820 to 0.882 (default model to truncation model), and on the over-annotated
-  SIRV reference cuts the mass placed on fabricated isoforms from 9.4% to 0.5%; on TKSM SQ2
-  simulations Spearman goes 0.953 to 0.956;
-  on LongBench (50k-read subsamples) it agrees better with Illumina TPM than the default model
-  on all 8 direct-RNA samples, and on 6 of 8 cDNA samples (all 8 on expressed transcripts). Works with bootstraps and in genome mode; conflicts with `--model-coverage`.
-  (Supersedes the 3'-anchored model proposed in #75, which mis-ranked isoforms whenever reads
-  were not 3'-anchored.)
+  protocol without settings. Compared with the default model, on a direct-RNA spike-in run it
+  raises isoform-level Spearman from 0.820 to 0.882; against a spike-in reference padded with
+  fabricated isoforms it cuts the mass placed on them from 9.4% to 0.5%; on simulated reads
+  Spearman goes from 0.953 to 0.956. Against short-read TPM on 16 matched samples, it agrees
+  better than the default model on all 8 direct-RNA samples and on 6 of 8 cDNA samples (all 8
+  on expressed transcripts). It works with bootstraps and in genome mode, and conflicts with
+  `--model-coverage`. (Supersedes the 3'-anchored model proposed in #75, which mis-ranked
+  isoforms whenever reads were not 3'-anchored.)
 - **`--presence-model spike-slab|bayes` (experimental).** A per-transcript presence posterior
   that discounts low-evidence transcripts during the EM; reduces false positives at some cost to
   true low-abundance transcripts. Off by default.
@@ -50,22 +50,23 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unsigned integers that could underflow. Both now use one exact bin layout (`len / nbins`), with
   the one behaviour the accident encoded made a stated rule: a read's partly covered end bin is
   left out of both its coverage and its weight when it fully covers another bin (counting it
-  costs accuracy). Versus 0.10.3's coverage model: TKSM SQ2 0.9500 to 0.9503,
-  NanoSim NA12878 cDNA 0.8861 to 0.8857, SIRV E2 over-annotation 0.786 to 0.799, SIRV E2 0.842 to
-  0.841; LongBench better on 12 of 17 samples.
+  costs accuracy). Versus 0.10.3's coverage model, Spearman moves by at most 0.001 on simulated
+  reads and spike-ins, except for a gain of 0.013 against an over-annotated spike-in reference;
+  agreement with short-read TPM improves on 12 of 17 matched samples.
 - **`--coverage-model none|logistic|truncation`** selects the positional model in one flag;
   `--model-coverage` and `--model-truncation` remain as shorthands. Contradictory combinations,
   and the truncation model in single-cell mode (previously ignored silently), are errors.
 - **`--score-prob-denom` defaults to 3 (was 5).** Sharper weighting of a read's alignments toward
-  the best-scoring one. On the simulations with exact truth it raises Spearman slightly (TKSM SQ2
-  0.950 to 0.953 for the default model, 0.954 to 0.956 with `--model-truncation`); on LongBench it
-  improved 27 of 28 samples in a held-out sweep. On SIRV E2 it raises Spearman but slightly
-  worsens MARD. `--score-prob-denom 5` restores the previous behaviour exactly.
+  the best-scoring one. On simulated reads with exact truth it raises Spearman slightly (0.950 to
+  0.953 for the default model, 0.954 to 0.956 with `--model-truncation`); against short-read TPM
+  it improved 27 of 28 matched samples in a held-out sweep. On spike-ins it raises Spearman but
+  slightly worsens MARD. `--score-prob-denom 5` restores the previous behaviour exactly.
 - **Tail-neutral alignment scores, for all models.** The score credit a read's poly(A) tail earns
   by aligning to an annotated A-run at a transcript's end is removed, using the aligner's match
-  score (from the minimap2 `@PG` line or the rammap preset). On TKSM SQ2 this improves the
-  default model (Spearman 0.948 to 0.950, false positives 868 to 678, with `--score-prob-denom`
-  held at 5); outputs on data without poly(A) tails are unchanged.
+  score (from the minimap2 `@PG` line or the rammap preset). On simulated reads with poly(A)
+  tails this improves the default model (Spearman 0.948 to 0.950, and 22% fewer false
+  positives, with `--score-prob-denom` held at 5); outputs on data without poly(A) tails are
+  unchanged.
 - **EM engines.** Without a per-read model term, the EM runs over equivalence classes (CSR
   layout); per-read models use an atomic-free CSR layout (`OARFISH_READ_EM=local|atomic` selects
   the alternatives; `--per-read-em` forces the per-read EM). Estimates match the previous
@@ -75,18 +76,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Performance
 
-Versus 0.10.3, 16 threads, transcriptome BAMs (NanoSim NA12878 cDNA, 35M alignments; TKSM SQ2,
-75M alignments):
+Versus 0.10.3, from transcriptome BAMs of 35M and 75M alignments at 16 threads:
 
-| | NanoSim, 0.10.3 | NanoSim, now | SQ2, 0.10.3 | SQ2, now |
-|---|---|---|---|---|
-| default model | 193 s, 2.35 GB | 13 s, 1.58 GB | 336 s, 3.51 GB | 21 s, 2.56 GB |
-| coverage model | 190 s, 2.53 GB | 22 s, 1.97 GB | 349 s, 3.87 GB | 36 s, 3.79 GB |
-| truncation model | | 25 s, 1.95 GB | | 43 s, 3.80 GB |
+| | time | peak memory |
+|---|---|---|
+| default model | 15–16× faster | 27–33% lower |
+| coverage model | 9–10× faster | 2–22% lower |
+| truncation model (new) | about 2× the default model's time | about the coverage model's |
 
-- **BAM parsing about 4x faster than 0.10.3** (NanoSim 41 s to 9 s). Parsing is serial (only BGZF
-  decompression is threaded), so per-record work is wall time: records are now read undecoded into
-  reused buffers, the CIGAR, tags and sequence are read from their bytes only where a filter needs
+- **BAM parsing about 4.5× faster than 0.10.3.** Parsing is serial (only BGZF decompression is
+  threaded), so per-record work is wall time: records are now read undecoded into reused
+  buffers, the CIGAR, tags and sequence are read from their bytes only where a filter needs
   them, and records are no longer cloned.
 - **Lower peak memory**: the per-alignment record shrinks from 24 to 16 bytes (an unused field
   removed); coverage probabilities exist only under the coverage model; the per-read EM reads the
@@ -99,8 +99,8 @@ Versus 0.10.3, 16 threads, transcriptome BAMs (NanoSim NA12878 cDNA, 35M alignme
   output from run to run and across thread counts.
 - All parallel work stays within `--threads` (the store reorder and coverage normalization
   previously used every core).
-- Genome-BAM and raw-read modes are as fast or faster than 0.10.3 with the same memory
-  (genome-BAM NanoSim NA12878 cDNA: 142 s to 61 s).
+- Genome-BAM and raw-read modes are as fast or faster than 0.10.3 with the same memory (genome
+  BAMs about 2.3× faster).
 
 ## 0.10.3 - 2026-07-16
 
