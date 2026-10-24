@@ -153,6 +153,12 @@ fn parse_display_thresh(s: &str) -> anyhow::Result<f64> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, Serialize)]
+pub enum MapperBackend {
+    Rammap,
+    Spearfish,
+}
+
 #[derive(Debug, Clone, clap::ValueEnum, Serialize)]
 pub enum SequencingTech {
     OntCDNA,
@@ -498,6 +504,12 @@ pub struct Args {
         value_parser = clap::value_parser!(SequencingTech)
     )]
     pub seq_tech: Option<SequencingTech>,
+
+    /// read-mode mapping backend for transcriptome quantification: `rammap` (default) or
+    /// `spearfish`. spearfish builds its own index from `--annotated`/`--novel` (or opens a
+    /// spearfish `.sfi` given as `--index`); its preset follows `--seq-tech`.
+    #[arg(long, value_enum, default_value_t = MapperBackend::Rammap, help_heading = "raw read mode")]
+    pub mapper: MapperBackend,
 
     /// maximum number of secondary mappings to consider when mapping reads to the transcriptome
     #[arg(

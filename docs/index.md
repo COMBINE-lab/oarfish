@@ -44,12 +44,13 @@ conda install -c bioconda oarfish
 
 ## Quantification modes
 
-`oarfish` supports four ways of providing input for **bulk** quantification. All of them feed the same EM-based quantification core; they differ only in how alignments to the transcriptome are obtained. The mode is selected implicitly by which input flag you pass. (Single-cell quantification, `--single-cell`, is separate and accepts **only** a transcriptome BAM — see [Notes about single-cell mode](#notes-about-single-cell-mode).)
+`oarfish` supports five ways of providing input for **bulk** quantification. All of them feed the same EM-based quantification core; they differ only in how alignments to the transcriptome are obtained. The mode is selected implicitly by which input flag you pass. (Single-cell quantification, `--single-cell`, is separate and accepts **only** a transcriptome BAM — see [Notes about single-cell mode](#notes-about-single-cell-mode).)
 
 | Mode | Selected by | What it does |
 |------|-------------|--------------|
 | **Alignment** (transcriptome BAM) | `--alignments` | Quantify pre-computed alignments of reads to the **transcriptome** (a name-sorted BAM, e.g. from `minimap2`/`pbmm2`). |
-| **Read** (transcriptome mapping) | `--reads` + `--annotated`/`--index` | Map raw reads to the **transcriptome** internally (with the built-in [rammap](#the-mapping-backend) mapper), then quantify. |
+| **Read** (transcriptome mapping) | `--reads` + `--annotated`/`--index` | Map raw reads to the **transcriptome** internally (with the built-in [rammap](#the-mapping-backend) mapper, or [spearfish](#spearfish) with `--mapper spearfish`), then quantify. |
+| **RAD** (spearfish mappings) | `--alignments` with a RAD file | Quantify the mappings in a RAD file written by [spearfish](#spearfish) (`spearfish map --rad`). The file is recognized by its contents, and carries the transcripts, the score scale, the preset and whether spans reach the read ends, so no other options are needed. |
 | **Genome read-projection** | `--reads` + `--genome` + `--annotation` | Spliced-align raw reads to the **genome**, project each read's genomic alignments onto the annotated transcripts (via [bramble](https://github.com/COMBINE-lab/bramble)), then quantify. |
 | **Genome-alignment projection** | `--genome-alignments` + `--annotation` | Project an existing **spliced genome BAM** (e.g. from `minimap2 -ax splice`) onto the annotated transcripts, then quantify. |
 
@@ -76,13 +77,14 @@ Options:
   -V, --version            Print version
 
 alignment mode:
-  -a, --alignments <ALIGNMENTS>  path to a transcriptome-aligned BAM to quantify
+  -a, --alignments <ALIGNMENTS>  path to a transcriptome-aligned BAM, or a RAD file from `spearfish map --rad`, to quantify
 
 raw read mode:
       --reads <READS>          input reads: FASTA/Q (optionally gzipped) or uBAM; format inferred from suffix
       --annotated <ANNOTATED>  transcriptome FASTA (e.g. GENCODE) to map against
       --novel <NOVEL>          additional novel/assembled transcripts (indexed together, tracked separately)
       --index <INDEX>          an existing index (oarfish-created preferred, or a compatible prebuilt index)
+      --mapper <MAPPER>        read-mode mapping backend: rammap (default) or spearfish
       --seq-tech <SEQ_TECH>    [possible values: ont-cdna, ont-drna, pac-bio, pac-bio-hifi]
       --best-n <BEST_N>        max secondary mappings to consider [default: 100]
       --dp-cache-cap-mb <DP_CACHE_CAP_MB>
@@ -202,6 +204,12 @@ $ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa --index-o
 $ oarfish -j 16 --reads sample2_reads.fq.gz --index transcripts.oar --seq-tech ont-cdna -o sample2 --filter-group no-filters --model-coverage
 ```
 
+To map with [spearfish](#spearfish) instead of rammap:
+
+```bash
+$ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa --seq-tech ont-cdna --mapper spearfish -o sample1
+```
+
 ### Genome read-projection example (reads → genome → transcripts)
 
 Spliced-align the reads to the genome and project onto the annotated transcripts. You need a genome FASTA (or a prebuilt genome index) and a transcript annotation (GTF/GFF):
@@ -296,6 +304,28 @@ The `--seq-tech` value selects the mapping preset:
 | `pac-bio-hifi` | `map-hifi` | `splice:hq` |
 
 **Bounding peak memory.** The mapper retains a per-thread DP alignment-scratch buffer between reads to avoid reallocation. Rare reads with large unaligned gaps can produce very large buffers, and at high thread counts the retained per-thread high-water marks can dominate peak RSS. `oarfish` caps that buffer at 128 MB by default (frees larger one-off buffers instead of pinning them), which on our genome benchmark cut peak RSS by ~20% with bit-identical output. Tune it with `--dp-cache-cap-mb <MB>` (or the `RAMMAP_DP_CACHE_CAP_MB` environment variable); pass `0` to disable the cap and restore the previous unbounded behavior.
+
+### spearfish
+
+With `--mapper spearfish`, read mode maps with [spearfish](https://github.com/COMBINE-lab/spearfish) instead of rammap, in process: a long-read transcriptome mapper that reports, for each read, every compatible transcript with its score difference from the best. It builds its index from `--annotated`/`--novel` in a few seconds, or opens one written by `spearfish index` (`--index transcripts.sfi`; spearfish is installed separately, e.g. `cargo install spearfish-cli`). It supports transcriptome read mode only (not the genome modes), and `--only-index`/`--index-out` are for rammap: write a spearfish index with `spearfish index` instead.
+
+Its preset follows `--seq-tech`:
+
+| `--seq-tech` | spearfish preset |
+|--------------|------------------|
+| `ont-cdna`   | `ont`  |
+| `ont-drna`   | `drna` |
+| `pac-bio-hifi` | `hifi` |
+| `pac-bio`    | `ont` (spearfish has no PacBio CLR preset; a warning says so) |
+
+oarfish sets the mapping options its models need: with `--model-truncation`, for instance, spans are extended to the read ends. Hits are weighted by their score difference from the read's best on spearfish's scale (`--score-prob-denom` defaults accordingly).
+
+To keep the mappings, map with spearfish itself and quantify the RAD file:
+
+```bash
+$ spearfish map transcripts.sfi sample1_reads.fq.gz --preset ont -t 16 --rad sample1.rad
+$ oarfish -a sample1.rad -j 16 -o sample1
+```
 
 ## Other notes on `oarfish` parameters
 
