@@ -29,10 +29,21 @@ jobs:
       - name: Tag and push new commit
         run: |
           export VERSION_TAG=`cargo read-manifest | jq ".version" | tr -d '"'`
+          # Never move an existing release tag. A force-push of main (or any
+          # re-push whose head commit still carries [do_tag]) re-triggers this
+          # workflow on an already-released version; force-tagging there would
+          # silently repoint the tag at a fresh commit and change the checksum
+          # of GitHub's generated source tarball for downstream packagers
+          # (see issue #73). Re-releasing a version now requires deleting the
+          # tag by hand first.
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION_TAG}" >/dev/null 2>&1; then
+            echo "::error::tag v${VERSION_TAG} already exists on origin; refusing to move it. Bump the version, or delete the tag manually to re-release."
+            exit 1
+          fi
           git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add Cargo.toml.cs_orig
           git add Cargo.toml
           git commit -m "create sanitized release"
-          git tag --force -a v${VERSION_TAG} -m "version ${VERSION_TAG}"
-          git push --force origin v${VERSION_TAG}
+          git tag -a v${VERSION_TAG} -m "version ${VERSION_TAG}"
+          git push origin v${VERSION_TAG}
