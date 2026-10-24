@@ -133,7 +133,7 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                             //obtaining the Cumulative Distribution Function (CDF) for each transcript
                             crate::binomial_continuous_prob(&mut txps, &bin_width, 1);
                             //Normalize the probabilities for the records of each read
-                            crate::normalize_read_probs(&mut store, &txps, &bin_width);
+                            crate::normalize_read_probs(&mut store, &txps);
                         }
 
                         // wrap up all of the relevant information we need for estimation

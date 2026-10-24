@@ -36,6 +36,8 @@ mod backend {
     pub(crate) struct RammapMapping {
         pub(crate) m: rammap::api::Mapping,
         pub(crate) query_len: usize,
+        /// poly(A) run at the reference-right end of the read in this mapping's orientation.
+        pub(crate) tail: u32,
     }
 
     /// The per-alignment record yielded for a read.
@@ -54,12 +56,24 @@ mod backend {
     ) -> anyhow::Result<Vec<OMapping>> {
         let qname = std::str::from_utf8(name).unwrap_or("read");
         let res = aligner.map_seq(qname, seq);
+        // In reference orientation the tail is an A-run at the right end: the read's 3' A-run
+        // when it maps forward, its 5' T-run when it maps reverse.
+        let tail_fw = crate::util::read_ends::terminal_run(seq.iter().rev().copied(), b'A');
+        let tail_rc = crate::util::read_ends::terminal_run(seq.iter().copied(), b'T');
         Ok(res
             .mappings
             .into_iter()
-            .map(|m| RammapMapping {
-                m,
-                query_len: seq.len(),
+            .map(|m| {
+                let tail = if m.strand == rammap::api::Strand::Reverse {
+                    tail_rc
+                } else {
+                    tail_fw
+                };
+                RammapMapping {
+                    m,
+                    query_len: seq.len(),
+                    tail,
+                }
             })
             .collect())
     }
@@ -104,6 +118,23 @@ mod backend {
 
         fn is_supp(&self) -> bool {
             self.m.is_supplementary
+        }
+
+        fn end_evidence(&self) -> crate::util::read_ends::EndEvidence {
+            // Query spans are on the read as given; in reference orientation a reverse mapping
+            // swaps which end each clip is at.
+            let (qs, qe) = (self.m.query_start as u32, self.m.query_end as u32);
+            let ql = self.query_len as u32;
+            let (clip_left, clip_right) = if self.m.strand == rammap::api::Strand::Reverse {
+                (ql.saturating_sub(qe), qs)
+            } else {
+                (qs, ql.saturating_sub(qe))
+            };
+            crate::util::read_ends::EndEvidence {
+                clip_left: Some(clip_left),
+                clip_right: Some(clip_right),
+                tail: Some(self.tail),
+            }
         }
 
         fn name(&self) -> Option<String> {

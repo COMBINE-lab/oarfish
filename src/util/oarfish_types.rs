@@ -15,6 +15,7 @@ use typed_builder::TypedBuilder;
 use bio_types::strand::Strand;
 use bstr::{B, ByteSlice};
 use noodles_sam as sam;
+use rayon::prelude::*;
 use sam::{Header, alignment::record::data::field::tag::Tag as AlnTag};
 
 #[allow(unused_imports)]
@@ -194,9 +195,16 @@ pub trait AlnRecordLike {
     fn ref_id(&self, header: &Header) -> anyhow::Result<usize>;
     fn aln_span(&self) -> Option<usize>;
     fn aln_score(&self) -> Option<i64>;
+    /// Start and end of the alignment on the target, zero-based and half-open (`[start, end)`),
+    /// whatever convention the backend uses, so that every source places reads alike.
     fn aln_start(&self) -> u32;
     fn aln_end(&self) -> u32;
     fn is_supp(&self) -> bool;
+    /// What this alignment says about the read's ends (see [`crate::util::read_ends`]);
+    /// backends that cannot tell keep the default, which leaves every end adjustment off.
+    fn end_evidence(&self) -> crate::util::read_ends::EndEvidence {
+        crate::util::read_ends::EndEvidence::UNKNOWN
+    }
     #[allow(dead_code)]
     fn name(&self) -> Option<String>;
 }
@@ -261,65 +269,68 @@ impl CigarOp {
     }
 }
 
-pub trait NoodlesAlignmentLike {}
-impl NoodlesAlignmentLike for noodles_sam::alignment::record_buf::RecordBuf {}
-
-/// implement the AlnRecordLike trait for the underlying noodles Record type
-impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for T {
+/// The BAM backend. Implemented on `RecordBuf` itself rather than through noodles' `Record`
+/// trait, whose accessors hand back boxed iterators: the CIGAR, sequence and tags are then
+/// read from their buffers directly, which the per-record filters do several times.
+impl AlnRecordLike for noodles_sam::alignment::record_buf::RecordBuf {
     fn opt_sequence_len(&self) -> Option<usize> {
         Some(self.sequence().len())
     }
 
     fn is_reverse_complemented(&self) -> bool {
-        self.flags().expect("valid flags").is_reverse_complemented()
+        self.flags().is_reverse_complemented()
     }
 
     fn is_unmapped(&self) -> bool {
-        self.flags()
-            .expect("alignment record should have flags")
-            .is_unmapped()
+        self.flags().is_unmapped()
     }
 
-    fn ref_id(&self, header: &Header) -> anyhow::Result<usize> {
-        self.reference_sequence_id(header)
-            .unwrap()
-            .map_err(anyhow::Error::from)
+    fn ref_id(&self, _header: &Header) -> anyhow::Result<usize> {
+        self.reference_sequence_id()
+            .ok_or_else(|| anyhow::anyhow!("alignment record has no reference sequence id"))
     }
 
     fn aln_span(&self) -> Option<usize> {
-        // NOTE: The transpose here is because noodles_sam
-        // switched from returning Result<Option<usize>> to
-        // Option<Result<usize>> --- think if there is a
-        // better way to handle the new return type directly
-        self.alignment_span().transpose().expect("valid span")
+        self.alignment_span()
     }
 
     fn aln_score(&self) -> Option<i64> {
         self.data()
             .get(&AlnTag::ALIGNMENT_SCORE)
-            .unwrap()
-            .expect("could not get value")
+            .expect("alignment record should have an AS tag")
             .as_int()
     }
 
+    // SAM positions are one-based and inclusive: the zero-based start is one less, and the
+    // inclusive end is already the zero-based exclusive end.
     fn aln_start(&self) -> u32 {
-        self.alignment_start()
-            .unwrap()
-            .expect("valid aln start")
-            .get() as u32
+        self.alignment_start().expect("valid aln start").get() as u32 - 1
     }
 
     fn aln_end(&self) -> u32 {
-        self.alignment_end()
-            .unwrap()
-            .expect("valid aln start")
-            .get() as u32
+        self.alignment_end().expect("valid aln end").get() as u32
     }
 
     fn is_supp(&self) -> bool {
-        self.flags()
-            .expect("alignment record should have flags")
-            .is_supplementary()
+        self.flags().is_supplementary()
+    }
+
+    fn end_evidence(&self) -> crate::util::read_ends::EndEvidence {
+        use noodles_sam::alignment::record::cigar::op::Kind;
+        let ops = self.cigar().as_ref();
+        let clip = |op: Option<&noodles_sam::alignment::record::cigar::Op>| {
+            op.filter(|op| matches!(op.kind(), Kind::SoftClip | Kind::HardClip))
+                .map_or(0, |op| op.len() as u32)
+        };
+        // SEQ is stored in reference orientation, so the molecule's tail is an A-run at its
+        // right end whichever strand the read aligned to; secondary records carry no SEQ.
+        let seq: &[u8] = self.sequence().as_ref();
+        crate::util::read_ends::EndEvidence {
+            clip_left: Some(clip(ops.first())),
+            clip_right: Some(clip(ops.last())),
+            tail: (!seq.is_empty())
+                .then(|| crate::util::read_ends::terminal_run(seq.iter().rev().copied(), b'A')),
+        }
     }
 
     fn name(&self) -> Option<String> {
@@ -327,12 +338,106 @@ impl<T: NoodlesAlignmentLike + noodles_sam::alignment::Record> AlnRecordLike for
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// The BAM backend over undecoded records (`noodles_bam::Record`), which the bulk parser reads
+/// into reused buffers: each field is read from the record's bytes when asked for, so the
+/// tags, qualities and sequence a filter never looks at are never decoded.
+impl AlnRecordLike for noodles_bam::Record {
+    fn opt_sequence_len(&self) -> Option<usize> {
+        Some(self.sequence().len())
+    }
+
+    fn is_reverse_complemented(&self) -> bool {
+        self.flags().is_reverse_complemented()
+    }
+
+    fn is_unmapped(&self) -> bool {
+        self.flags().is_unmapped()
+    }
+
+    fn ref_id(&self, _header: &Header) -> anyhow::Result<usize> {
+        self.reference_sequence_id()
+            .ok_or_else(|| anyhow::anyhow!("alignment record has no reference sequence id"))?
+            .map_err(anyhow::Error::from)
+    }
+
+    fn aln_span(&self) -> Option<usize> {
+        // Straight from the packed ops (`len << 4 | kind`): M, D, N, = and X (kinds 0, 2, 3, 7
+        // and 8) consume the reference.
+        const CONSUMES_REF: u32 = 1 << 0 | 1 << 2 | 1 << 3 | 1 << 7 | 1 << 8;
+        let cigar = self.cigar();
+        let (ops, _) = cigar.as_ref().as_chunks::<4>();
+        let span: usize = ops
+            .iter()
+            .map(|b| u32::from_le_bytes(*b))
+            .filter(|n| CONSUMES_REF >> (n & 0xf) & 1 == 1)
+            .map(|n| (n >> 4) as usize)
+            .sum();
+        (span > 0).then_some(span)
+    }
+
+    fn aln_score(&self) -> Option<i64> {
+        self.data()
+            .get(&AlnTag::ALIGNMENT_SCORE)
+            .expect("alignment record should have an AS tag")
+            .expect("could not get value")
+            .as_int()
+    }
+
+    // SAM positions are one-based and inclusive: the zero-based start is one less, and the
+    // inclusive end is already the zero-based exclusive end.
+    fn aln_start(&self) -> u32 {
+        self.alignment_start()
+            .expect("valid aln start")
+            .expect("valid aln start")
+            .get() as u32
+            - 1
+    }
+
+    fn aln_end(&self) -> u32 {
+        self.aln_start() + self.aln_span().unwrap_or(1) as u32
+    }
+
+    fn is_supp(&self) -> bool {
+        self.flags().is_supplementary()
+    }
+
+    fn end_evidence(&self) -> crate::util::read_ends::EndEvidence {
+        // A packed CIGAR op is `len << 4 | kind`; kinds 4 and 5 are soft and hard clips.
+        let cigar = self.cigar();
+        let ops = cigar.as_ref();
+        let clip = |op: Option<&[u8]>| {
+            op.map(|b| u32::from_le_bytes(b.try_into().expect("4-byte CIGAR op")))
+                .filter(|n| matches!(n & 0xf, 4 | 5))
+                .map_or(0, |n| n >> 4)
+        };
+        // SEQ is stored in reference orientation, so the molecule's tail is an A-run at its
+        // right end whichever strand the read aligned to; secondary records carry no SEQ.
+        let seq = self.sequence();
+        let n = seq.len();
+        crate::util::read_ends::EndEvidence {
+            clip_left: Some(clip(ops.get(..4))),
+            clip_right: Some(clip(ops.len().checked_sub(4).map(|i| &ops[i..]))),
+            tail: (n > 0).then(|| {
+                crate::util::read_ends::terminal_run(
+                    (0..n)
+                        .rev()
+                        .map(|i| seq.get(i).expect("index within the sequence")),
+                    b'A',
+                )
+            }),
+        }
+    }
+
+    fn name(&self) -> Option<String> {
+        self.name().map(|n| n.to_string())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AlnInfo {
     pub ref_id: u32,
     pub start: u32,
     pub end: u32,
-    pub prob: f64,
     pub strand: Strand,
 }
 
@@ -349,7 +454,6 @@ impl AlnInfo {
             ref_id: aln.ref_id(aln_header).expect("valid ref_id") as u32,
             start: aln.aln_start(),
             end: aln.aln_end(),
-            prob: 0.0_f64,
             strand: if aln.is_reverse_complemented() {
                 Strand::Reverse
             } else {
@@ -365,7 +469,6 @@ impl<T: sam::alignment::record::Record> From<&T> for AlnInfo {
             ref_id: aln.reference_sequence_id().unwrap() as u32,
             start: aln.alignment_start().unwrap().expect("valid aln start").get() as u32,
             end: aln.alignment_end().unwrap().expect("valid aln end").get() as u32,
-            prob: 0.0_f64,
             strand: if aln.flags().expect("valid flags").is_reverse_complemented() {
                 Strand::Reverse
             } else {
@@ -427,6 +530,70 @@ pub struct EMInfo<'eqm, 'tinfo, 'h> {
     pub kde_model: Option<KDEModel>,
 }
 
+/// The coverage bins of a transcript of length `len` split it into `nbins` equal bins. Calls
+/// `f(bin, frac)` for each bin that `[start, end)` overlaps, with `frac` the fraction of the
+/// bin covered. Filling the coverage profile and weighting a read by it both go through this
+/// (via [`for_each_evidence_bin`]), so the two agree on where every bin lies.
+#[inline]
+pub fn for_each_bin_overlap(
+    len: f64,
+    nbins: usize,
+    start: f64,
+    end: f64,
+    mut f: impl FnMut(usize, f64),
+) {
+    if nbins == 0 || len <= 0.0 {
+        return;
+    }
+    let w = len / nbins as f64;
+    let (s, e) = (start.min(end).max(0.0), start.max(end).min(len));
+    if e <= s {
+        return;
+    }
+    let first = ((s / w).floor() as usize).min(nbins - 1);
+    let last = ((e / w).ceil() as usize).clamp(first + 1, nbins);
+    for b in first..last {
+        let (bs, be) = (b as f64 * w, ((b + 1) as f64 * w).min(len));
+        let ov = e.min(be) - s.max(bs);
+        if ov > 0.0 {
+            f(b, ov / (be - bs));
+        }
+    }
+}
+
+/// The bins whose coverage an alignment `[start, end)` contributes to, and by which it is
+/// weighted: those it overlaps ([`for_each_bin_overlap`]), except the bin where it ends (its
+/// highest-coordinate bin) when it covers that bin only partly and covers some other bin fully.
+/// Coverage there reflects where reads happen to stop rather than which transcripts are
+/// present; counting it costs accuracy in our benchmarks. The earlier code left
+/// this bin out implicitly, through its bin arithmetic; here it is a stated rule, applied
+/// alike to filling the profile and to weighting reads.
+#[inline]
+pub fn for_each_evidence_bin(
+    len: f64,
+    nbins: usize,
+    start: f64,
+    end: f64,
+    mut f: impl FnMut(usize, f64),
+) {
+    const FULL: f64 = 1.0 - 1e-9;
+    // The overlaps arrive in bin order; hold each back until the next one shows whether it
+    // was the last.
+    let (mut held, mut any_full): (Option<(usize, f64)>, bool) = (None, false);
+    for_each_bin_overlap(len, nbins, start, end, |b, frac| {
+        if let Some((hb, hf)) = held.replace((b, frac)) {
+            f(hb, hf);
+        }
+        any_full |= frac >= FULL;
+    });
+    if let Some((b, frac)) = held {
+        let partial = frac < FULL;
+        if !(partial && any_full) {
+            f(b, frac);
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TranscriptInfo {
     pub len: NonZeroUsize,
@@ -467,73 +634,26 @@ impl TranscriptInfo {
         }
     }
 
+    /// Coverage per bin and each bin's width (the bins split the transcript evenly; see
+    /// [`for_each_bin_overlap`]).
     #[inline(always)]
     pub fn get_normalized_counts_and_lengths(&self) -> (Vec<f32>, Vec<f32>) {
-        let num_intervals = self.coverage_bins.len();
-        let num_intervals_f = num_intervals as f64;
-        let tlen_f = self.lenf;
-        let bin_width = (tlen_f / num_intervals_f).round() as f32;
-
+        let n = self.coverage_bins.len();
+        let w = (self.lenf / n.max(1) as f64) as f32;
         let cov_f32 = self.coverage_bins.iter().map(|f| *f as f32).collect();
-        let mut widths_f32 = Vec::<f32>::with_capacity(num_intervals);
-        for bidx in 0..num_intervals {
-            let bidxf = bidx as f32;
-            let bin_start = bidxf * bin_width;
-            let bin_end = ((bidxf + 1.0) * bin_width).min(self.lenf as f32);
-            widths_f32.push(bin_end - bin_start);
-            if bin_end < bin_start {
-                warn!("tlen_f: {:?}", tlen_f);
-                warn!("num_intervals_f: {:?}", num_intervals_f);
-                warn!("bin_width: {:?}", bin_width);
-                warn!("bidxf: {:?}", bidxf);
-            }
-            assert!(bin_end > bin_start);
-        }
-        (cov_f32, widths_f32)
+        (cov_f32, vec![w; n])
     }
 
+    /// Adds an alignment spanning `[start, stop)` (zero-based, half-open) to the coverage
+    /// profile: each of its evidence bins ([`for_each_evidence_bin`]) gains `weight` times the
+    /// fraction of the bin it covers.
     #[inline(always)]
     pub fn add_interval(&mut self, start: u32, stop: u32, weight: f64) {
-        const ONE_PLUS_EPSILON: f64 = 1.0_f64 + f64::EPSILON;
-        let num_intervals = self.coverage_bins.len();
-        let num_intervals_f = num_intervals as f64;
-        let tlen_f = self.lenf;
-        let bin_width = (tlen_f / num_intervals_f).round();
-        let start = start.min(stop);
-        let stop = start.max(stop);
-        let start_bin = (((start as f64) / tlen_f) * num_intervals_f).floor() as usize;
-        let end_bin = (((stop as f64) / tlen_f) * num_intervals_f).floor() as usize;
-
-        let get_overlap = |s1: u32, e1: u32, s2: u32, e2: u32| -> u32 {
-            if s1 <= e2 {
-                e1.min(e2) - s1.max(s2)
-            } else {
-                0_u32
-            }
-        };
-
-        for (bidx, bin) in self.coverage_bins[start_bin..end_bin]
-            .iter_mut()
-            .enumerate()
-        {
-            let bidxf = (start_bin + bidx) as f64;
-            let curr_bin_start = (bidxf * bin_width) as u32;
-            let curr_bin_end = ((bidxf + 1.0) * bin_width).min(tlen_f) as u32;
-
-            let olap = get_overlap(start, stop, curr_bin_start, curr_bin_end);
-            let olfrac = (olap as f64) / ((curr_bin_end - curr_bin_start) as f64);
-            *bin += olfrac;
-            if olfrac > ONE_PLUS_EPSILON {
-                error!("first_bin = {start_bin}, last_bin = {end_bin}");
-                error!(
-                    "bin = {}, olfrac = {}, olap = {}, curr_bin_start = {}, curr_bin_end = {}, start = {start}, stop = {stop}",
-                    *bin, olfrac, olap, curr_bin_start, curr_bin_end
-                );
-                panic!(
-                    "coverage computation error; please report this error at https://github.com/COMBINE-lab/oarfish."
-                )
-            }
-        }
+        let (lenf, n) = (self.lenf, self.coverage_bins.len());
+        let bins = &mut self.coverage_bins;
+        for_each_evidence_bin(lenf, n, start as f64, stop as f64, |b, frac| {
+            bins[b] += weight * frac;
+        });
         self.total_weight += weight;
     }
 
@@ -550,14 +670,42 @@ pub struct InMemoryAlignmentStore<'h> {
     pub aln_header: &'h Header,
     pub alignments: Vec<AlnInfo>,
     pub as_probabilities: Vec<f32>,
+    /// Per-alignment coverage probabilities, filled only by the coverage model
+    /// (`crate::normalize_read_probs`); empty otherwise, when every read sees zeros (from
+    /// `zeros`) instead of the store holding one per alignment.
     pub coverage_probabilities: Vec<f64>,
+    /// As many zeros as the most alignments of any read.
+    zeros: Vec<f64>,
     // holds the boundaries between records for different reads
     boundaries: Vec<usize>,
+    /// After [`InMemoryAlignmentStore::reorder_reads`], the input position of each read
+    /// (`input_pos[r]` for read `r`); `None` while reads are in input order.
+    input_pos: Option<Vec<u32>>,
     pub discard_table: DiscardTable,
     pub num_unique_alignments: usize,
 }
 
+/// Asks the allocator to return freed memory to the OS now (mimalloc otherwise purges freed
+/// blocks only after a delay, during which they still count as resident).
+pub fn release_freed_memory() {
+    #[cfg(feature = "mimalloc")]
+    // SAFETY: `mi_collect` only releases memory the allocator no longer hands out.
+    unsafe {
+        libmimalloc_sys::mi_collect(true)
+    };
+}
+
 impl InMemoryAlignmentStore<'_> {
+    /// Coverage probabilities of alignments `start..end` (one read's).
+    #[inline]
+    fn coverage_probs(&self, start: usize, end: usize) -> &[f64] {
+        if self.coverage_probabilities.is_empty() {
+            &self.zeros[..end - start]
+        } else {
+            &self.coverage_probabilities[start..end]
+        }
+    }
+
     #[inline]
     pub fn len(&self) -> usize {
         self.boundaries.len().saturating_sub(1)
@@ -584,7 +732,7 @@ impl<'a> Iterator for InMemoryAlignmentStoreSamplingWithReplacementIter<'a, '_, 
             Some((
                 &self.store.alignments[start..end],
                 &self.store.as_probabilities[start..end],
-                &self.store.coverage_probabilities[start..end],
+                self.store.coverage_probs(start, end),
             ))
         } else {
             None
@@ -618,7 +766,7 @@ impl<'a> Iterator for InMemoryAlignmentStoreIter<'a, '_> {
             Some((
                 &self.store.alignments[start..end],
                 &self.store.as_probabilities[start..end],
-                &self.store.coverage_probabilities[start..end],
+                self.store.coverage_probs(start, end),
             ))
         }
     }
@@ -642,10 +790,109 @@ impl<'h> InMemoryAlignmentStore<'h> {
             alignments: vec![],
             as_probabilities: vec![],
             coverage_probabilities: vec![],
+            zeros: vec![],
             boundaries: vec![0],
+            input_pos: None,
             discard_table: DiscardTable::new(),
             num_unique_alignments: 0,
         }
+    }
+
+    /// Rearranges the reads so that read `i` is the current read `order[i]` (`order` a
+    /// permutation of the reads), keeping each read's alignments together. The EM passes visit
+    /// reads in store order; putting reads that share their likeliest target next to each
+    /// other (see `crate::em_read::read_order`) lets the transcript-major passes read nearby
+    /// memory. The arrays are rebuilt one at a time, each in parallel by read, so at most one
+    /// extra array exists at once. The input order is kept for output that lists reads
+    /// ([`InMemoryAlignmentStore::iter_input_order`]).
+    pub fn reorder_reads(&mut self, order: &[u32]) {
+        let nreads = self.len();
+        assert_eq!(
+            order.len(),
+            nreads,
+            "reorder_reads needs one entry per read"
+        );
+        let mut nb = Vec::with_capacity(nreads + 1);
+        nb.push(0usize);
+        for &r in order {
+            let r = r as usize;
+            nb.push(nb.last().unwrap() + (self.boundaries[r + 1] - self.boundaries[r]));
+        }
+        fn permute<T: Copy + Send + Sync>(
+            src: &[T],
+            old: &[usize],
+            new: &[usize],
+            order: &[u32],
+        ) -> Vec<T> {
+            let n = src.len();
+            let mut dst: Vec<T> = Vec::with_capacity(n);
+            let p = dst.as_mut_ptr() as usize;
+            order.par_iter().enumerate().for_each(|(i, &r)| {
+                let r = r as usize;
+                let s = &src[old[r]..old[r + 1]];
+                // SAFETY: slots new[i]..new[i + 1] belong to read i alone, and the ranges
+                // cover 0..n exactly (each read moves whole).
+                unsafe {
+                    std::ptr::copy_nonoverlapping(s.as_ptr(), (p as *mut T).add(new[i]), s.len())
+                };
+            });
+            // SAFETY: every slot was written above.
+            unsafe { dst.set_len(n) };
+            dst
+        }
+        // Each replaced array is handed back to the OS before the next is built, so that only
+        // one extra array is ever resident (the allocator would otherwise keep freed blocks
+        // for a while).
+        self.alignments = permute(&self.alignments, &self.boundaries, &nb, order);
+        release_freed_memory();
+        self.as_probabilities = permute(&self.as_probabilities, &self.boundaries, &nb, order);
+        release_freed_memory();
+        if !self.coverage_probabilities.is_empty() {
+            self.coverage_probabilities =
+                permute(&self.coverage_probabilities, &self.boundaries, &nb, order);
+            release_freed_memory();
+        }
+        self.input_pos = Some(match self.input_pos.take() {
+            Some(prev) => order.iter().map(|&r| prev[r as usize]).collect(),
+            None => order.to_vec(),
+        });
+        self.boundaries = nb;
+    }
+
+    /// The reads in the order they were added (input order), whatever
+    /// [`InMemoryAlignmentStore::reorder_reads`] did since.
+    pub fn iter_input_order(&self) -> impl Iterator<Item = (&[AlnInfo], &[f32], &[f64])> + '_ {
+        let at: Option<Vec<u32>> = self.input_pos.as_ref().map(|pos| {
+            let mut at = vec![0u32; pos.len()];
+            for (r, &p) in pos.iter().enumerate() {
+                at[p as usize] = r as u32;
+            }
+            at
+        });
+        (0..self.len()).map(move |i| self.read(at.as_ref().map_or(i, |a| a[i] as usize)))
+    }
+
+    /// Read `i` owns alignments `boundaries()[i]..boundaries()[i + 1]`.
+    #[inline]
+    pub fn boundaries(&self) -> &[usize] {
+        &self.boundaries
+    }
+
+    /// Positions of read `i`'s alignments in `alignments`.
+    #[inline]
+    pub fn read_range(&self, i: usize) -> std::ops::Range<usize> {
+        self.boundaries[i]..self.boundaries[i + 1]
+    }
+
+    /// The alignments of read `i`, with their score and coverage probabilities.
+    #[inline]
+    pub fn read(&self, i: usize) -> (&[AlnInfo], &[f32], &[f64]) {
+        let (start, end) = (self.boundaries[i], self.boundaries[i + 1]);
+        (
+            &self.alignments[start..end],
+            &self.as_probabilities[start..end],
+            self.coverage_probs(start, end),
+        )
     }
 
     pub fn iter(&self) -> InMemoryAlignmentStoreIter<'_, '_> {
@@ -669,7 +916,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
     }
 
     #[inline(always)]
-    pub fn add_group<T: NoodlesAlignmentLike + sam::alignment::record::Record + std::fmt::Debug>(
+    pub fn add_group<T: AlnRecordLike + std::fmt::Debug>(
         &mut self,
         txps: &mut [TranscriptInfo],
         ag: &mut Vec<T>,
@@ -722,14 +969,18 @@ impl<'h> InMemoryAlignmentStore<'h> {
         txps: &mut [TranscriptInfo],
     ) -> bool {
         if !alns.is_empty() {
-            for a in alns.iter() {
-                let tid = a.ref_id as usize;
-                txps[tid].add_interval(a.start, a.end, 1.0_f64);
+            // the coverage profiles are read only by the coverage models
+            if self.filter_opts.model_coverage {
+                for a in alns.iter() {
+                    let tid = a.ref_id as usize;
+                    txps[tid].add_interval(a.start, a.end, 1.0_f64);
+                }
             }
             self.alignments.extend_from_slice(alns);
             self.as_probabilities.extend_from_slice(as_probs);
-            self.coverage_probabilities
-                .extend(vec![0.0_f64; alns.len()]);
+            if alns.len() > self.zeros.len() {
+                self.zeros.resize(alns.len(), 0.0);
+            }
             self.boundaries.push(self.alignments.len());
             true
         } else {
@@ -801,8 +1052,12 @@ pub struct AlignmentFilters {
     /// `exp((score - best_score) / D)` used to weight a read's alignments in the
     /// EM (transcriptome mode and the `score`/`combined` projected sources).
     /// Larger flattens, smaller sharpens. Exposed via `--score-prob-denom`.
-    #[builder(default = 5.0)]
+    #[builder(default = crate::prog_opts::DEFAULT_SCORE_PROB_DENOM)]
     pub score_prob_denom: f32,
+    /// Remove the score credit a read's poly(A) tail earns where it aligns to a transcript
+    /// (see `crate::util::read_ends::TailNeutral`); `None` leaves scores as the aligner gave them.
+    #[builder(default)]
+    pub tail_neutral: Option<crate::util::read_ends::TailNeutral>,
 }
 
 /// This structure records information about
@@ -983,6 +1238,24 @@ impl AlignmentFilters {
             .find_map(|x| x.opt_sequence_len().map(|y| y as u32))
             .unwrap_or(0_u32);
 
+        // Tail-neutral scores (see `crate::util::read_ends::TailNeutral`): the read's tail, from
+        // whichever record can measure it, and each alignment's score without its tail credit.
+        let tail_neutral = self.tail_neutral;
+        let tail = tail_neutral.and_then(|_| {
+            crate::util::read_ends::TailNeutral::read_tail(
+                ag.iter()
+                    .map(|x| (x.end_evidence(), x.is_reverse_complemented())),
+            )
+        });
+        let adjusted = |x: &T, score: i32| -> i32 {
+            match (tail_neutral, tail) {
+                (Some(tn), Some(_)) => {
+                    tn.adjust(score, tail, &x.end_evidence(), x.is_reverse_complemented())
+                }
+                _ => score,
+            }
+        };
+
         // apply the filter criteria to determine what alignments to retain
         ag.retain(|x| {
             // we ony want to retain mapped reads
@@ -993,7 +1266,7 @@ impl AlignmentFilters {
                 let aln_span = x.aln_span().unwrap() as u32;
 
                 // get the alignment score, as computed by the aligner
-                let score = x.aln_score().unwrap_or(i32::MIN as i64) as i32;
+                let score = adjusted(x, x.aln_score().unwrap_or(i32::MIN as i64) as i32);
 
                 // the alignment is to the - strand
                 let is_rc = x.is_reverse_complemented();
@@ -1099,7 +1372,7 @@ impl AlignmentFilters {
         // get a vector of all of the scores
         let mut scores: Vec<i32> = ag
             .iter_mut()
-            .map(|a| a.aln_score().unwrap_or(0) as i32)
+            .map(|a| adjusted(a, a.aln_score().unwrap_or(0) as i32))
             .collect();
 
         let _min_allowed_score = self.score_threshold * mscore;
@@ -1216,8 +1489,8 @@ impl AlignmentFilters {
                 continue;
             }
 
-            // not too far from the 5' end
-            if r.start >= self.five_prime_clip {
+            // not too far from the 5' end (projected starts are one-based)
+            if r.start.saturating_sub(1) >= self.five_prime_clip {
                 discard_table.discard_5p += 1;
                 continue;
             }
@@ -1261,10 +1534,13 @@ impl AlignmentFilters {
             // Defensively clamp the projected interval to the transcript bounds.
             // With a correct projection `1 <= start <= end <= len` always holds;
             // this guard just prevents a stray out-of-range coordinate from
-            // panicking the coverage binning during a long run.
+            // panicking the coverage binning during a long run. Projected
+            // coordinates are one-based and inclusive; `AlnInfo` holds zero-based,
+            // half-open ones (see `AlnRecordLike::aln_start`).
             let tlen = txps[r.ref_id as usize].len.get() as u32;
             let start = r.start.clamp(1, tlen);
             let end = r.end.clamp(start, tlen);
+            let start = start - 1;
 
             // log-weight of this alignment relative to the read's best hit.
             // `score` discriminates paralogous genomic loci (similarity saturates
@@ -1284,7 +1560,6 @@ impl AlignmentFilters {
                 ref_id: r.ref_id,
                 start,
                 end,
-                prob: 0.0_f64,
                 strand: if r.is_reverse {
                     Strand::Reverse
                 } else {
@@ -1309,7 +1584,6 @@ mod tests {
             ref_id: 0,
             start: 0,
             end: 100,
-            prob: 0.5,
             strand: Strand::Forward,
         };
         assert_eq!(ainf.alignment_span(), 100);
@@ -1326,5 +1600,113 @@ mod tests {
         let seqs: Vec<Vec<u8>> = rg.iter().map(|(_, s)| s.to_vec()).collect();
         assert_eq!(seqs[0], b"ACGTacgtNn", "U/u should become T/t");
         assert_eq!(seqs[1], b"ACGTacgtNn", "DNA bases unchanged");
+    }
+
+    /// Bin overlaps tile a span exactly: fractions times bin width sum to the span's length,
+    /// partly covered end bins included, and spans are clipped to the transcript.
+    #[test]
+    fn bin_overlaps_cover_the_span_exactly() {
+        use super::for_each_bin_overlap;
+        let span = |len: f64, n: usize, s: f64, e: f64| {
+            let (mut tot, mut bins) = (0.0, vec![]);
+            for_each_bin_overlap(len, n, s, e, |b, f| {
+                tot += f * len / n as f64;
+                bins.push(b);
+            });
+            (tot, bins)
+        };
+        let (t, b) = span(1104.0, 12, 51.0, 959.0);
+        assert!((t - 908.0).abs() < 1e-9, "{t}");
+        assert_eq!(b, (0..11).collect::<Vec<_>>());
+        let (t, b) = span(1104.0, 12, 1000.0, 1104.0);
+        assert!((t - 104.0).abs() < 1e-9);
+        assert_eq!(b, vec![10, 11]);
+        let (t, _) = span(1104.0, 12, 0.0, 5000.0);
+        assert!((t - 1104.0).abs() < 1e-9);
+        let (t, b) = span(1104.0, 12, 92.0, 184.0);
+        assert!((t - 92.0).abs() < 1e-9);
+        assert_eq!(b, vec![1]);
+        assert_eq!(span(1104.0, 12, 500.0, 500.0).1, Vec::<usize>::new());
+        // Evidence bins: the partly covered bin where a span ends is left out when the span
+        // fully covers another bin; a partly covered first bin stays.
+        let ev = |len: f64, n: usize, st: f64, en: f64| {
+            let mut v = vec![];
+            super::for_each_evidence_bin(len, n, st, en, |b, f| {
+                v.push((b, (f * 1e6).round() / 1e6))
+            });
+            v
+        };
+        let w = 1104.0 / 12.0;
+        assert_eq!(ev(1104.0, 12, 46.0, 2.5 * w), vec![(0, 0.5), (1, 1.0)]);
+        assert_eq!(ev(1104.0, 12, 0.0, 1104.0).len(), 12);
+        assert_eq!(ev(1104.0, 12, w, 3.0 * w), vec![(1, 1.0), (2, 1.0)]);
+        // No fully covered bin: everything it touches counts.
+        assert_eq!(ev(1104.0, 12, 0.5 * w, 1.5 * w), vec![(0, 0.5), (1, 0.5)]);
+        let mut txp = super::TranscriptInfo::with_len_and_bin_width(
+            std::num::NonZeroUsize::new(100).unwrap(),
+            25,
+        );
+        txp.add_interval(75, 100, 0.5);
+        assert_eq!(txp.coverage_bins, vec![0.0, 0.0, 0.0, 0.5]);
+        assert!((txp.total_weight - 0.5).abs() < 1e-12);
+    }
+
+    /// Reordering moves whole reads, and the input order is recovered after one or two
+    /// reorderings, with coverage probabilities following their alignments.
+    #[test]
+    fn reorder_reads_keeps_reads_whole_and_recovers_input_order() {
+        use super::{AlignmentFilters, InMemoryAlignmentStore, TranscriptInfo};
+        use std::num::NonZeroUsize;
+        let header = noodles_sam::Header::default();
+        let fo = AlignmentFilters::builder()
+            .five_prime_clip(u32::MAX)
+            .three_prime_clip(i64::MAX)
+            .score_threshold(0.0)
+            .min_aligned_fraction(0.0)
+            .min_aligned_len(1)
+            .which_strand(Strand::Unknown)
+            .model_coverage(false)
+            .logistic_growth_rate(2.0)
+            .write_assignment_probs(false)
+            .write_assignment_probs_type(None)
+            .build();
+        let mut store = InMemoryAlignmentStore::new(fo, &header);
+        let mut txps: Vec<TranscriptInfo> = (0..4)
+            .map(|_| TranscriptInfo::with_len_and_bin_width(NonZeroUsize::new(1000).unwrap(), 100))
+            .collect();
+        let aln = |t: u32, s: u32| AlnInfo {
+            ref_id: t,
+            start: s,
+            end: s + 100,
+            strand: Strand::Forward,
+        };
+        // read i: alignments to targets (i + j) % 4, j < i % 3 + 1, starting at 10 * i
+        let reads: Vec<Vec<AlnInfo>> = (0..7u32)
+            .map(|i| (0..i % 3 + 1).map(|j| aln((i + j) % 4, 10 * i)).collect())
+            .collect();
+        for r in &reads {
+            let probs: Vec<f32> = r.iter().map(|a| a.start as f32).collect();
+            store.add_filtered_group(r, &probs, &mut txps);
+        }
+        store.coverage_probabilities = store.alignments.iter().map(|a| a.start as f64).collect();
+        let snapshot = |st: &InMemoryAlignmentStore| -> Vec<(Vec<AlnInfo>, Vec<f32>, Vec<f64>)> {
+            st.iter_input_order()
+                .map(|(a, p, c)| (a.to_vec(), p.to_vec(), c.to_vec()))
+                .collect()
+        };
+        let before = snapshot(&store);
+        store.reorder_reads(&[3, 0, 6, 1, 5, 2, 4]);
+        assert_eq!(store.read(0).0, &reads[3][..]);
+        assert_eq!(store.read(2).0, &reads[6][..]);
+        assert_eq!(snapshot(&store), before);
+        store.reorder_reads(&[6, 5, 4, 3, 2, 1, 0]);
+        assert_eq!(store.read(0).0, &reads[4][..]);
+        assert_eq!(snapshot(&store), before);
+        for r in 0..store.len() {
+            let (a, p, c) = store.read(r);
+            for ((a, &p), &c) in a.iter().zip(p).zip(c) {
+                assert_eq!((p, c), (a.start as f32, a.start as f64));
+            }
+        }
     }
 }

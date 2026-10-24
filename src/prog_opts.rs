@@ -36,6 +36,76 @@ fn parse_pos_f32(arg: &str) -> anyhow::Result<f32> {
     }
 }
 
+/// Default denominator `D` of the score→probability conversion `exp((score - best) / D)`
+/// (`--score-prob-denom`). 3 rather than the earlier 5: sharper weighting toward the
+/// best-scoring alignment improved accuracy on simulations with exact truth and on LongBench
+/// (see the CHANGELOG); `--score-prob-denom 5` restores the old behaviour.
+pub const DEFAULT_SCORE_PROB_DENOM: f32 = 3.0;
+
+/// Model of where reads land on transcripts (`--coverage-model`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
+pub enum CoverageModel {
+    /// No positional term.
+    #[default]
+    None,
+    /// The coverage model (`--model-coverage`).
+    Logistic,
+    /// The learned placement mixture (`--model-truncation`).
+    Truncation,
+}
+
+impl Args {
+    /// Resolves `--coverage-model` and its shorthands into the model in effect, and sets the
+    /// shorthand flags to match, which is what the rest of the program reads. Contradictory
+    /// choices, and models a mode does not support, are errors.
+    pub fn resolve_coverage_model(&mut self) -> anyhow::Result<CoverageModel> {
+        let implied = if self.model_coverage {
+            Some(CoverageModel::Logistic)
+        } else if self.model_truncation {
+            Some(CoverageModel::Truncation)
+        } else {
+            None
+        };
+        let model = match (self.coverage_model, implied) {
+            (Some(m), Some(i)) if m != i => anyhow::bail!(
+                "--coverage-model {} contradicts --model-{}",
+                clap::ValueEnum::to_possible_value(&m)
+                    .expect("named")
+                    .get_name(),
+                if i == CoverageModel::Logistic {
+                    "coverage"
+                } else {
+                    "truncation"
+                }
+            ),
+            (Some(m), _) => m,
+            (None, Some(i)) => i,
+            (None, None) => CoverageModel::None,
+        };
+        if self.single_cell && model == CoverageModel::Truncation {
+            anyhow::bail!("the truncation model is not supported in single-cell mode");
+        }
+        self.coverage_model = Some(model);
+        self.model_coverage = model == CoverageModel::Logistic;
+        self.model_truncation = model == CoverageModel::Truncation;
+        Ok(model)
+    }
+}
+
+/// Presence/absence component for the bulk EM.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
+pub enum PresenceModel {
+    /// No presence modelling.
+    #[default]
+    None,
+    /// Spike-and-slab: per-transcript Bernoulli presence posterior with a fixed prior; the EM
+    /// sees presence-discounted abundances (zero-inflated EM).
+    SpikeSlab,
+    /// Spike-and-slab with a marginal-likelihood Bayes factor per transcript and a learned
+    /// base rate (see `crate::presence`).
+    Bayes,
+}
+
 #[derive(Debug, Clone, clap::ValueEnum, Serialize)]
 pub enum ReadAssignmentProbOut {
     Uncompressed,
@@ -388,13 +458,20 @@ pub struct Args {
     pub projected_prob_source: ProjProbSource,
 
     /// denominator `D` in the score→probability conversion `exp((score - best)/D)`
-    /// used to weight a read's alignments in the EM (default 5). Larger `D`
+    /// used to weight a read's alignments in the EM (default 3). Larger `D`
     /// flattens the weighting across alignments of differing score; smaller `D`
     /// sharpens it toward the best-scoring alignment. Transcriptome mode only —
     /// in genome mode projected alignments are weighted by bramble similarity, so
     /// passing this with `--genome`/`--genome-alignments` is an error.
     #[arg(long, value_parser = parse_pos_f32, help_heading = "filters")]
     pub score_prob_denom: Option<f32>,
+
+    /// per-base match score of the aligner, used to remove the score credit a read's poly(A)
+    /// tail earns by aligning to a transcript whose sequence ends in an A-run. By default it is
+    /// taken from the aligner (a minimap2 `@PG` command line, or the rammap preset); with an
+    /// unrecognized aligner the adjustment is off. 0 turns it off.
+    #[arg(long, hide = true)]
+    pub tail_match_score: Option<i32>,
 
     /// genome mode: per-internal-junction-mismatch discount in (0,1] applied to a
     /// transcript's projection similarity (sharpens isoform discrimination).
@@ -489,9 +566,27 @@ pub struct Args {
     )]
     pub single_cell: bool,
 
-    /// apply the coverage model
+    /// which model of where reads land on transcripts to use: `none`, `logistic` (the coverage
+    /// model) or `truncation` (a learned mixture of 3'-anchored, 5'-anchored, full-length and
+    /// uniformly placed reads); default `none`. `--model-coverage` and `--model-truncation` are
+    /// shorthands for the last two.
+    #[arg(long, help_heading = "coverage model", value_enum)]
+    pub coverage_model: Option<CoverageModel>,
+
+    /// apply the coverage model (same as `--coverage-model logistic`)
     #[arg(long, help_heading = "coverage model", value_parser)]
     pub model_coverage: bool,
+
+    /// model where reads land on transcripts: a mixture of 3'-anchored, 5'-anchored, full-length
+    /// and uniformly placed reads, whose weights, read-length laws and end-gap laws are learned
+    /// from the data in the EM; the fitted mixture is written to the log (same as
+    /// `--coverage-model truncation`)
+    #[arg(
+        long,
+        help_heading = "coverage model",
+        conflicts_with = "model_coverage"
+    )]
+    pub model_truncation: bool,
 
     /// if using the coverage model, use this as the value of `k` in the logistic equation
     #[arg(
@@ -536,6 +631,31 @@ pub struct Args {
     #[arg(long, help_heading = "EM", default_value_t = 1e-3)]
     pub convergence_thresh: f64,
 
+    /// run the EM over individual reads even when no per-read model term (coverage, KDE) is
+    /// active; by default such reads are collapsed into equivalence classes
+    #[arg(long, help_heading = "EM")]
+    pub per_read_em: bool,
+
+    /// presence/absence model (experimental): each transcript carries a Bernoulli presence
+    /// posterior that discounts its effective abundance during the EM (zero-inflated EM). It
+    /// suppresses low-evidence false-positive transcripts at some cost to true low-abundance
+    /// ones. Supported by the equivalence-class EM and `--model-truncation`.
+    #[arg(long, help_heading = "EM", value_enum, default_value_t = PresenceModel::None)]
+    pub presence_model: PresenceModel,
+
+    /// presence prior probability, a fixed penalty: roughly `-logit(rho)` effective exclusive
+    /// reads are needed for a transcript to be called present
+    #[arg(long, hide = true, default_value_t = 0.05)]
+    pub presence_rho: f64,
+
+    /// EM iterations before the first presence update
+    #[arg(long, hide = true, default_value_t = 50)]
+    pub presence_warmup: u32,
+
+    /// EM iterations between presence updates
+    #[arg(long, hide = true, default_value_t = 10)]
+    pub presence_period: u32,
+
     /// number of cores that oarfish will use during different phases
     /// of quantification. Note: This value will be at least 2 for bulk
     /// quantification and at least 3 for single-cell quantification due to
@@ -569,6 +689,56 @@ pub struct Args {
 mod tests {
     use super::Args;
     use clap::Parser;
+
+    /// `--coverage-model` and its shorthands resolve to one model; contradictions and the
+    /// truncation model in single-cell mode are errors.
+    #[test]
+    fn coverage_model_selector_and_shorthands_agree() {
+        use super::CoverageModel as M;
+        let resolve = |extra: &[&str]| {
+            let mut v = vec![
+                "oarfish",
+                "-a",
+                "x.bam",
+                "--seq-tech",
+                "ont-cdna",
+                "-o",
+                "out",
+            ];
+            v.extend_from_slice(extra);
+            let mut a = Args::try_parse_from(v).expect("valid arguments");
+            a.resolve_coverage_model()
+                .map(|m| (m, a.model_coverage, a.model_truncation))
+        };
+        assert_eq!(resolve(&[]).unwrap(), (M::None, false, false));
+        assert_eq!(
+            resolve(&["--model-coverage"]).unwrap(),
+            (M::Logistic, true, false)
+        );
+        assert_eq!(
+            resolve(&["--model-truncation"]).unwrap(),
+            (M::Truncation, false, true)
+        );
+        assert_eq!(
+            resolve(&["--coverage-model", "logistic"]).unwrap(),
+            (M::Logistic, true, false)
+        );
+        assert_eq!(
+            resolve(&["--coverage-model", "truncation"]).unwrap(),
+            (M::Truncation, false, true)
+        );
+        assert_eq!(
+            resolve(&["--coverage-model", "truncation", "--model-truncation"]).unwrap(),
+            (M::Truncation, false, true)
+        );
+        assert!(resolve(&["--coverage-model", "none", "--model-coverage"]).is_err());
+        assert!(resolve(&["--coverage-model", "logistic", "--model-truncation"]).is_err());
+        assert!(resolve(&["--single-cell", "--coverage-model", "truncation"]).is_err());
+        assert_eq!(
+            resolve(&["--single-cell", "--model-coverage"]).unwrap(),
+            (M::Logistic, true, false)
+        );
+    }
 
     #[test]
     fn allows_annotated_and_novel_together() {

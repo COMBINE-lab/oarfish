@@ -1,6 +1,7 @@
 use crate::NamedDigestVec;
 use crate::alignment_parser;
 use crate::em;
+use crate::eq_classes::{self, EqClasses};
 use crate::kde_utils;
 use crate::prog_opts::Args;
 use crate::util::constants::EMPTY_READ_NAME;
@@ -10,15 +11,15 @@ use crate::util::oarfish_types::{
     AlignmentFilters, EMInfo, InMemoryAlignmentStore, InputSourceType, ReadChunkWithNames,
     ReadSource, TranscriptInfo,
 };
+use crate::util::projection::{mapping_to_genomic_alignment, projected_to_records};
 use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::{write_infrep_file, write_out_prob, write_output};
-use crate::util::projection::{mapping_to_genomic_alignment, projected_to_records};
+use crate::{logistic_prob, normalize_read_probs};
+use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use bramble_rs::ProjectionConfig;
 use bramble_rs::ProjectionContext;
 use bramble_rs::g2t::G2TTree;
 use bramble_rs::project_group_with;
-use crate::{logistic_prob, normalize_read_probs};
-use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
 use crossbeam::channel::Receiver;
 use crossbeam::channel::Sender;
 use crossbeam::channel::bounded;
@@ -42,6 +43,8 @@ fn get_json_info(
 ) -> serde_json::Value {
     let prob = if args.model_coverage {
         "logistic_coverage"
+    } else if args.model_truncation {
+        "truncation"
     } else {
         "no_coverage"
     };
@@ -104,7 +107,45 @@ fn perform_inference_and_write_output(
         //obtaining the Cumulative Distribution Function (CDF) for each transcript
         logistic_prob(txps, args.growth_rate, &args.bin_width, args.threads);
         //Normalize the probabilities for the records of each read
-        normalize_read_probs(store, txps, &args.bin_width);
+        normalize_read_probs(store, txps);
+    }
+
+    // Put reads that share their likeliest target (under their EM weights, see
+    // `em_read::aln_weight`) next to each other: the EM's transcript-major passes then read
+    // nearby memory (see `InMemoryAlignmentStore::reorder_reads`), and the per-read EM reads
+    // the store in this order directly. The equivalence-class EM (no per-read model term) does
+    // not read the store, so it skips this, and the transient copy of each array it makes.
+    let per_read_terms =
+        store.filter_opts.model_coverage || kde_opt.is_some() || args.model_truncation;
+    if per_read_terms || args.per_read_em {
+        let t_order = std::time::Instant::now();
+        let order = {
+            let cov = store.filter_opts.model_coverage;
+            let kde = kde_opt.as_ref();
+            let tinfo: &[TranscriptInfo] = txps;
+            let store: &InMemoryAlignmentStore = store;
+            crate::em_read::read_order(store.len(), |r| {
+                let (alns, probs, cps) = store.read(r);
+                alns.iter()
+                    .zip(probs)
+                    .zip(cps)
+                    .map(|((a, &p), &cp)| {
+                        (
+                            crate::em_read::aln_weight(a, p, cp, cov, kde, tinfo),
+                            a.ref_id,
+                        )
+                    })
+                    .max_by(|x, y| x.0.total_cmp(&y.0))
+                    .map_or(0, |x| x.1)
+            })
+        };
+        store.reorder_reads(&order);
+        drop(order);
+        crate::util::oarfish_types::release_freed_memory();
+        info!(
+            "reads ordered by likeliest target in {:.2}s",
+            t_order.elapsed().as_secs_f64()
+        );
     }
 
     info!(
@@ -152,11 +193,64 @@ fn perform_inference_and_write_output(
         */
     }
 
-    let counts = if args.threads > 4 {
-        em::em_par(&emi, args.threads)
-    } else {
-        em::em(&emi, args.threads)
+    // Without per-read model terms, reads with the same (target, probability) multiset are
+    // interchangeable: run the EM over equivalence classes.
+    let eqc = (!per_read_terms && !args.per_read_em).then(|| {
+        let eqc = EqClasses::from_store(emi.eq_map, emi.txp_info.len());
+        info!(
+            "{} reads in {} equivalence classes",
+            emi.eq_map
+                .num_aligned_reads()
+                .to_formatted_string(&Locale::en),
+            eqc.len().to_formatted_string(&Locale::en)
+        );
+        eqc
+    });
+
+    let presence = match args.presence_model {
+        crate::prog_opts::PresenceModel::None => None,
+        model @ (crate::prog_opts::PresenceModel::SpikeSlab
+        | crate::prog_opts::PresenceModel::Bayes) => {
+            if eqc.is_none() && !args.model_truncation {
+                warn!(
+                    "--presence-model is supported by the equivalence-class EM and \
+                     --model-truncation only; ignoring it for this run"
+                );
+                None
+            } else {
+                Some(crate::presence::PresenceOpts {
+                    kind: if model == crate::prog_opts::PresenceModel::Bayes {
+                        crate::presence::PresenceKind::Bayes
+                    } else {
+                        crate::presence::PresenceKind::SpikeSlab
+                    },
+                    rho: args.presence_rho,
+                    warmup: args.presence_warmup,
+                    period: args.presence_period,
+                })
+            }
+        }
     };
+
+    let em_start = std::time::Instant::now();
+    let counts = match &eqc {
+        Some(eqc) => eq_classes::em(
+            eqc,
+            emi.txp_info,
+            emi.max_iter,
+            emi.convergence_thresh,
+            emi.init_abundances.as_ref(),
+            presence,
+            args.threads,
+        ),
+        None if args.model_truncation => crate::truncation::em(&emi, presence, args.threads),
+        None if args.threads > 4 => match crate::em_read::Impl::from_env() {
+            Some(how) => crate::em_read::em(&emi, args.threads, how),
+            None => em::em_par(&emi, args.threads),
+        },
+        None => em::em(&emi, args.threads),
+    };
+    info!("EM finished in {:.2}s", em_start.elapsed().as_secs_f64());
 
     let aux_txp_counts = crate::util::aux_counts::get_aux_counts(store, txps)?;
 
@@ -176,7 +270,22 @@ fn perform_inference_and_write_output(
     // if the user requested bootstrap replicates,
     // compute and write those out now.
     if args.num_bootstraps > 0 {
-        let breps = em::bootstrap(&emi, args.num_bootstraps, args.threads);
+        let breps = match &eqc {
+            Some(eqc) => eq_classes::bootstrap(
+                eqc,
+                emi.txp_info,
+                emi.max_iter,
+                emi.convergence_thresh,
+                emi.init_abundances.as_ref(),
+                presence,
+                args.num_bootstraps,
+                args.threads,
+            ),
+            None if args.model_truncation => {
+                crate::truncation::bootstrap(&emi, presence, args.num_bootstraps, args.threads)
+            }
+            None => em::bootstrap(&emi, args.num_bootstraps, args.threads),
+        };
 
         let mut new_arrays = vec![];
         let mut bs_fields = vec![];
@@ -479,7 +588,10 @@ pub fn quantify_genome_raw_reads(
                                 let map_res_opt =
                                     crate::util::mapper::map_read(&loc_aligner, name, seq);
                                 let Ok(mappings) = map_res_opt else {
-                                    warn!("Error encountered mapping read: {}", map_res_opt.unwrap_err());
+                                    warn!(
+                                        "Error encountered mapping read: {}",
+                                        map_res_opt.unwrap_err()
+                                    );
                                     continue;
                                 };
 
@@ -500,8 +612,7 @@ pub fn quantify_genome_raw_reads(
                                 if galns.is_empty() {
                                     continue;
                                 }
-                                n_genome_mapped
-                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                n_genome_mapped.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 // attach the read sequence to the first alignment when
                                 // soft-clip rescue is enabled (bramble shares one seq
                                 // across the read group). bramble expects the seq in
@@ -665,7 +776,11 @@ pub fn quantify_genome_raw_reads(
                 "reads aligned to genome: {}; of those, projected to >=1 transcript: {} ({:.2}%); projection-dropped: {}",
                 n_gm.to_formatted_string(&Locale::en),
                 n_pr.to_formatted_string(&Locale::en),
-                if n_gm > 0 { 100.0 * (n_pr as f64) / (n_gm as f64) } else { 0.0 },
+                if n_gm > 0 {
+                    100.0 * (n_pr as f64) / (n_gm as f64)
+                } else {
+                    0.0
+                },
                 (n_gm - n_pr).to_formatted_string(&Locale::en),
             );
             let aln_time = aln_start.elapsed()?;

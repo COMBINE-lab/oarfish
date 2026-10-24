@@ -22,6 +22,10 @@ mod alignment_parser;
 mod bootstrap;
 mod bulk;
 mod em;
+mod em_read;
+mod eq_classes;
+mod presence;
+mod truncation;
 mod prog_opts;
 mod single_cell;
 mod util;
@@ -119,7 +123,10 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .logistic_growth_rate(args.growth_rate)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
-                .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
+                .score_prob_denom(
+                    args.score_prob_denom
+                        .unwrap_or(crate::prog_opts::DEFAULT_SCORE_PROB_DENOM),
+                )
                 .build())
         }
         Some(FilterGroup::NanocountFilters) => {
@@ -155,7 +162,10 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .logistic_growth_rate(args.growth_rate)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
-                .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
+                .score_prob_denom(
+                    args.score_prob_denom
+                        .unwrap_or(crate::prog_opts::DEFAULT_SCORE_PROB_DENOM),
+                )
                 .build())
         }
         None => {
@@ -171,7 +181,10 @@ fn get_filter_opts(args: &Args) -> anyhow::Result<AlignmentFilters> {
                 .logistic_growth_rate(args.growth_rate)
                 .write_assignment_probs(args.write_assignment_probs.is_some())
                 .write_assignment_probs_type(args.write_assignment_probs.clone())
-                .score_prob_denom(args.score_prob_denom.unwrap_or(5.0))
+                .score_prob_denom(
+                    args.score_prob_denom
+                        .unwrap_or(crate::prog_opts::DEFAULT_SCORE_PROB_DENOM),
+                )
                 .build())
         }
     }
@@ -333,6 +346,12 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let mut args = Args::parse();
+    args.resolve_coverage_model()?;
+    // Parallel work outside the explicitly sized pools (reordering the alignment store,
+    // normalizing coverage probabilities) uses at most the requested threads.
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(args.threads.max(1))
+        .build_global()?;
 
     // change the logging filter if the user specified quiet or
     // verbose.
@@ -365,7 +384,7 @@ fn main() -> anyhow::Result<()> {
     }
 
     // if we are quantifying, handle this below
-    let filter_opts = get_filter_opts(&args)?;
+    let mut filter_opts = get_filter_opts(&args)?;
 
     // Genome-space modes: rather than quantifying against the input BAM/aligner
     // references directly, we project genomic alignments onto the transcripts in
@@ -424,6 +443,24 @@ fn main() -> anyhow::Result<()> {
             vec![("bam_digest".to_string(), seqcol_digest)].into(),
         )
     };
+
+    // Tail-neutral scores need the aligner's per-base match score: --tail-match-score if given
+    // (0 = off), else what the aligner that produced the alignments implies.
+    let tail_score = match args.tail_match_score {
+        Some(s) => Some(s),
+        None if args.alignments.is_some() => util::read_ends::match_score_from_header(&header),
+        None => util::aligner::rammap_match_score(&args.seq_tech),
+    };
+    filter_opts.tail_neutral = tail_score
+        .filter(|&s| s > 0)
+        .map(|match_score| util::read_ends::TailNeutral { match_score });
+    match filter_opts.tail_neutral {
+        Some(tn) => info!(
+            "tail-neutral alignment scores on (aligner match score {})",
+            tn.match_score
+        ),
+        None => info!("tail-neutral alignment scores off"),
+    }
 
     // where we'll write down the per-transcript information we need
     // to track.
