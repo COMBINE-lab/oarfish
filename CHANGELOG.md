@@ -5,9 +5,9 @@ All notable changes to `oarfish` are documented here. The format is based on
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 > Release tooling note: `dist` (cargo-dist) extracts the section whose header
-> matches the release tag and uses it as the GitHub Release body. When tagging,
-> rename the `## Unreleased` heading below to the chosen version, e.g.
-> `## 0.10.0 - 2026-06-06`, so the notes are picked up automatically.
+> matches the release tag and uses it as the GitHub Release body. Cut releases with
+> `./bump_and_publish.sh <version>`, which renames the `## Unreleased` heading below
+> to the version (e.g. `## 0.10.0 - 2026-06-06`) and starts a new one above it.
 
 ## Unreleased
 
