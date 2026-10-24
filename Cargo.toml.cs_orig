@@ -1,0 +1,130 @@
+[package]
+name = "oarfish"
+version = "0.11.0"
+edition = "2024"
+rust-version = "1.91"
+authors = [
+  "Zahra Zare Jousheghani <zzare@umd.edu>",
+  "Noor Pratap Singh <npsingh@umd.edu>",
+  "Rob Patro <rob@cs.umd.edu>",
+]
+description = "A fast, accurate and versatile tool for long-read transcript quantification."
+license-file = "LICENSE"
+readme = "README.md"
+repository = "https://github.com/COMBINE-lab/oarfish"
+homepage = "https://COMBINE-lab.github.io/oarfish"
+include = [
+  "/src/*.rs",
+  "/src/util/*.rs",
+  "/Cargo.toml",
+  "/Cargo.lock",
+  "/README.md",
+  "/CHANGELOG.md",
+  "/LICENSE",
+]
+keywords = ["RNA-seq", "quantification", "long-read", "transcriptomics"]
+categories = ["command-line-utilities", "science"]
+
+# See more keys and their definitions 
+# at https://doc.rust-lang.org/cargo/reference/manifest.html
+[dependencies]
+seqcol_rs = { git = "https://github.com/COMBINE-lab/seqcol_rs", branch = "dev", version = "0.4.1" }
+anyhow = "1.0.100"
+bstr = "1.12.1"
+bio-types = { version = "1.0.4", features = ["serde"] }
+clap = { version = "4.5.57", features = ["derive"] }
+noodles-bam = "0.87.0"
+noodles-sam = "0.83.0"
+num-format = "0.4.4"
+lz4 = "1.28.1"
+either = "1.15.0"
+tabled = "0.20.0"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+typed-builder = "0.23.2"
+rayon = "1.11"
+statrs = "0.18"
+csv = "1.4"
+serde = { version = "1", features = ["derive"] }
+itertools = "0.14.0"
+serde_json = "1.0.149"
+path-tools = "0.1.0"
+atomic_float = "1.1.0"
+sendable-swapvec = "0.4.3"
+rand = "0.10.0" #0.8.5"
+arrow2 = { version = "0.18.0", features = [
+  "io_parquet",
+  "io_parquet_gzip",
+  "io_parquet_zstd",
+  "io_parquet_snappy",
+] }
+kders = { git = "https://github.com/COMBINE-lab/kde-rs.git", branch = "dev", version = "0.1.1" }
+noodles-bgzf = { version = "0.46.0" }
+crossbeam = { version = "0.8.4", features = [
+  "crossbeam-queue",
+  "crossbeam-channel",
+] }
+sprs = "0.11.4"
+
+# bramble-rs: project spliced genome alignments into transcriptome space.
+# 0.1.2 FASTA-header-keying fix; 0.1.3 rescue SW clip-length cap (per-thread
+# memory bound); 0.1.4 adds FastaDb::from_seqs (rescue from index sequences);
+# 0.1.6 exports SeqMap + FastaDb::from_seq_map for the zero-copy rescue path
+# and makes from_seqs hasher-agnostic (0.1.5's deterministic-hasher signature
+# broke default-RandomState callers — COMBINE-lab/oarfish#68; 0.1.5 yanked).
+bramble-rs = "0.1.6"
+
+# rammap: pure-Rust long-read mapper; oarfish's sole read-mapping backend.
+# Published as the `rammap-core` library crate; renamed to `rammap` here so the
+# `rammap::` paths in the source are unchanged. Includes the upstreamed
+# splice-junction loaders (jwanglab/rammap#7).
+#
+# TEMPORARY: pinned to `rammap-core-temp` 1.2.0 — our published fork of
+# rammap-core 1.1.0 carrying the per-thread DP scratch-cache cap (jwanglab/rammap
+# PR #9) that bounds genome-mode peak RSS (30.1 -> 24.0 GB @ j48). The cap is
+# default-on (128 MB; tune via `rammap::set_dp_cache_cap_mb` or
+# `RAMMAP_DP_CACHE_CAP_MB`). Switch back to `package = "rammap-core"` once the PR
+# is merged and released upstream.
+rammap = { package = "rammap-core-temp", version = "1.2.0", default-features = false, features = [
+  "parallel",
+] }
+
+# spearfish: LCP-based long-read transcriptome mapper, an alternative read-mode backend
+# (`--mapper spearfish`).
+spearfish = { version = "0.1", default-features = false }
+# RAD input (`bulk_long_read` records, e.g. from `spearfish map --rad`).
+long-read-rad = "0.1"
+
+needletail = "0.6.3"
+indicatif = "0.18.3"
+rustc-hash = "2.1.1"
+niffler = "3.0.0"
+humantime = "2.3.0"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+
+# mimalloc global allocator. Long-read genome-projection mapping does a lot of
+# small alloc/free across many worker threads; glibc malloc retains/fragments
+# that into large peak RSS. mimalloc handles the churn and returns memory to the
+# OS far better. On by default; disable with `--no-default-features`.
+mimalloc = { version = "0.1.43", default-features = false, optional = true }
+# Direct access to mimalloc's `mi_collect`, to return large freed blocks to the OS promptly.
+libmimalloc-sys = { version = "0.1.49", default-features = false, features = ["extended"], optional = true }
+
+[features]
+default = ["mimalloc"]
+# Use mimalloc as the global allocator (large peak-RSS reduction in genome mode).
+mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
+
+[[bin]]
+name = "oarfish"
+path = "src/main.rs"
+
+[profile.release]
+debug-assertions = false
+lto = "thin"
+panic = "abort"
+
+# The profile that 'cargo dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
