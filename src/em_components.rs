@@ -791,3 +791,514 @@ pub fn run_squarem<W: Copy + Into<f64> + Send + Sync>(
     }
     (out, report)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::em_tests::{
+        Classes, Read, RefEm, Rng, assert_bits_eq, assert_close, check_invariants, mixed_reads, on,
+        ref_em,
+    };
+
+    /// Classes in CSR form: class `c` is entries `off[c]..off[c + 1]` of `t` and `w`.
+    struct Csr {
+        off: Vec<usize>,
+        t: Vec<u32>,
+        w: Vec<f64>,
+    }
+
+    fn csr(reads: &[Read]) -> Csr {
+        let mut c = Csr {
+            off: vec![0],
+            t: vec![],
+            w: vec![],
+        };
+        for r in reads {
+            for &(t, p) in r {
+                c.t.push(t);
+                c.w.push(p as f64);
+            }
+            c.off.push(c.t.len());
+        }
+        c
+    }
+
+    fn plan_of(c: &Csr, ntx: usize, by_heaviest: bool) -> Plan<f64> {
+        Plan::new(|k| c.t[k], |k| c.w[k], &c.off, ntx, by_heaviest)
+    }
+
+    /// Each component's transcripts and its classes (class id, then (global target, weight
+    /// bits) entries), and the single-target classes.
+    type View = (
+        Vec<(Vec<u32>, Vec<(u32, Vec<(u32, u64)>)>)>,
+        Vec<(u32, u32)>,
+    );
+
+    fn view(p: &Plan<f64>) -> View {
+        let comps = p
+            .comps
+            .iter()
+            .map(|cm| {
+                let cls = (0..cm.cls.len())
+                    .map(|k| {
+                        let r = cm.off[k] as usize..cm.off[k + 1] as usize;
+                        let e = r
+                            .map(|i| (cm.tx[cm.lab[i] as usize], cm.w[i].to_bits()))
+                            .collect();
+                        (cm.cls[k], e)
+                    })
+                    .collect();
+                (cm.tx.clone(), cls)
+            })
+            .collect();
+        (comps, p.singles.clone())
+    }
+
+    /// Reads over 96 transcripts in overlapping windows of 8 (one in ten reaching into another
+    /// window, so windows chain into larger components), with repeated targets, single-target
+    /// reads on transcripts 100..104 only, and nothing on the rest of 96..120; weights drawn
+    /// from a continuum, so a class's heaviest target is unique.
+    fn chained_reads(seed: u64, n: usize) -> Vec<Read> {
+        let mut rng = Rng::new(seed);
+        let mut reads: Vec<Read> = (0..n)
+            .map(|_| {
+                let g = rng.below(12) * 8;
+                let k = 1 + rng.below(3);
+                let mut r: Read = (0..k)
+                    .map(|_| {
+                        (
+                            (g + rng.below(8)) as u32,
+                            0.05 + rng.below(1 << 20) as f32 / (1 << 20) as f32,
+                        )
+                    })
+                    .collect();
+                if rng.below(10) == 0 {
+                    r.push((rng.below(96) as u32, 0.3));
+                }
+                r
+            })
+            .collect();
+        reads.extend((100..104).flat_map(|t| std::iter::repeat_n(vec![(t, 0.7)], 3)));
+        rng.shuffle(&mut reads);
+        reads
+    }
+
+    /// Transcript labels after merging every class's targets (a plain fixed-point flood fill).
+    fn flood(c: &Csr, ntx: usize) -> Vec<usize> {
+        let mut lab: Vec<usize> = (0..ntx).collect();
+        loop {
+            let mut changed = false;
+            for w in c.off.windows(2).filter(|w| w[1] - w[0] >= 2) {
+                let m = c.t[w[0]..w[1]]
+                    .iter()
+                    .map(|&t| lab[t as usize])
+                    .min()
+                    .unwrap();
+                for &t in &c.t[w[0]..w[1]] {
+                    if lab[t as usize] != m {
+                        lab[t as usize] = m;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                return lab;
+            }
+        }
+    }
+
+    /// The layout partitions the multi-target classes by connected components of the
+    /// class-transcript graph: every such class sits whole, in order, in the one component that
+    /// holds its targets; single-target classes are kept apart; empty classes and transcripts no
+    /// multi-target class touches are in no component. The layout is the same on any number of
+    /// threads.
+    #[test]
+    fn plan_partitions_classes_by_connected_component() {
+        let mut reads = chained_reads(11, 600);
+        let ntx = 120;
+        let mut c = csr(&reads);
+        // Empty classes at a few positions.
+        for at in [0, 17, 300, 600] {
+            c.off.insert(at, c.off[at]);
+            reads.insert(at, vec![]);
+        }
+        let lab = flood(&c, ntx);
+        for by_heaviest in [false, true] {
+            let plan = plan_of(&c, ntx, by_heaviest);
+            let (comps, singles) = view(&plan);
+            assert_eq!(comps.len(), plan.n_components());
+            let mut comp_of = vec![usize::MAX; ntx];
+            let mut placed = vec![0; reads.len()];
+            for (k, (tx, cls)) in comps.iter().enumerate() {
+                assert!(tx.windows(2).all(|w| w[0] < w[1]), "local ids ascend");
+                for &t in tx {
+                    assert_eq!(comp_of[t as usize], usize::MAX, "t{t} in two components");
+                    comp_of[t as usize] = k;
+                }
+                for (cid, e) in cls {
+                    placed[*cid as usize] += 1;
+                    let want: Vec<(u32, u64)> = reads[*cid as usize]
+                        .iter()
+                        .map(|&(t, p)| (t, (p as f64).to_bits()))
+                        .collect();
+                    assert_eq!(e, &want, "class {cid}");
+                    assert!(e.iter().all(|&(t, _)| tx.contains(&t)));
+                }
+            }
+            for (cid, r) in reads.iter().enumerate() {
+                assert_eq!(placed[cid], usize::from(r.len() >= 2), "class {cid}");
+            }
+            let want_singles: Vec<(u32, u32)> = reads
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.len() == 1)
+                .map(|(cid, r)| (r[0].0, cid as u32))
+                .collect();
+            assert_eq!(singles, want_singles);
+            let in_multi: Vec<bool> = (0..ntx)
+                .map(|t| {
+                    reads
+                        .iter()
+                        .any(|r| r.len() >= 2 && r.iter().any(|x| x.0 == t as u32))
+                })
+                .collect();
+            for t in 0..ntx {
+                assert_eq!(comp_of[t] != usize::MAX, in_multi[t], "t{t}");
+                for u in 0..ntx {
+                    if in_multi[t] && in_multi[u] {
+                        assert_eq!(comp_of[t] == comp_of[u], lab[t] == lab[u], "t{t} t{u}");
+                    }
+                }
+            }
+            for threads in [1, 4, 16] {
+                assert_eq!(
+                    on(threads, || view(&plan_of(&c, ntx, by_heaviest))),
+                    (comps.clone(), singles.clone())
+                );
+            }
+        }
+    }
+
+    /// With `by_heaviest`, a component's classes are ordered by their heaviest target, then by
+    /// class id; without it they keep class order.
+    #[test]
+    fn plan_orders_classes_by_heaviest_target() {
+        let reads = chained_reads(12, 800);
+        let c = csr(&reads);
+        for by_heaviest in [false, true] {
+            let (comps, _) = view(&plan_of(&c, 120, by_heaviest));
+            for (tx, cls) in &comps {
+                let key: Vec<(usize, u32)> = cls
+                    .iter()
+                    .map(|(cid, e)| {
+                        let (t, _) = e
+                            .iter()
+                            .max_by(|a, b| f64::from_bits(a.1).total_cmp(&f64::from_bits(b.1)))
+                            .unwrap();
+                        let local = tx.binary_search(t).unwrap();
+                        (if by_heaviest { local } else { 0 }, *cid)
+                    })
+                    .collect();
+                assert!(
+                    key.windows(2).all(|w| w[0] < w[1]),
+                    "{by_heaviest}: {key:?}"
+                );
+            }
+        }
+    }
+
+    /// `run` takes exactly the reference loop's rounds, wherever the stop falls relative to the
+    /// tiles: with an infinite threshold it stops at the first round past `min_iter`, with a zero
+    /// threshold at `max_iter`.
+    #[test]
+    fn run_takes_the_reference_rounds_across_tiles() {
+        let reads = chained_reads(13, 500);
+        let ntx = 120;
+        let c = csr(&reads);
+        let plan = plan_of(&c, ntx, true);
+        let cl = Classes::of_reads(&reads, ntx);
+        let init = cl.uniform();
+        let mut cases: Vec<RefEm> = [0, 1, 2, 62, 63, 64, 65, 127, 128, 200]
+            .map(|m| RefEm::new(1000, f64::INFINITY, m))
+            .to_vec();
+        cases.extend([0, 1, 2, 63, 64, 65, 129].map(|m| RefEm::new(m, 0.0, 1)));
+        for o in cases {
+            let (want, _) = ref_em(&cl, &init, o);
+            let got = run(&plan, Counts::Unit, &init, o.max_iter, o.thresh, o.min_iter);
+            let what = format!(
+                "max_iter {} thresh {} min_iter {}",
+                o.max_iter, o.thresh, o.min_iter
+            );
+            assert_close(&got, &want, 1e-11, &what);
+        }
+    }
+
+    /// A class with no reads changes nothing: the run with some counts at zero is the run
+    /// without those classes, and transcripts only they touch get 0.
+    #[test]
+    fn zero_count_classes_are_ignored() {
+        let reads = chained_reads(14, 400);
+        let ntx = 120;
+        let mut rng = Rng::new(15);
+        let counts: Vec<f64> = (0..reads.len())
+            .map(|_| [0.0, 1.0, 2.5, 7.0][rng.below(4)])
+            .collect();
+        let kept: Vec<Read> = reads
+            .iter()
+            .zip(&counts)
+            .filter(|(_, n)| **n > 0.0)
+            .map(|(r, _)| r.clone())
+            .collect();
+        let kept_n: Vec<f64> = counts.iter().copied().filter(|&n| n > 0.0).collect();
+        let cl = Classes::with_counts(&kept, &kept_n, ntx);
+        let init = cl.uniform();
+        let (want, _) = ref_em(&cl, &init, RefEm::new(2000, 1e-10, 1));
+        let plan = plan_of(&csr(&reads), ntx, false);
+        let got = run(&plan, Counts::Of(&counts), &init, 2000, 1e-10, 1);
+        assert_close(&got, &want, 1e-7, "zero counts");
+        let total: f64 = kept_n.iter().sum();
+        assert!((got.iter().sum::<f64>() - total).abs() < 1e-9 * total);
+    }
+
+    /// With `plain_first` at or past `max_iter`, `run_squarem` is the plain loop with the
+    /// truncation EM's statistic (relative change in either direction), from iteration
+    /// `niter0`, and reports that loop's iteration count and no SQUAREM cycles.
+    #[test]
+    fn run_squarem_without_cycles_is_the_plain_loop() {
+        let reads = mixed_reads(16);
+        let ntx = crate::em_tests::MIXED_NTX;
+        let plan = plan_of(&csr(&reads), ntx, true);
+        let cl = Classes::of_reads(&reads, ntx);
+        let init = cl.uniform();
+        let mut cases = vec![];
+        for niter0 in [0, 1, 2, 5, 70] {
+            cases.push((niter0, 1000, f64::INFINITY, 1e-11));
+            cases.push((niter0, 3000, 1e-9, 1e-7));
+        }
+        for max_iter in [0, 1, 2, 64, 65, 130] {
+            cases.push((0, max_iter, 0.0, 1e-11));
+        }
+        for (niter0, max_iter, thresh, rtol) in cases {
+            let o = RefEm {
+                max_iter,
+                thresh,
+                min_iter: 1,
+                niter0,
+                abs: true,
+            };
+            let (want, wn) = ref_em(&cl, &init, o);
+            let (got, rep) = run_squarem(
+                &plan,
+                Counts::Unit,
+                &init,
+                niter0,
+                max_iter,
+                thresh,
+                max_iter,
+            );
+            let what = format!("niter0 {niter0} max_iter {max_iter} thresh {thresh}");
+            assert_close(&got, &want, rtol, &what);
+            if rtol < 1e-9 {
+                assert_eq!(rep.niter, wn, "{what}");
+            }
+            assert_eq!((rep.acc, rep.rej, rep.plain), (0, 0, 0), "{what}");
+        }
+    }
+
+    /// Nested, nearly indistinguishable transcripts (plain EM's slow case), next to the mixed
+    /// fixture's components.
+    fn slow_reads() -> (Vec<Read>, usize) {
+        let mut reads = mixed_reads(17);
+        let b = crate::em_tests::MIXED_NTX as u32;
+        for i in 0..60 {
+            reads.push(vec![(b, 1.0), (b + 1, 1.0), (b + 2, 0.9)]);
+            if i % 3 == 0 {
+                reads.push(vec![(b, 1.0)]);
+            }
+            if i % 5 == 0 {
+                reads.push(vec![(b + 3, 1.0), (b + 2, 0.5)]);
+            }
+        }
+        (reads, b as usize + 4)
+    }
+
+    /// SQUAREM per component reaches the plain EM's fixed point, extrapolating where plain EM
+    /// is slow, from the start or after plain steps, and keeps the invariants.
+    #[test]
+    fn run_squarem_reaches_the_fixed_point() {
+        let (reads, ntx) = slow_reads();
+        let plan = plan_of(&csr(&reads), ntx, true);
+        let cl = Classes::of_reads(&reads, ntx);
+        let init = cl.uniform();
+        let mut o = RefEm::new(200_000, 1e-14, 1);
+        o.abs = true;
+        let (fixed, _) = ref_em(&cl, &init, o);
+        for plain_first in [0, 10] {
+            let (got, rep) = run_squarem(&plan, Counts::Unit, &init, 0, 20_000, 1e-10, plain_first);
+            assert_close(&got, &fixed, 1e-5, &format!("plain_first {plain_first}"));
+            check_invariants(&got, &reads, None, ntx, "run_squarem");
+            assert!(rep.acc > 0, "never extrapolated");
+            assert!(rep.niter < 20_000, "did not converge");
+        }
+        // Multiplicities are repeated reads.
+        let mult = Rng::new(18).resample(reads.len());
+        let dup: Vec<Read> = reads
+            .iter()
+            .zip(&mult)
+            .flat_map(|(r, &m)| std::iter::repeat_n(r.clone(), m as usize))
+            .collect();
+        let dc = Classes::of_reads(&dup, ntx);
+        let (fixed, _) = ref_em(&dc, &init, o);
+        let (got, _) = run_squarem(&plan, Counts::OfU32(&mult), &init, 0, 20_000, 1e-10, 0);
+        assert_close(&got, &fixed, 1e-5, "multiplicities");
+        check_invariants(&got, &reads, Some(&mult), ntx, "run_squarem OfU32");
+    }
+
+    /// The single-target reads of component `k`'s transcripts, by local id.
+    fn base_of(plan: &Plan<f64>, k: usize, n: Counts) -> Vec<f64> {
+        let cm = &plan.comps[k];
+        let mut base = vec![0.0; cm.tx.len()];
+        for &(t, c) in &plan.singles {
+            if let Ok(l) = cm.tx.binary_search(&t) {
+                base[l] += n.get(c);
+            }
+        }
+        base
+    }
+
+    /// Checks component `k`'s log-likelihood against the dense formula over its classes and
+    /// single-target reads (up to the constant the latter's weights add), its invariance to scaling, and that an EM round does not lower it.
+    fn check_loglik(plan: &Plan<f64>, k: usize, reads: &[Read], counts: &[f64], theta: &[f64]) {
+        let cm = &plan.comps[k];
+        let n = Counts::Of(counts);
+        let base = base_of(plan, k, n);
+        let local: Vec<f64> = cm.tx.iter().map(|&t| theta[t as usize]).collect();
+        let mut masked = vec![0.0; theta.len()];
+        for &t in &cm.tx {
+            masked[t as usize] = theta[t as usize];
+        }
+        let touching: Vec<usize> = (0..reads.len())
+            .filter(|&r| reads[r].iter().any(|x| cm.tx.binary_search(&x.0).is_ok()))
+            .collect();
+        let sub = Classes::with_counts(
+            &touching
+                .iter()
+                .map(|&r| reads[r].clone())
+                .collect::<Vec<_>>(),
+            &touching.iter().map(|&r| counts[r]).collect::<Vec<_>>(),
+            theta.len(),
+        );
+        let ll = cm.loglik(n, &base, &local);
+        // The single-target reads enter as `n ln theta`: their weights are a constant.
+        let consts: f64 = touching
+            .iter()
+            .filter(|&&r| reads[r].len() == 1 && counts[r] > 0.0)
+            .map(|&r| counts[r] * (reads[r][0].1 as f64).ln())
+            .sum();
+        let want = sub.loglik(&masked) - consts;
+        assert!(
+            (ll - want).abs() <= 1e-10 * want.abs().max(1.0),
+            "{ll} vs {want}"
+        );
+        let scaled: Vec<f64> = local.iter().map(|x| 2.5 * x).collect();
+        let ls = cm.loglik(n, &base, &scaled);
+        assert!((ls - ll).abs() <= 1e-10 * ll.abs().max(1.0), "{ls} vs {ll}");
+        let mut next = vec![0.0; local.len()];
+        let mut acc = vec![0.0; local.len() * cm.blk.len().saturating_sub(1).max(1)];
+        cm.step(n, &base, &local, &mut next, &mut acc);
+        let ln = cm.loglik(n, &base, &next);
+        assert!(
+            ln >= ll - 1e-9 * ll.abs(),
+            "EM round lowered the likelihood: {ll} -> {ln}"
+        );
+    }
+
+    #[test]
+    fn loglik_matches_the_dense_formula() {
+        let (reads, ntx) = slow_reads();
+        let mut rng = Rng::new(19);
+        let counts: Vec<f64> = (0..reads.len()).map(|_| rng.below(4) as f64).collect();
+        let plan = plan_of(&csr(&reads), ntx, true);
+        let theta: Vec<f64> = (0..ntx).map(|_| 0.5 + rng.below(100) as f64).collect();
+        for k in 0..plan.n_components() {
+            check_loglik(&plan, k, &reads, &counts, &theta);
+        }
+    }
+
+    #[test]
+    fn convergence_statistics() {
+        let tiny = constants::MIN_READ_THRESH / 2.0;
+        assert_eq!(rel_change(tiny, 5.0), 0.0);
+        assert_eq!(rel_increase(tiny, 5.0), 0.0);
+        assert_eq!(rel_change(2.0, 1.0), 0.5);
+        assert_eq!(rel_increase(2.0, 1.0), -0.5);
+        assert_eq!(rel_change(1.0, 3.0), 2.0);
+        assert_eq!(rel_increase(1.0, 3.0), 2.0);
+        assert_eq!(Counts::Unit.get(7), 1.0);
+        assert_eq!(Counts::Of(&[0.5, 2.0]).get(1), 2.0);
+        assert_eq!(Counts::OfU32(&[3, 4]).get(0), 3.0);
+    }
+
+    /// A component of at least [`LARGE`] incidences is split into at most [`BLOCKS`] blocks of
+    /// whole classes and stepped in parallel; the layout, `run` and `run_squarem` give the same
+    /// bits on 1, 4 and 16 threads, `run` takes the reference rounds, and the blocked
+    /// log-likelihood matches the dense formula.
+    #[test]
+    fn large_component_is_blocked_and_independent_of_threads() {
+        let mut rng = Rng::new(20);
+        // 40,000 reads over 200 transcripts: one component of about 90,000 incidences, next to
+        // the mixed fixture's small ones (moved to transcripts 200..264).
+        let mut reads = crate::em_tests::grouped_reads(&mut rng, 40_000, 1, 200, false);
+        reads.extend(
+            mixed_reads(21)
+                .into_iter()
+                .map(|r| r.into_iter().map(|(t, p)| (t + 200, p)).collect::<Read>()),
+        );
+        rng.shuffle(&mut reads);
+        let ntx = 200 + crate::em_tests::MIXED_NTX;
+        let c = csr(&reads);
+        let plan = on(1, || plan_of(&c, ntx, true));
+        assert!(plan.has_large());
+        for cm in plan.comps.iter().filter(|cm| cm.is_large()) {
+            let b = &cm.blk;
+            assert!(
+                b.len() >= 3 && b.len() - 1 <= BLOCKS,
+                "{} blocks",
+                b.len() - 1
+            );
+            assert_eq!((b[0], *b.last().unwrap()), (0, cm.cls.len() as u32));
+            assert!(b.windows(2).all(|w| w[0] < w[1]));
+        }
+        let v = view(&plan);
+        for threads in [4, 16] {
+            assert!(
+                on(threads, || view(&plan_of(&c, ntx, true))) == v,
+                "layout on {threads} threads"
+            );
+        }
+        let cl = Classes::of_reads(&reads, ntx);
+        let init = cl.uniform();
+        let runs: Vec<Vec<f64>> = [1, 4, 16]
+            .map(|t| on(t, || run(&plan, Counts::Unit, &init, 40, 0.0, 1)))
+            .to_vec();
+        let (want, _) = ref_em(&cl, &init, RefEm::new(40, 0.0, 1));
+        assert_close(&runs[0], &want, 1e-10, "large run");
+        let sq: Vec<Vec<f64>> = [1, 4, 16]
+            .map(|t| {
+                on(t, || {
+                    run_squarem(&plan, Counts::Unit, &init, 0, 30, 0.0, 0).0
+                })
+            })
+            .to_vec();
+        for i in 1..3 {
+            assert_bits_eq(&runs[i], &runs[0], "run");
+            assert_bits_eq(&sq[i], &sq[0], "run_squarem");
+        }
+        check_invariants(&sq[0], &reads, None, ntx, "large run_squarem");
+        let k = (0..plan.n_components())
+            .find(|&k| plan.comps[k].is_large())
+            .unwrap();
+        let theta: Vec<f64> = (0..ntx).map(|_| 0.5 + rng.below(100) as f64).collect();
+        check_loglik(&plan, k, &reads, &vec![1.0; reads.len()], &theta);
+    }
+}

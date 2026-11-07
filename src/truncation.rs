@@ -2172,4 +2172,337 @@ mod tests {
             assert!((x - y).abs() < 1e-3 * x.max(1.0), "{plain:?} {fast:?}");
         }
     }
+
+    use crate::em_tests::{
+        Classes, PROBS, Read, RefEm, Rng, assert_close, check_invariants, em_info, ref_em,
+        store_of_alns,
+    };
+    use crate::util::oarfish_types::InMemoryAlignmentStore;
+
+    /// A positioned read: (target, probability, start, end) alignments.
+    type PRead = Vec<(u32, f32, u32, u32)>;
+
+    /// Transcript lengths of [`positional_reads`]: four groups of nested isoforms (2,000,
+    /// 1,500 and 1,000 nt), then a lone transcript and two that no read touches.
+    const LENS: [usize; 15] = [
+        2000, 1500, 1000, 2000, 1500, 1000, 2000, 1500, 1000, 2000, 1500, 1000, 1200, 800, 900,
+    ];
+
+    /// 600 reads on one to three isoforms of a group each, at random spans, plus 7 reads on the
+    /// lone transcript 12.
+    fn positional_reads(seed: u64) -> Vec<PRead> {
+        let mut rng = Rng::new(seed);
+        let mut reads: Vec<PRead> = (0..600)
+            .map(|_| {
+                let g = rng.below(4) * 3;
+                let k = 1 + rng.below(3);
+                let mut r: PRead = (0..k)
+                    .map(|_| {
+                        let t = g + rng.below(3);
+                        let len = LENS[t];
+                        let s = rng.below(len - 200);
+                        let e = (s + 100 + rng.below(len - s - 99)).min(len);
+                        (t as u32, PROBS[rng.below(PROBS.len())], s as u32, e as u32)
+                    })
+                    .collect();
+                r.sort_by_key(|x| x.0);
+                r.dedup_by_key(|x| x.0);
+                r
+            })
+            .collect();
+        reads.extend((0..7).map(|i| vec![(12, 1.0, 10 * i, 1200)]));
+        rng.shuffle(&mut reads);
+        reads
+    }
+
+    fn unpositioned(reads: &[PRead]) -> Vec<Read> {
+        reads
+            .iter()
+            .map(|r| r.iter().map(|x| (x.0, x.1)).collect())
+            .collect()
+    }
+
+    fn pstore<'h>(
+        h: &'h noodles_sam::Header,
+        reads: &[PRead],
+        txps: &mut [TranscriptInfo],
+    ) -> InMemoryAlignmentStore<'h> {
+        let alns: Vec<Vec<(AlnInfo, f32)>> = reads
+            .iter()
+            .map(|r| {
+                r.iter()
+                    .map(|&(t, p, s, e)| {
+                        (
+                            AlnInfo {
+                                ref_id: t,
+                                start: s,
+                                end: e,
+                                strand: bio_types::strand::Strand::Forward,
+                            },
+                            p,
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        store_of_alns(h, &alns, txps, false)
+    }
+
+    /// The frozen weights of `f` under `par` as reference-EM classes, read `r` counted
+    /// `mult[r]` times.
+    fn fixed_classes(f: &Flat, par: &Params, mult: Option<&[u32]>, ntx: usize) -> Classes {
+        let fx = Fixed::new(f, par);
+        Classes {
+            ntx,
+            cls: (0..fx.nreads())
+                .map(|r| {
+                    let e = (fx.off[r]..fx.off[r + 1])
+                        .map(|k| (fx.t[k], fx.w[k]))
+                        .collect();
+                    (e, fx.mult(mult, r))
+                })
+                .collect(),
+        }
+    }
+
+    /// The frozen phase on the component layout: with no SQUAREM cycles it is the plain loop
+    /// over the frozen weights (relative change in either direction, from iteration `niter`),
+    /// with or without multiplicities; with SQUAREM, from the start or after plain steps, it
+    /// reaches that loop's fixed point.
+    #[test]
+    fn frozen_phase_on_components_is_the_frozen_em() {
+        let reads = positional_reads(50);
+        let ntx = LENS.len();
+        let h = noodles_sam::Header::default();
+        let mut txps = crate::em_tests::tinfo(&LENS);
+        let store = pstore(&h, &reads, &mut txps);
+        let mult = Rng::new(51).resample(reads.len());
+        let probe = em_info(&store, &txps, 1, 0.0);
+        let f = Flat::new(&probe);
+        let mut par = Params::initial(f.max_len());
+        par.p3 = 0.55;
+        par.pu = 0.05;
+        for m in [None, Some(&mult[..])] {
+            let cl = fixed_classes(&f, &par, m, ntx);
+            let init = vec![reads.len() as f64 / ntx as f64; ntx];
+            for (niter0, max_iter, thresh, rtol) in [
+                (0, 1000, f64::INFINITY, 1e-11),
+                (3, 1000, f64::INFINITY, 1e-11),
+                (0, 90, 0.0, 1e-11),
+                (0, 5000, 1e-10, 1e-7),
+            ] {
+                let emi = em_info(&store, &txps, max_iter, thresh);
+                let o = RefEm {
+                    max_iter,
+                    thresh,
+                    min_iter: 1,
+                    niter0,
+                    abs: true,
+                };
+                let (want, _) = ref_em(&cl, &init, o);
+                let got =
+                    frozen_on_components(&emi, &f, &par, &init, m, niter0, max_iter, u32::MAX);
+                assert_close(&got, &want, rtol, &format!("{niter0} {max_iter} {thresh}"));
+            }
+            let mut o = RefEm::new(200_000, 1e-14, 1);
+            o.abs = true;
+            let (fixed, _) = ref_em(&cl, &init, o);
+            let emi = em_info(&store, &txps, 20_000, 1e-10);
+            for plain_first in [0, PLAIN_FIRST] {
+                let got = frozen_on_components(&emi, &f, &par, &init, m, 0, 20_000, plain_first);
+                assert_close(&got, &fixed, 1e-5, &format!("SQUAREM {plain_first}"));
+                check_invariants(&got, &unpositioned(&reads), m, ntx, "frozen SQUAREM");
+            }
+        }
+    }
+
+    /// The truncation EM (parameters estimated, then frozen on the component layout) assigns
+    /// every read, gives unambiguous transcripts their reads and untouched ones 0, on any
+    /// number of threads, with or without a presence model; so do its bootstrap replicates.
+    #[test]
+    fn truncation_em_keeps_the_invariants() {
+        let reads = positional_reads(52);
+        let plain = unpositioned(&reads);
+        let ntx = LENS.len();
+        let h = noodles_sam::Header::default();
+        let mut txps = crate::em_tests::tinfo(&LENS);
+        let store = pstore(&h, &reads, &mut txps);
+        let emi = em_info(&store, &txps, 1000, 1e-8);
+        let one = em(&emi, None, 1);
+        check_invariants(&one, &plain, None, ntx, "em 1");
+        let four = em(&emi, None, 4);
+        assert_close(&four, &one, 1e-6, "em 4 threads");
+        let pres = crate::presence::PresenceOpts {
+            kind: crate::presence::PresenceKind::SpikeSlab,
+            rho: 0.05,
+            warmup: 5,
+            period: 5,
+        };
+        check_invariants(&em(&emi, Some(pres), 2), &plain, None, ntx, "presence");
+        for p in [None, Some(pres)] {
+            for b in bootstrap(&emi, p, 2, 2) {
+                assert!(b.iter().all(|&x| x.is_finite() && x >= 0.0));
+                let sum: f64 = b.iter().sum();
+                assert!((sum - reads.len() as f64).abs() < 1e-9 * reads.len() as f64);
+                assert_eq!((b[13], b[14]), (0.0, 0.0));
+                assert!((b[12] - b[12].round()).abs() < 1e-9);
+            }
+        }
+    }
+
+    /// Fitting on a sample of the reads: with every multiplicity one (a bootstrap replicate
+    /// that drew each read once) the fit is the point estimate's; and `Sample::of` leaves small
+    /// inputs unsampled.
+    #[test]
+    fn fit_on_a_sample() {
+        let reads = positional_reads(53);
+        let plain = unpositioned(&reads);
+        let ntx = LENS.len();
+        let h = noodles_sam::Header::default();
+        let mut txps = crate::em_tests::tinfo(&LENS);
+        let store = pstore(&h, &reads, &mut txps);
+        let emi = em_info(&store, &txps, 1000, 1e-8);
+        let f = Flat::new(&emi);
+        let expect_sample =
+            sample_reads() > 0 && reads.len() > sample_reads() && Layout::can_freeze_default();
+        assert_eq!(Sample::of(&f).is_some(), expect_sample);
+        let s = Sample {
+            f: f.every(3),
+            k: 3,
+        };
+        assert_eq!(s.f.off.len() - 1, reads.len().div_ceil(3));
+        let (a, pa) = super::fit(&emi, &f, Some(&s), None, None);
+        let ones = vec![1_u32; reads.len()];
+        let (b, pb) = super::fit(&emi, &f, Some(&s), Some(&ones), None);
+        check_invariants(&a, &plain, None, ntx, "sampled fit");
+        assert_close(&b, &a, 1e-9, "all-ones multiplicities");
+        assert!(moved(&pa, &pb) < 1e-9, "{pa:?} {pb:?}");
+        let (c, _) = super::fit(&emi, &f, None, None, None);
+        check_invariants(&c, &plain, None, ntx, "full fit");
+    }
+
+    /// End-gap bins are `{0}`, `{1}`, `[2, 3]`, `[4, 7]`, ...: `width` counts a bin's gaps, the
+    /// initial law sums to one, and the tables are the per-gap density and its running sum.
+    #[test]
+    fn gap_law_bins_and_tables() {
+        assert_eq!(
+            (0..9).map(GapLaw::bin).collect::<Vec<_>>(),
+            vec![0, 1, 2, 2, 3, 3, 3, 3, 4]
+        );
+        let mut count = [0.0; 13];
+        for d in 0..(1 << 12) {
+            count[GapLaw::bin(d)] += 1.0;
+        }
+        for (b, &c) in count.iter().enumerate() {
+            assert_eq!(GapLaw::width(b), c, "bin {b}");
+        }
+        let max_len = (1 << 12) - 1;
+        let g = GapLaw::initial(max_len);
+        assert!((g.h.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        let (dens, cdf) = g.tables(max_len);
+        assert_eq!(dens.len(), max_len as usize + 1);
+        let mut acc = 0.0;
+        for d in 0..=max_len as usize {
+            let b = GapLaw::bin(d as u32);
+            assert!((dens[d] - g.h[b] / GapLaw::width(b)).abs() < 1e-15);
+            acc += dens[d];
+            assert!((cdf[d] - acc).abs() < 1e-12);
+        }
+        assert!((cdf[max_len as usize] - 1.0).abs() < 1e-9);
+    }
+
+    /// Read-length bins are `W` nt wide (`bin_nt` agrees with `bin`); the exponential law sums
+    /// to one with about its mean, and the tables are the per-nt density and the survival
+    /// `P(length >= x)`, falling from one.
+    #[test]
+    fn len_law_bins_and_tables() {
+        for x in 0..20_000 {
+            assert_eq!(LenLaw::bin_nt(x), LenLaw::bin(x as f64), "{x}");
+        }
+        let max_len = 20_000;
+        let l = LenLaw::exponential(1000.0, max_len);
+        assert!((l.h.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!((l.mean() - 1000.0).abs() < 50.0, "{}", l.mean());
+        let (dens, surv) = l.tables(max_len);
+        assert!((surv[0] - 1.0).abs() < 1e-12);
+        assert!(surv.windows(2).all(|w| w[1] <= w[0] + 1e-15));
+        for x in 0..=max_len as usize {
+            let b = LenLaw::bin(x as f64);
+            assert!((dens[x] - l.h[b] / LenLaw::W).abs() < 1e-15);
+            if x % LenLaw::W as usize == 0 {
+                let tail: f64 = l.h[b..].iter().sum();
+                assert!((surv[x] - tail).abs() < 1e-12, "{x}");
+            }
+        }
+    }
+
+    /// The censored-histogram steps return distributions: with nothing censored the length law
+    /// is the observed histogram (up to its small floor); with censoring it still sums to one.
+    /// The end kernel is a distribution over the gaps a transcript allows.
+    #[test]
+    fn law_updates_are_distributions() {
+        let old = LenLaw::exponential(800.0, 5000);
+        let mut st = LStats::default();
+        for (b, w) in [(0, 2.0), (3, 5.0), (10, 3.0)] {
+            LStats::add(&mut st.stop, b, w);
+        }
+        let new = st.law(&old);
+        assert!((new.h.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        for (b, &x) in new.h.iter().enumerate() {
+            let want = match b {
+                0 => 0.2,
+                3 => 0.5,
+                10 => 0.3,
+                _ => 0.0,
+            };
+            assert!((x - want).abs() < 1e-7, "bin {b}: {x}");
+        }
+        for (b, w) in [(2, 4.0), (40, 1.0)] {
+            LStats::add(&mut st.cens, b, w);
+        }
+        let new = st.law(&old);
+        assert!((new.h.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!(new.h.iter().all(|&x| x > 0.0));
+        let g = GapLaw::law(&st, &GapLaw::initial(5000));
+        assert!((g.h.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!(g.h.iter().all(|&x| x > 0.0));
+        let mut k = EndLaw::initial(5000);
+        k.rho = 0.3;
+        k.rel = (0..RB).map(|b| (b + 1) as f64).collect();
+        let z: f64 = k.rel.iter().sum();
+        k.rel.iter_mut().for_each(|x| *x /= z);
+        let (dens, cdf) = k.abs.tables(5000);
+        for len in [200, 1000, 3000] {
+            let tot: f64 = (0..len)
+                .map(|d| {
+                    let (a, r) = k.parts(d, len, &dens, &cdf);
+                    a + r
+                })
+                .sum();
+            assert!((tot - 1.0).abs() < 1e-9, "len {len}: {tot}");
+        }
+    }
+
+    /// The distances the freezing test uses are zero between a law and itself, symmetric, and
+    /// at most one.
+    #[test]
+    fn law_distances() {
+        let (a, b) = (
+            LenLaw::exponential(500.0, 4000),
+            LenLaw::exponential(2000.0, 4000),
+        );
+        assert_eq!(a.moved(&a), 0.0);
+        assert!(a.moved(&b) > 0.0 && a.moved(&b) <= 1.0);
+        assert_eq!(a.moved(&b), b.moved(&a));
+        let (g, mut k) = (GapLaw::initial(4000), EndLaw::initial(4000));
+        assert_eq!(g.moved(&g), 0.0);
+        let k0 = k.clone();
+        k.rho = 0.8;
+        assert!((k.moved(&k0) - 0.3).abs() < 1e-12);
+        let p = Params::initial(4000);
+        let mut q = p.clone();
+        assert_eq!(moved(&p, &q), 0.0);
+        q.len3 = b.clone();
+        assert!((moved(&p, &q) - p.p3 * p.len3.moved(&b)).abs() < 1e-15);
+    }
 }

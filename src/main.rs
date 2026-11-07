@@ -24,6 +24,8 @@ mod bulk;
 mod em;
 mod em_components;
 mod em_read;
+#[cfg(test)]
+mod em_tests;
 mod eq_classes;
 mod presence;
 mod truncation;
