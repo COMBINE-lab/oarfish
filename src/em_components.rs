@@ -94,8 +94,8 @@ impl<W: Copy + Into<f64> + Send + Sync> Plan<W> {
     /// Classes `c` with entries `offsets[c]..offsets[c + 1]`, entry `k` having target
     /// `target(k)` and weight `w(k)`.
     pub fn new(
-        target: impl Fn(usize) -> u32,
-        w: impl Fn(usize) -> W,
+        target: impl Fn(usize) -> u32 + Sync,
+        w: impl Fn(usize) -> W + Sync,
         offsets: &[usize],
         ntx: usize,
     ) -> Self {
@@ -170,22 +170,56 @@ impl<W: Copy + Into<f64> + Send + Sync> Plan<W> {
                 comps[comp_of[t] as usize].tx.push(t as u32);
             }
         }
+        // Each component's classes, ordered by their heaviest target (then by class id): the
+        // classes of one transcript sit together, so a round reads and writes nearby
+        // abundances. Packed as (heaviest target's local id) << 32 | class id.
+        let mut start = vec![0_usize; ncomp + 1];
+        for k in 0..ncomp {
+            start[k + 1] = start[k] + ncls_of[k];
+        }
+        let mut order = vec![0_u64; start[ncomp]];
         let mut singles = Vec::with_capacity(nsingle);
-        for c in 0..ncls {
-            if !multi(c) {
-                if offsets[c + 1] > offsets[c] {
+        {
+            let mut at = start[..ncomp].to_vec();
+            for c in 0..ncls {
+                if multi(c) {
+                    let k = comp_of[target(offsets[c]) as usize] as usize;
+                    order[at[k]] = c as u64;
+                    at[k] += 1;
+                } else if offsets[c + 1] > offsets[c] {
                     singles.push((target(offsets[c]), c as u32));
                 }
-                continue;
             }
-            let cm = &mut comps[comp_of[target(offsets[c]) as usize] as usize];
-            for k in class(c) {
-                cm.lab.push(local[target(k) as usize]);
-                cm.w.push(w(k));
-            }
-            cm.off.push(cm.lab.len() as u32);
-            cm.cls.push(c as u32);
         }
+        order.par_iter_mut().with_min_len(4096).for_each(|x| {
+            let c = *x as usize;
+            let heaviest = class(c)
+                .max_by(|&a, &b| w(a).into().total_cmp(&w(b).into()))
+                .expect("a multi-target class");
+            *x |= (local[target(heaviest) as usize] as u64) << 32;
+        });
+        {
+            let mut rest = &mut order[..];
+            let mut parts = Vec::with_capacity(ncomp);
+            for &n in &ncls_of {
+                let (a, b) = rest.split_at_mut(n);
+                parts.push(a);
+                rest = b;
+            }
+            parts.par_iter_mut().for_each(|p| p.sort_unstable());
+        }
+        comps.par_iter_mut().enumerate().for_each(|(k, cm)| {
+            for &x in &order[start[k]..start[k + 1]] {
+                let c = (x & u32::MAX as u64) as usize;
+                for e in class(c) {
+                    cm.lab.push(local[target(e) as usize]);
+                    cm.w.push(w(e));
+                }
+                cm.off.push(cm.lab.len() as u32);
+                cm.cls.push(c as u32);
+            }
+        });
+        drop(order);
         for cm in comps.iter_mut().filter(|cm| cm.is_large()) {
             // Blocks of about equal incidence counts, on class boundaries.
             let per = cm.incidences().div_ceil(BLOCKS);

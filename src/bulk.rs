@@ -112,12 +112,19 @@ pub(crate) fn perform_inference_and_write_output(
 
     // Put reads that share their likeliest target (under their EM weights, see
     // `em_read::aln_weight`) next to each other: the EM's transcript-major passes then read
-    // nearby memory (see `InMemoryAlignmentStore::reorder_reads`), and the per-read EM reads
-    // the store in this order directly. The equivalence-class EM (no per-read model term) does
-    // not read the store, so it skips this, and the transient copy of each array it makes.
+    // nearby memory (see `InMemoryAlignmentStore::reorder_reads`), and the truncation EM and
+    // the per-read EM's other layouts read the store in this order directly. The
+    // equivalence-class EM and the per-read EM on the component layout (`em_components`)
+    // build their own layouts, so they skip this, and the transient copy of each array it
+    // makes.
     let per_read_terms =
         store.filter_opts.model_coverage || kde_opt.is_some() || args.model_truncation;
-    if per_read_terms || args.per_read_em {
+    let per_read_on_components = args.threads > 4
+        && crate::em_read::Impl::from_env() == Some(crate::em_read::Impl::Csr)
+        && crate::em_components::enabled();
+    let em_reads_store_order =
+        args.model_truncation || ((per_read_terms || args.per_read_em) && !per_read_on_components);
+    if em_reads_store_order {
         let t_order = std::time::Instant::now();
         let order = {
             let cov = store.filter_opts.model_coverage;
