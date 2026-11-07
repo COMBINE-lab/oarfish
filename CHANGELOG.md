@@ -47,6 +47,16 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   8 replicates 18.5 s to 4.9 s (default model) and 115 s to 29 s (coverage model);
   4 replicates 123 s to 25 s (truncation model). Replicate spread is unchanged.
 
+### Fixed
+
+- **`--short-quant` no longer loses reads.** The EM's updates are multiplicative, so a
+  transcript whose short-read abundance was 0 stayed at 0, and the reads aligned only to such
+  transcripts were dropped from the estimates (how many depended on the EM path and the thread
+  count). Those transcripts now start at a negligible abundance (1e-8 of the mean), so every
+  path keeps all reads and the paths agree.
+- **Bootstraps no longer panic on input with no aligned reads**; the replicates are all zero, as
+  the point estimate is.
+
 ## 0.11.0 - 2026-10-24
 
 ### Added

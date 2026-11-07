@@ -520,4 +520,38 @@ mod tests {
         }
         assert!((got.iter().sum::<f64>() - reads.len() as f64).abs() < 1e-9);
     }
+
+    /// A transcript that starts at 0 (no short-read abundance) keeps the reads only it explains
+    /// once the start is floored, and the class loop and the component layout then agree.
+    #[test]
+    fn zero_start_keeps_unique_reads() {
+        // 5 reads unique to t0; t1 and t2 share 4 reads, and t2 has 3 of its own.
+        let mut reads: Vec<Vec<(u32, f32)>> = vec![vec![(0, 1.0)]; 5];
+        reads.extend(vec![vec![(1, 1.0), (2, 1.0)]; 4]);
+        reads.extend(vec![vec![(2, 1.0)]; 3]);
+        let eqc = EqClasses::from_reads(reads.iter().map(|r| r.iter().copied()), reads.len(), 3);
+        let mut init = vec![0.0, 3.0, 3.0];
+        crate::util::read_function::floor_zero_abundances(&mut init);
+        let want = run(
+            &eqc,
+            &eqc.counts,
+            &tinfo(3),
+            1000,
+            1e-9,
+            Some(&init),
+            None,
+            false,
+        );
+        let got = em_components::run(&eqc.plan(3), Counts::Of(&eqc.counts), &init, 1000, 1e-9, 1);
+        for est in [&want, &got] {
+            assert!(
+                (est.iter().sum::<f64>() - reads.len() as f64).abs() < 1e-9,
+                "{est:?}"
+            );
+            assert!((est[0] - 5.0).abs() < 1e-9, "{est:?}");
+        }
+        for (g, w) in got.iter().zip(&want) {
+            assert!((g - w).abs() <= 1e-6 * w.max(1.0), "{got:?} vs {want:?}");
+        }
+    }
 }
