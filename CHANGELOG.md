@@ -11,6 +11,25 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Performance
+
+- **The plain EMs run on a connected-component layout** (after salmon's component
+  engine). Reads link transcripts only within connected components, which the EM
+  never couples; each component's classes are stored together and run tiles of up
+  to 64 iterations while in cache, single-target classes become a per-transcript
+  constant, and transcripts no read references are skipped. The stopping rule stays
+  global and exact (a tile is replayed up to the round where it would have stopped),
+  so estimates are unchanged up to summation order (within 2e-6 reads on the
+  simulations below) and do not depend on the thread count. EM time, 16 threads:
+
+  | | default model | coverage model |
+  |---|---|---|
+  | NanoSim NA12878 cDNA | 3.3 s to 0.9 s | 9.6 s to 2.4 s |
+  | TKSM SQ2 | 4.9 s to 1.8 s | 14.8 s to 5.2 s |
+
+  Applies to the equivalence-class EM (without `--presence-model`) and the per-read
+  EM above 4 threads. `OARFISH_EM_COMPONENTS=0` restores the previous layouts.
+
 ## 0.11.0 - 2026-10-24
 
 ### Added

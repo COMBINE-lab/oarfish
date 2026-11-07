@@ -8,6 +8,9 @@
 //! per iteration. Each iteration uses the CSR layout of `crate::em_read`: one pass over classes
 //! computes each class's scale, and one pass over transcripts sums the scales through a
 //! transpose, so no update is shared between threads.
+//!
+//! Without the presence model (which couples all transcripts through its base rate), the same
+//! rounds run on the component layout of [`crate::em_components`] instead.
 
 use num_format::{Locale, ToFormattedString};
 use rand::rng as trng;
@@ -16,6 +19,7 @@ use rustc_hash::FxHashMap;
 use tracing::{info, span, trace};
 
 use crate::bootstrap;
+use crate::em_components::{self, Counts, Plan};
 use crate::presence::{Presence, PresenceOpts};
 use crate::util::constants;
 use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
@@ -115,6 +119,11 @@ impl EqClasses {
         self.counts.len()
     }
 
+    /// The component layout of the classes (see [`crate::em_components`]).
+    fn plan(&self, ntx: usize) -> Plan<f32> {
+        Plan::new(|k| self.targets[k], |k| self.probs[k], &self.offsets, ntx)
+    }
+
     fn class(&self, c: usize) -> (&[u32], &[f32]) {
         let r = self.offsets[c]..self.offsets[c + 1];
         (&self.targets[r.clone()], &self.probs[r])
@@ -154,6 +163,14 @@ fn m_step(eqc: &EqClasses, counts: &[f64], prev: &[f64], scale: &mut [f64], curr
         });
 }
 
+/// The initial abundances of [`run`]: `init_abundances`, or the reads spread evenly.
+fn initial(counts: &[f64], ntx: usize, init_abundances: Option<&Vec<f64>>) -> Vec<f64> {
+    match init_abundances {
+        Some(init) => init.clone(),
+        None => vec![counts.iter().sum::<f64>() / ntx as f64; ntx],
+    }
+}
+
 /// The EM of [`crate::em::em_par`] over classes with read `counts` (the class counts, or a
 /// bootstrap resample of them): same initialization, convergence rule and final pruning round.
 #[allow(clippy::too_many_arguments)]
@@ -167,12 +184,7 @@ fn run(
     presence: Option<PresenceOpts>,
     do_log: bool,
 ) -> Vec<f64> {
-    let total_weight: f64 = counts.iter().sum();
-    let init = match init_abundances {
-        Some(init) => init.clone(),
-        None => vec![total_weight / (tinfo.len() as f64); tinfo.len()],
-    };
-    let mut prev = init;
+    let mut prev = initial(counts, tinfo.len(), init_abundances);
     let mut curr = vec![0.0_f64; tinfo.len()];
     let mut scale = vec![0.0_f64; eqc.len()];
     // With the presence model the EM sees `q * prev` (see `crate::presence`).
@@ -268,6 +280,23 @@ pub fn em(
         .build()
         .unwrap();
     pool.install(|| {
+        if presence.is_none() && em_components::enabled() {
+            let t0 = std::time::Instant::now();
+            let plan = eqc.plan(tinfo.len());
+            info!(
+                "{} connected components, laid out in {:.2}s",
+                plan.n_components().to_formatted_string(&Locale::en),
+                t0.elapsed().as_secs_f64()
+            );
+            let init = initial(&eqc.counts, tinfo.len(), init_abundances);
+            return em_components::run(
+                &plan,
+                Counts::Of(&eqc.counts),
+                &init,
+                max_iter,
+                convergence_thresh,
+            );
+        }
         run(
             eqc,
             &eqc.counts,
@@ -329,6 +358,90 @@ pub fn bootstrap(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reads over `ntx` transcripts in groups of `group` (each read's targets drawn from one
+    /// group, so the groups are separate components), with some single-target reads, from a
+    /// fixed pseudo-random sequence. The last transcript is never a target.
+    fn grouped_reads(nreads: usize, ntx: usize, group: usize) -> Vec<Vec<(u32, f32)>> {
+        let mut x: u64 = 0x9e3779b97f4a7c15;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let ngroups = (ntx - 1) / group;
+        (0..nreads)
+            .map(|_| {
+                let g = (next() as usize) % ngroups;
+                let k = 1 + (next() as usize) % 3;
+                let mut ts: Vec<u32> = (0..k)
+                    .map(|_| (g * group + (next() as usize) % group) as u32)
+                    .collect();
+                ts.sort_unstable();
+                ts.dedup();
+                ts.into_iter()
+                    .map(|t| (t, [1.0_f32, 0.5, 0.25][(next() as usize) % 3]))
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn tinfo(ntx: usize) -> Vec<TranscriptInfo> {
+        (0..ntx)
+            .map(|_| TranscriptInfo::with_len(std::num::NonZeroUsize::new(1000).unwrap()))
+            .collect()
+    }
+
+    /// The component layout runs the class loop's rounds: the same estimates, up to summation
+    /// order, whether the global criterion stops it inside a tile or the iteration cap does.
+    #[test]
+    fn component_em_matches_class_em() {
+        let (ntx, reads) = (301, grouped_reads(5000, 301, 6));
+        let eqc = EqClasses::from_reads(reads.iter().map(|r| r.iter().copied()), reads.len(), ntx);
+        let ti = tinfo(ntx);
+        let plan = eqc.plan(ntx);
+        assert!(plan.n_components() > 10);
+        for (max_iter, thresh) in [(1000, 1e-3), (1000, 1e-9), (150, 1e-12)] {
+            let want = run(&eqc, &eqc.counts, &ti, max_iter, thresh, None, None, false);
+            let init = initial(&eqc.counts, ntx, None);
+            let got = em_components::run(&plan, Counts::Of(&eqc.counts), &init, max_iter, thresh);
+            for (t, (g, w)) in got.iter().zip(&want).enumerate() {
+                assert!(
+                    (g - w).abs() <= 1e-9 * w.max(1.0),
+                    "{max_iter} {thresh} t{t}: {g} vs {w}"
+                );
+            }
+            assert_eq!(got[ntx - 1], 0.0);
+        }
+    }
+
+    /// The component EM, a large component's parallel rounds included, gives the same bits on
+    /// any number of threads.
+    #[test]
+    fn component_em_is_independent_of_threads() {
+        // Two groups of 150 transcripts: components large enough to step in parallel.
+        let (ntx, reads) = (301, grouped_reads(200_000, 301, 150));
+        let eqc = EqClasses::from_reads(reads.iter().map(|r| r.iter().copied()), reads.len(), ntx);
+        let plan = eqc.plan(ntx);
+        assert!(plan.has_large());
+        let init = initial(&eqc.counts, ntx, None);
+        let on = |threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| em_components::run(&plan, Counts::Of(&eqc.counts), &init, 300, 1e-6))
+        };
+        let one = on(1);
+        for threads in [3, 8] {
+            assert!(
+                one.iter()
+                    .zip(on(threads))
+                    .all(|(a, b)| a.to_bits() == b.to_bits())
+            );
+        }
+    }
 
     /// The class EM equals a plain per-read EM on the same reads.
     #[test]

@@ -12,7 +12,9 @@
 //!   sums `w / normalizer` over the transcript's alignments through a precomputed transpose.
 //!   Each pass writes only its own slots, and the result does not depend on scheduling.
 //!
-//! `OARFISH_READ_EM=local` or `OARFISH_READ_EM=atomic` selects the other layouts.
+//! `OARFISH_READ_EM=local` or `OARFISH_READ_EM=atomic` selects the other layouts. With `Csr`,
+//! the per-read EM runs the same rounds on the component layout of [`crate::em_components`]
+//! (`OARFISH_EM_COMPONENTS=0` keeps the CSR layout); the truncation EM keeps the CSR layout.
 
 use std::time::Instant;
 
@@ -21,6 +23,7 @@ use num_format::{Locale, ToFormattedString};
 use rayon::prelude::*;
 use tracing::{info, span, trace};
 
+use crate::em_components;
 use crate::util::constants;
 use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
 
@@ -210,6 +213,29 @@ fn run(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
         Some(ref v) => v.clone(),
         None => vec![total_weight / ntx as f64; ntx],
     };
+    if how == Impl::Csr && em_components::enabled() {
+        let plan = em_components::Plan::new(|k| f.target(k), |k| f.w(k), f.off, ntx);
+        info!(
+            "per-read EM (components): {} reads, {} alignments, {} connected components, setup {:.2}s",
+            f.nreads().to_formatted_string(&Locale::en),
+            f.n().to_formatted_string(&Locale::en),
+            plan.n_components().to_formatted_string(&Locale::en),
+            t0.elapsed().as_secs_f64()
+        );
+        let t1 = Instant::now();
+        let out = em_components::run(
+            &plan,
+            em_components::Counts::Unit,
+            &prev,
+            em_info.max_iter,
+            em_info.convergence_thresh,
+        );
+        info!(
+            "per-read EM (components): {:.2}s",
+            t1.elapsed().as_secs_f64()
+        );
+        return out;
+    }
     let mut curr = vec![0.0; ntx];
     // Layout-specific state, built once.
     let tr = (how == Impl::Csr).then(|| Transpose::new(&f, ntx));
