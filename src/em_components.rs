@@ -40,6 +40,8 @@ pub enum Counts<'a> {
     /// Every class is one read.
     Unit,
     Of(&'a [f64]),
+    /// Per-class multiplicities (bootstrap resamples).
+    OfU32(&'a [u32]),
 }
 
 impl Counts<'_> {
@@ -48,6 +50,7 @@ impl Counts<'_> {
         match self {
             Counts::Unit => 1.0,
             Counts::Of(n) => n[c as usize],
+            Counts::OfU32(n) => n[c as usize] as f64,
         }
     }
 }
@@ -278,6 +281,19 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
     /// above [`constants::MIN_READ_THRESH`]). `acc` is scratch: one buffer of the component's
     /// size per block (one for a small component).
     fn step(&self, n: Counts, base: &[f64], prev: &[f64], out: &mut [f64], acc: &mut [f64]) -> f64 {
+        self.step_by(n, base, prev, out, acc, rel_increase)
+    }
+
+    /// [`Comp::step`], with the convergence statistic the largest `stat(prev, out)`.
+    fn step_by(
+        &self,
+        n: Counts,
+        base: &[f64],
+        prev: &[f64],
+        out: &mut [f64],
+        acc: &mut [f64],
+        stat: impl Fn(f64, f64) -> f64 + Sync + Copy,
+    ) -> f64 {
         let m = self.tx.len();
         if !self.is_large() {
             acc.fill(0.0);
@@ -287,7 +303,7 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
             let mut rd = 0.0_f64;
             for l in 0..m {
                 out[l] = base[l] + prev[l] * acc[l];
-                rd = rd.max(rel_increase(prev[l], out[l]));
+                rd = rd.max(stat(prev[l], out[l]));
             }
             return rd;
         }
@@ -304,9 +320,20 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
             .map(|(l, o)| {
                 let s: f64 = acc.chunks(m).map(|a| a[l]).sum();
                 *o = base[l] + prev[l] * s;
-                rel_increase(prev[l], *o)
+                stat(prev[l], *o)
             })
             .reduce(|| 0.0, f64::max)
+    }
+}
+
+/// The relative change in either direction, over abundances above
+/// [`constants::MIN_READ_THRESH`] (the truncation EM's statistic).
+#[inline]
+fn rel_change(prev: f64, curr: f64) -> f64 {
+    if prev > constants::MIN_READ_THRESH {
+        (curr - prev).abs() / prev
+    } else {
+        0.0
     }
 }
 
@@ -437,4 +464,295 @@ pub fn run<W: Copy + Into<f64> + Send + Sync>(
         out[t as usize] = single[t as usize];
     }
     out
+}
+
+impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
+    /// The component's log-likelihood at abundances `theta`, up to a constant: over its
+    /// classes (read counts `n`) and its single-target reads `base`, with `theta` normalized to
+    /// proportions, as the truncation EM's `loglik_static` computes it over all reads.
+    fn loglik(&self, n: Counts, base: &[f64], theta: &[f64]) -> f64 {
+        let class_ll = |k: usize| -> (f64, f64) {
+            let c = n.get(self.cls[k]);
+            let r = self.off[k] as usize..self.off[k + 1] as usize;
+            let d: f64 = self.lab[r.clone()]
+                .iter()
+                .zip(&self.w[r])
+                .map(|(&l, &w)| theta[l as usize] * w.into())
+                .sum();
+            if c > 0.0 && d > constants::EM_DENOM_THRESH {
+                (c * d.ln(), c)
+            } else {
+                (0.0, 0.0)
+            }
+        };
+        let (mut ll, mut reads) = if self.is_large() {
+            let parts: Vec<(f64, f64)> = (0..self.blk.len() - 1)
+                .into_par_iter()
+                .map(|b| {
+                    (self.blk[b] as usize..self.blk[b + 1] as usize)
+                        .map(class_ll)
+                        .fold((0.0, 0.0), |a, x| (a.0 + x.0, a.1 + x.1))
+                })
+                .collect();
+            parts
+                .into_iter()
+                .fold((0.0, 0.0), |a, x| (a.0 + x.0, a.1 + x.1))
+        } else {
+            (0..self.cls.len())
+                .map(class_ll)
+                .fold((0.0, 0.0), |a, x| (a.0 + x.0, a.1 + x.1))
+        };
+        for (&s, &t) in base.iter().zip(theta) {
+            if s > 0.0 && t > constants::EM_DENOM_THRESH {
+                ll += s * t.ln();
+                reads += s;
+            }
+        }
+        let total: f64 = theta.iter().sum();
+        ll - reads * total.ln()
+    }
+}
+
+/// A component's SQUAREM state (scheme S3, as in the truncation EM): the iterates of a cycle,
+/// the bound on the extrapolation step length, and the cycles that extrapolated and kept the
+/// result, rejected it, or did not extrapolate.
+#[derive(Clone)]
+struct Sq {
+    step_max: f64,
+    acc: u32,
+    rej: u32,
+    plain: u32,
+}
+
+const STEP_GROW: f64 = 4.0;
+
+/// SQUAREM totals of [`run_squarem`] over the components, and the iteration count.
+pub struct SquaremReport {
+    pub niter: u32,
+    pub acc: u64,
+    pub rej: u64,
+    pub plain: u64,
+}
+
+struct SqState {
+    base: Vec<f64>,
+    prev: Vec<f64>,
+    curr: Vec<f64>,
+    acc: Vec<f64>,
+    t0: Vec<f64>,
+    t1: Vec<f64>,
+    t2: Vec<f64>,
+    sq: Sq,
+    rd: Vec<f64>,
+}
+
+impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
+    /// One SQUAREM cycle from `s.prev`, as the truncation EM's `squarem_cycle` runs over all
+    /// transcripts, on this component alone: two EM steps, a step along the extrapolated path,
+    /// one EM step from there, kept if the component's likelihood is at least that of plain EM.
+    /// Leaves the result in `s.prev` and returns the last EM step's statistic.
+    fn squarem_cycle(&self, n: Counts, s: &mut SqState) -> f64 {
+        s.t0.copy_from_slice(&s.prev);
+        self.step_by(n, &s.base, &s.t0, &mut s.t1, &mut s.acc, rel_change);
+        let rd2 = self.step_by(n, &s.base, &s.t1, &mut s.t2, &mut s.acc, rel_change);
+        let (mut rr, mut vv) = (0.0_f64, 0.0_f64);
+        for i in 0..s.t0.len() {
+            let (a, b, c) = (s.t0[i], s.t1[i], s.t2[i]);
+            let (r, v) = (b - a, c - 2.0 * b + a);
+            rr += r * r;
+            vv += v * v;
+        }
+        let mut st = if vv > 0.0 { (rr / vv).sqrt() } else { 1.0 };
+        if !st.is_finite() || st < 1.0 {
+            st = 1.0;
+        }
+        let hit = st > 1.0 && st >= s.sq.step_max;
+        st = st.min(s.sq.step_max);
+        if st == 1.0 {
+            if hit {
+                s.sq.step_max *= STEP_GROW;
+            }
+            s.sq.plain += 1;
+            s.prev.copy_from_slice(&s.t2);
+            return rd2;
+        }
+        for i in 0..s.t0.len() {
+            let (a, b, c) = (s.t0[i], s.t1[i], s.t2[i]);
+            let (r, v) = (b - a, c - 2.0 * b + a);
+            s.prev[i] = (a + 2.0 * st * r + st * st * v).max(0.0);
+        }
+        let rd3 = self.step_by(n, &s.base, &s.prev, &mut s.curr, &mut s.acc, rel_change);
+        let (l3, l2) = (
+            self.loglik(n, &s.base, &s.curr),
+            self.loglik(n, &s.base, &s.t2),
+        );
+        if l3.is_finite() && l3 >= l2 {
+            s.sq.acc += 1;
+            if hit {
+                s.sq.step_max *= STEP_GROW;
+            }
+            std::mem::swap(&mut s.prev, &mut s.curr);
+            rd3
+        } else {
+            s.sq.rej += 1;
+            s.sq.step_max = (s.sq.step_max / STEP_GROW).max(1.0);
+            s.prev.copy_from_slice(&s.t2);
+            rd2
+        }
+    }
+}
+
+/// The truncation EM's frozen-weight loop on the component layout, with SQUAREM run on each
+/// component separately: from iteration `niter0` and abundances `init`, plain EM steps while
+/// the iteration count is below `plain_first`, then SQUAREM cycles (each counted as three
+/// iterations), stopping at the first iteration past 1 where the largest relative change in
+/// either direction, over all transcripts, is below `thresh`, or at `max_iter`; then very small
+/// abundances are zeroed and one more EM step is taken.
+///
+/// Components are independent fixed-point problems, so a SQUAREM per component is SQUAREM on
+/// each; the step lengths and acceptance tests are each component's own, where the loop over
+/// all transcripts uses one step length and the total likelihood.
+#[allow(clippy::too_many_arguments)]
+pub fn run_squarem<W: Copy + Into<f64> + Send + Sync>(
+    plan: &Plan<W>,
+    n: Counts,
+    init: &[f64],
+    niter0: u32,
+    max_iter: u32,
+    thresh: f64,
+    plain_first: u32,
+) -> (Vec<f64>, SquaremReport) {
+    let mut single = vec![0.0_f64; plan.ntx];
+    for &(t, c) in &plan.singles {
+        single[t as usize] += n.get(c);
+    }
+    let mut st: Vec<SqState> = plan
+        .comps
+        .iter()
+        .map(|cm| {
+            let m = cm.tx.len();
+            SqState {
+                base: cm.tx.iter().map(|&t| single[t as usize]).collect(),
+                prev: cm.tx.iter().map(|&t| init[t as usize]).collect(),
+                curr: vec![0.0; m],
+                acc: vec![0.0; m * cm.blk.len().saturating_sub(1).max(1)],
+                t0: vec![0.0; m],
+                t1: vec![0.0; m],
+                t2: vec![0.0; m],
+                sq: Sq {
+                    step_max: 1.0,
+                    acc: 0,
+                    rej: 0,
+                    plain: 0,
+                },
+                rd: Vec::with_capacity(TILE as usize),
+            }
+        })
+        .collect();
+    let mut in_comp = vec![false; plan.ntx];
+    for cm in &plan.comps {
+        for &t in &cm.tx {
+            in_comp[t as usize] = true;
+        }
+    }
+    // Transcripts only single-target classes reference reach their reads in one step and stay.
+    let lone: Vec<u32> = (0..plan.ntx as u32)
+        .filter(|&t| single[t as usize] > 0.0 && !in_comp[t as usize])
+        .collect();
+    drop(in_comp);
+    let lone_rd0 = lone
+        .iter()
+        .map(|&t| rel_change(init[t as usize], single[t as usize]))
+        .fold(0.0_f64, f64::max);
+
+    // The iterations of the loop: (count before it, whether it is a SQUAREM cycle).
+    let kind = |niter: u32| niter >= plain_first;
+    let mut order: Vec<usize> = (0..plan.comps.len()).collect();
+    order.sort_by_key(|&k| std::cmp::Reverse(plan.comps[k].incidences()));
+    let advance = |st: &mut [SqState], from: u32, loops: u32| {
+        let mut refs: Vec<Option<&mut SqState>> = st.iter_mut().map(Some).collect();
+        let mut jobs: Vec<(usize, &mut SqState)> = order
+            .iter()
+            .map(|&k| (k, refs[k].take().expect("each component once")))
+            .collect();
+        jobs.par_iter_mut().with_max_len(1).for_each(|(k, s)| {
+            let cm = &plan.comps[*k];
+            s.rd.clear();
+            let mut niter = from;
+            for _ in 0..loops {
+                let r = if kind(niter) {
+                    niter += 3;
+                    cm.squarem_cycle(n, s)
+                } else {
+                    niter += 1;
+                    let r = cm.step_by(n, &s.base, &s.prev, &mut s.curr, &mut s.acc, rel_change);
+                    std::mem::swap(&mut s.prev, &mut s.curr);
+                    r
+                };
+                s.rd.push(r);
+            }
+        });
+    };
+
+    let mut niter = niter0;
+    let mut first = true;
+    'outer: while niter < max_iter {
+        // Up to TILE loop iterations, all starting below max_iter.
+        let mut starts = Vec::with_capacity(TILE as usize);
+        let mut x = niter;
+        while starts.len() < TILE as usize && x < max_iter {
+            starts.push(x);
+            x += if kind(x) { 3 } else { 1 };
+        }
+        let snap: Vec<(Vec<f64>, Sq)> = st.iter().map(|s| (s.prev.clone(), s.sq.clone())).collect();
+        advance(&mut st, niter, starts.len() as u32);
+        for (i, &x0) in starts.iter().enumerate() {
+            let mut rd = st.iter().map(|s| s.rd[i]).fold(0.0_f64, f64::max);
+            if first && i == 0 {
+                rd = rd.max(lone_rd0);
+            }
+            // The loop's count at its test: after a cycle's two extra iterations.
+            let at = if kind(x0) { x0 + 2 } else { x0 };
+            if rd < thresh && at > 1 {
+                for (s, (p, q)) in st.iter_mut().zip(snap) {
+                    s.prev = p;
+                    s.sq = q;
+                }
+                advance(&mut st, niter, i as u32 + 1);
+                niter = at;
+                break 'outer;
+            }
+        }
+        first = false;
+        niter = x;
+    }
+
+    let report = SquaremReport {
+        niter,
+        acc: st.iter().map(|s| s.sq.acc as u64).sum(),
+        rej: st.iter().map(|s| s.sq.rej as u64).sum(),
+        plain: st.iter().map(|s| s.sq.plain as u64).sum(),
+    };
+    // Zero very small abundances, then one more EM step.
+    let mut out = vec![0.0_f64; plan.ntx];
+    plan.comps
+        .par_iter()
+        .zip(st.par_iter_mut())
+        .for_each(|(cm, s)| {
+            for x in s.prev.iter_mut() {
+                if *x < constants::MIN_READ_THRESH {
+                    *x = 0.0;
+                }
+            }
+            cm.step_by(n, &s.base, &s.prev, &mut s.curr, &mut s.acc, rel_change);
+        });
+    for (cm, s) in plan.comps.iter().zip(&st) {
+        for (&t, &x) in cm.tx.iter().zip(&s.curr) {
+            out[t as usize] = x;
+        }
+    }
+    for &t in &lone {
+        out[t as usize] = single[t as usize];
+    }
+    (out, report)
 }
