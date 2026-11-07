@@ -331,13 +331,15 @@ struct State {
 
 /// The plain EM (no presence model) with class read counts `n`, from abundances `init`: the
 /// rounds, global stopping rule and final pruning round of [`crate::eq_classes`] and
-/// [`crate::em_read`].
+/// [`crate::em_read`]. The loop stops after the first round past `min_iter` whose
+/// statistic is below `thresh`, or after `max_iter` rounds.
 pub fn run<W: Copy + Into<f64> + Send + Sync>(
     plan: &Plan<W>,
     n: Counts,
     init: &[f64],
     max_iter: u32,
     thresh: f64,
+    min_iter: u32,
 ) -> Vec<f64> {
     let mut single = vec![0.0_f64; plan.ntx];
     for &(t, c) in &plan.singles {
@@ -401,7 +403,7 @@ pub fn run<W: Copy + Into<f64> + Send + Sync>(
             if niter == 0 && i == 0 {
                 rd = rd.max(lone_rd0);
             }
-            rd < thresh && niter + i as u32 > 1
+            rd < thresh && niter + i as u32 > min_iter
         });
         match stop {
             Some(i) => {

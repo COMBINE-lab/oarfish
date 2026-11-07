@@ -291,6 +291,9 @@ pub(crate) fn perform_inference_and_write_output(
             None if args.model_truncation => {
                 crate::truncation::bootstrap(&emi, presence, args.num_bootstraps, args.threads)
             }
+            None if crate::em_components::enabled() => {
+                crate::em_read::bootstrap(&emi, args.num_bootstraps, args.threads)
+            }
             None => em::bootstrap(&emi, args.num_bootstraps, args.threads),
         };
 

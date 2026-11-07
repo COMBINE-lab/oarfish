@@ -229,6 +229,7 @@ fn run(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
             &prev,
             em_info.max_iter,
             em_info.convergence_thresh,
+            1,
         );
         info!(
             "per-read EM (components): {:.2}s",
@@ -296,6 +297,48 @@ fn run(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
         t1.elapsed().as_secs_f64()
     );
     curr
+}
+
+/// Bootstrap replicates of the per-read EM on the component layout: each resamples the reads
+/// with replacement, as [`crate::em::bootstrap`] does, and runs that EM's rounds (at least 50
+/// before it may stop) with each read counted as often as it was drawn. One layout serves every
+/// replicate.
+pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f64>> {
+    let span = span!(tracing::Level::INFO, "bootstrap");
+    let _guard = span.enter();
+    info!("will collect {num_boot} bootstraps");
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(nthreads)
+        .build()
+        .unwrap();
+    pool.install(|| {
+        let ntx = em_info.txp_info.len();
+        let f = Flat::new(em_info);
+        let plan = em_components::Plan::new(|k| f.target(k), |k| f.w(k), f.off, ntx);
+        let total_weight = em_info.eq_map.num_aligned_reads() as f64;
+        let init = match em_info.init_abundances {
+            Some(ref v) => v.clone(),
+            None => vec![total_weight / ntx as f64; ntx],
+        };
+        (0..num_boot)
+            .into_par_iter()
+            .map(|i| {
+                info!("evaluating bootstrap replicate {}", i);
+                let mut mult = vec![0.0_f64; f.nreads()];
+                for r in crate::bootstrap::get_sample_inds(f.nreads(), &mut rand::rng()) {
+                    mult[r] += 1.0;
+                }
+                em_components::run(
+                    &plan,
+                    em_components::Counts::Of(&mult),
+                    &init,
+                    em_info.max_iter,
+                    em_info.convergence_thresh,
+                    50,
+                )
+            })
+            .collect()
+    })
 }
 
 /// One iteration: each chunk accumulates into its own buffer; buffers are summed per block of

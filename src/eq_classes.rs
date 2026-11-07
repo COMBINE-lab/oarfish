@@ -295,6 +295,7 @@ pub fn em(
                 &init,
                 max_iter,
                 convergence_thresh,
+                1,
             );
         }
         run(
@@ -331,6 +332,8 @@ pub fn bootstrap(
         .build()
         .unwrap();
     pool.install(|| {
+        // One component layout serves every replicate; only the class counts differ.
+        let plan = (presence.is_none() && em_components::enabled()).then(|| eqc.plan(tinfo.len()));
         (0..num_boot)
             .into_par_iter()
             .map(|i| {
@@ -339,6 +342,17 @@ pub fn bootstrap(
                 let mut counts = vec![0.0_f64; eqc.len()];
                 for r in bootstrap::get_sample_inds(eqc.read_class.len(), &mut rng) {
                     counts[eqc.read_class[r] as usize] += 1.0;
+                }
+                if let Some(plan) = &plan {
+                    let init = initial(&counts, tinfo.len(), init_abundances);
+                    return em_components::run(
+                        plan,
+                        Counts::Of(&counts),
+                        &init,
+                        max_iter,
+                        convergence_thresh,
+                        1,
+                    );
                 }
                 run(
                     eqc,
@@ -405,7 +419,8 @@ mod tests {
         for (max_iter, thresh) in [(1000, 1e-3), (1000, 1e-9), (150, 1e-12)] {
             let want = run(&eqc, &eqc.counts, &ti, max_iter, thresh, None, None, false);
             let init = initial(&eqc.counts, ntx, None);
-            let got = em_components::run(&plan, Counts::Of(&eqc.counts), &init, max_iter, thresh);
+            let got =
+                em_components::run(&plan, Counts::Of(&eqc.counts), &init, max_iter, thresh, 1);
             for (t, (g, w)) in got.iter().zip(&want).enumerate() {
                 assert!(
                     (g - w).abs() <= 1e-9 * w.max(1.0),
@@ -431,7 +446,7 @@ mod tests {
                 .num_threads(threads)
                 .build()
                 .unwrap()
-                .install(|| em_components::run(&plan, Counts::Of(&eqc.counts), &init, 300, 1e-6))
+                .install(|| em_components::run(&plan, Counts::Of(&eqc.counts), &init, 300, 1e-6, 1))
         };
         let one = on(1);
         for threads in [3, 8] {
