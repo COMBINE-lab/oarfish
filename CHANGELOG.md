@@ -13,22 +13,39 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Performance
 
-- **The plain EMs run on a connected-component layout** (after salmon's component
+- **The EMs run on a connected-component layout** (after salmon's component
   engine). Reads link transcripts only within connected components, which the EM
-  never couples; each component's classes are stored together and run tiles of up
-  to 64 iterations while in cache, single-target classes become a per-transcript
-  constant, and transcripts no read references are skipped. The stopping rule stays
-  global and exact (a tile is replayed up to the round where it would have stopped),
-  so estimates are unchanged up to summation order (within 2e-6 reads on the
-  simulations below) and do not depend on the thread count. EM time, 16 threads:
+  never couples; each component's classes are stored together, ordered by their
+  heaviest target, and run tiles of up to 64 iterations while in cache;
+  single-target classes become a per-transcript constant, and transcripts no read
+  references are skipped. The stopping rule stays global and exact (a tile is
+  replayed up to the round where it would have stopped). Wall time, EM time and
+  peak memory, 16 threads, 0.11.0 to now:
 
-  | | default model | coverage model |
+  | | NanoSim NA12878 cDNA | TKSM SQ2 |
   |---|---|---|
-  | NanoSim NA12878 cDNA | 3.3 s to 0.9 s | 9.6 s to 2.4 s |
-  | TKSM SQ2 | 4.9 s to 1.8 s | 14.8 s to 5.2 s |
+  | default model | 13.0 s to 11.1 s; EM 3.3 s to 0.9 s | 20.5 s to 17.1 s; EM 4.9 s to 1.9 s |
+  | coverage model | 20.9 s to 13.6 s; EM 9.6 s to 2.6 s; 2.2-2.5 GB to 1.8 GB | 35.0 s to 25.8 s; EM 14.8 s to 5.7 s; 3.79 GB to 3.52 GB |
+  | truncation model | 25.4 s to 16.1 s; EM 16.4 s to 6.7 s; 1.96 GB to 1.69 GB | 41.4 s to 28.9 s; EM 28.4 s to 15.6 s; 3.80 GB to 3.21 GB |
 
-  Applies to the equivalence-class EM (without `--presence-model`) and the per-read
-  EM above 4 threads. `OARFISH_EM_COMPONENTS=0` restores the previous layouts.
+  - The default and coverage models' estimates are unchanged up to summation order
+    (within 2e-6 reads on these simulations), and the default model's do not
+    depend on the thread count.
+  - The coverage model no longer reorders the alignment store before the EM (the
+    layout keeps that locality), which removes the copy that set its peak memory.
+  - The truncation model's frozen-parameter phase runs SQUAREM on each component
+    separately, so its estimates move slightly: on the six Panel B simulations,
+    Spearman changes by -0.0010 to +0.0001 and expressed-only Spearman, MARD and
+    log-Pearson by at most 0.0004. Its layout is built directly from the frozen
+    parameters, without the frozen-weight table.
+  - Applies to the equivalence-class EM (without `--presence-model`), the per-read
+    EM above 4 threads, and the truncation EM (without `--presence-model`).
+    `OARFISH_EM_COMPONENTS=0` restores the previous layouts.
+- **Faster bootstraps.** Replicates share one component layout and differ only in
+  their read counts; truncation-model replicates fit the positional parameters on
+  the same 1M-read sample as the point estimate. NanoSim NA12878 cDNA, 16 threads:
+  8 replicates 18.5 s to 4.9 s (default model) and 115 s to 29 s (coverage model);
+  4 replicates 123 s to 25 s (truncation model). Replicate spread is unchanged.
 
 ## 0.11.0 - 2026-10-24
 
