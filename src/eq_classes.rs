@@ -121,7 +121,13 @@ impl EqClasses {
 
     /// The component layout of the classes (see [`crate::em_components`]).
     fn plan(&self, ntx: usize) -> Plan<f32> {
-        Plan::new(|k| self.targets[k], |k| self.probs[k], &self.offsets, ntx)
+        Plan::new(
+            |k| self.targets[k],
+            |k| self.probs[k],
+            &self.offsets,
+            ntx,
+            false,
+        )
     }
 
     fn class(&self, c: usize) -> (&[u32], &[f32]) {

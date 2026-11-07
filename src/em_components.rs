@@ -93,14 +93,18 @@ fn find(p: &mut [u32], mut x: u32) -> u32 {
     x
 }
 
-impl<W: Copy + Into<f64> + Send + Sync> Plan<W> {
+impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
     /// Classes `c` with entries `offsets[c]..offsets[c + 1]`, entry `k` having target
-    /// `target(k)` and weight `w(k)`.
+    /// `target(k)` and weight `w(k)`. With `by_heaviest`, each component's classes are ordered
+    /// by their heaviest target, so the classes of one transcript sit together and a round reads
+    /// and writes nearby abundances; without it they keep their order (for classes already
+    /// arranged so, as the store's reads are when `bulk` reorders them).
     pub fn new(
         target: impl Fn(usize) -> u32 + Sync,
         w: impl Fn(usize) -> W + Sync,
         offsets: &[usize],
         ntx: usize,
+        by_heaviest: bool,
     ) -> Self {
         let ncls = offsets.len() - 1;
         let class = |c: usize| offsets[c]..offsets[c + 1];
@@ -173,9 +177,8 @@ impl<W: Copy + Into<f64> + Send + Sync> Plan<W> {
                 comps[comp_of[t] as usize].tx.push(t as u32);
             }
         }
-        // Each component's classes, ordered by their heaviest target (then by class id): the
-        // classes of one transcript sit together, so a round reads and writes nearby
-        // abundances. Packed as (heaviest target's local id) << 32 | class id.
+        // Each component's classes, in class order or by their heaviest target (then by class
+        // id), packed as (heaviest target's local id) << 32 | class id.
         let mut start = vec![0_usize; ncomp + 1];
         for k in 0..ncomp {
             start[k + 1] = start[k] + ncls_of[k];
@@ -194,14 +197,14 @@ impl<W: Copy + Into<f64> + Send + Sync> Plan<W> {
                 }
             }
         }
-        order.par_iter_mut().with_min_len(4096).for_each(|x| {
-            let c = *x as usize;
-            let heaviest = class(c)
-                .max_by(|&a, &b| w(a).into().total_cmp(&w(b).into()))
-                .expect("a multi-target class");
-            *x |= (local[target(heaviest) as usize] as u64) << 32;
-        });
-        {
+        if by_heaviest {
+            order.par_iter_mut().with_min_len(4096).for_each(|x| {
+                let c = *x as usize;
+                let heaviest = class(c)
+                    .max_by(|&a, &b| w(a).into().total_cmp(&w(b).into()))
+                    .expect("a multi-target class");
+                *x |= (local[target(heaviest) as usize] as u64) << 32;
+            });
             let mut rest = &mut order[..];
             let mut parts = Vec::with_capacity(ncomp);
             for &n in &ncls_of {
@@ -211,16 +214,48 @@ impl<W: Copy + Into<f64> + Send + Sync> Plan<W> {
             }
             parts.par_iter_mut().for_each(|p| p.sort_unstable());
         }
+        // Fill each component, a large one in parallel over blocks of whole classes.
         comps.par_iter_mut().enumerate().for_each(|(k, cm)| {
-            for &x in &order[start[k]..start[k + 1]] {
-                let c = (x & u32::MAX as u64) as usize;
-                for e in class(c) {
-                    cm.lab.push(local[target(e) as usize]);
-                    cm.w.push(w(e));
-                }
-                cm.off.push(cm.lab.len() as u32);
-                cm.cls.push(c as u32);
+            cm.cls
+                .extend(order[start[k]..start[k + 1]].iter().map(|&x| x as u32));
+            assert!(
+                ninc_of[k] < u32::MAX as usize,
+                "a component with 2^32 incidences"
+            );
+            let mut at = 0_u32;
+            for &c in &cm.cls {
+                at += (offsets[c as usize + 1] - offsets[c as usize]) as u32;
+                cm.off.push(at);
             }
+            cm.lab.resize(at as usize, 0);
+            cm.w.resize(at as usize, W::default());
+            const FILL: usize = 1 << 16;
+            let mut parts = Vec::new();
+            let (mut lab, mut wr) = (&mut cm.lab[..], &mut cm.w[..]);
+            let mut c0 = 0;
+            while c0 < cm.cls.len() {
+                let mut c1 = c0;
+                while c1 < cm.cls.len() && ((cm.off[c1] - cm.off[c0]) as usize) < FILL {
+                    c1 += 1;
+                }
+                let len = (cm.off[c1] - cm.off[c0]) as usize;
+                let (l, lr) = lab.split_at_mut(len);
+                let (x, xr) = wr.split_at_mut(len);
+                parts.push((c0..c1, l, x));
+                (lab, wr) = (lr, xr);
+                c0 = c1;
+            }
+            let cls = &cm.cls;
+            parts.into_par_iter().for_each(|(r, l, x)| {
+                let mut j = 0;
+                for &c in &cls[r] {
+                    for e in class(c as usize) {
+                        l[j] = local[target(e) as usize];
+                        x[j] = w(e);
+                        j += 1;
+                    }
+                }
+            });
         });
         drop(order);
         for cm in comps.iter_mut().filter(|cm| cm.is_large()) {

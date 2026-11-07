@@ -1626,6 +1626,8 @@ fn frozen_on_components(
         },
         &f.off,
         em_info.txp_info.len(),
+        // `bulk` has ordered the reads by likeliest target.
+        false,
     );
     info!(
         "frozen-weight EM on {} connected components, laid out in {:.2}s",
