@@ -636,6 +636,29 @@ pub fn prefetch_txp(txps: &[TranscriptInfo], tid: usize) {
     }
 }
 
+/// Makes the coverage adds that [`InMemoryAlignmentStore::add_group_deferring_coverage`]
+/// listed (`add_unit_interval` of each, in order), so a list applied in order gives the
+/// profiles and weights that `add_group` gives. Each add runs a chain of dependent cache
+/// misses: its `TranscriptInfo`, then that transcript's coverage bins and full-bin counts. The
+/// chain is prefetched ahead of the adds in two stages: the `TranscriptInfo`
+/// `PREFETCH_TXP_AHEAD` adds ahead, and, `PREFETCH_COV_AHEAD` ahead, the bins read through
+/// that (by then cached) entry. Prefetches change no value.
+pub fn add_coverage_adds(txps: &mut [TranscriptInfo], adds: &[AlnInfo]) {
+    const PREFETCH_TXP_AHEAD: usize = 16;
+    const PREFETCH_COV_AHEAD: usize = 8;
+    for (i, a) in adds.iter().enumerate() {
+        if let Some(n) = adds.get(i + PREFETCH_TXP_AHEAD) {
+            prefetch_txp(txps, n.ref_id as usize);
+        }
+        if let Some(n) = adds.get(i + PREFETCH_COV_AHEAD)
+            && let Some(t) = txps.get(n.ref_id as usize)
+        {
+            t.prefetch_unit_interval(n.start, n.end);
+        }
+        txps[a.ref_id as usize].add_unit_interval(a.start, a.end);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TranscriptInfo {
     pub len: NonZeroUsize,
@@ -1157,16 +1180,50 @@ impl<'h> InMemoryAlignmentStore<'h> {
                     txps[tid].add_unit_interval(a.start, a.end);
                 }
             }
-            self.alignments.extend_from_slice(alns);
-            self.as_probabilities.extend_from_slice(as_probs);
-            if alns.len() > self.zeros.len() {
-                self.zeros.resize(alns.len(), 0.0);
-            }
-            self.boundaries.push(self.alignments.len());
+            self.append_filtered(alns, as_probs);
             true
         } else {
             false
         }
+    }
+
+    /// [`add_group`](Self::add_group) for a caller that does not hold the transcripts: the
+    /// filters read each transcript's length through `len_of` (`len_of(tid)` is
+    /// `txps[tid].len.get()`), and under the coverage model the kept alignments are appended
+    /// to `coverage_adds` instead of added to the coverage profiles. Passing those lists, in
+    /// order, to [`add_coverage_adds`] makes the same adds in the same order as `add_group`.
+    #[inline(always)]
+    pub fn add_group_deferring_coverage<T: AlnRecordLike + std::fmt::Debug>(
+        &mut self,
+        len_of: impl Fn(usize) -> usize,
+        ag: &mut Vec<T>,
+        coverage_adds: &mut Vec<AlnInfo>,
+    ) -> bool {
+        if ag.is_empty() {
+            return false;
+        }
+        let (alns, as_probs) =
+            self.filter_opts
+                .filter_by_len(&mut self.discard_table, self.aln_header, len_of, ag);
+        if alns.is_empty() {
+            return false;
+        }
+        if self.filter_opts.model_coverage {
+            coverage_adds.extend_from_slice(&alns);
+        }
+        self.append_filtered(&alns, &as_probs);
+        true
+    }
+
+    /// Appends one read's kept (non-empty) alignments and their probabilities.
+    #[inline(always)]
+    fn append_filtered(&mut self, alns: &[AlnInfo], as_probs: &[f32]) {
+        self.alignments.extend_from_slice(alns);
+        self.as_probabilities.extend_from_slice(as_probs);
+        if alns.len() > self.zeros.len() {
+            self.zeros.resize(alns.len(), 0.0);
+        }
+        self.boundaries.push(self.alignments.len());
     }
 
     #[inline(always)]
@@ -1395,6 +1452,19 @@ impl AlignmentFilters {
         txps: &[TranscriptInfo],
         ag: &mut Vec<T>,
     ) -> (Vec<AlnInfo>, Vec<f32>) {
+        self.filter_by_len(discard_table, aln_header, |tid| txps[tid].len.get(), ag)
+    }
+
+    /// [`filter`](Self::filter), reading each transcript's length (the only thing it reads
+    /// of the transcripts) through `len_of`: `len_of(tid)` is `txps[tid].len.get()`.
+    #[inline(always)]
+    pub fn filter_by_len<T: AlnRecordLike + std::fmt::Debug>(
+        &mut self,
+        discard_table: &mut DiscardTable,
+        aln_header: &Header,
+        len_of: impl Fn(usize) -> usize,
+        ag: &mut Vec<T>,
+    ) -> (Vec<AlnInfo>, Vec<f32>) {
         // track the best score of any alignment we've seen
         // so far for this read (this will designate the
         // "primary" alignment for the read).
@@ -1489,8 +1559,7 @@ impl AlignmentFilters {
                 }
 
                 // not too far from the 3' end
-                let filt_3p =
-                    (x.aln_end() as i64) <= (txps[tid].len.get() as i64 - self.three_prime_clip);
+                let filt_3p = (x.aln_end() as i64) <= (len_of(tid) as i64 - self.three_prime_clip);
                 if filt_3p {
                     discard_table.discard_3p += 1;
                     return false;

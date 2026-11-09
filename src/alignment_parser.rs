@@ -2,7 +2,8 @@ use crate::prog_opts::ProjProbSource;
 use crate::util::bgzf_records::RawRecord;
 use crate::util::constants::EMPTY_READ_NAME;
 use crate::util::oarfish_types::{
-    AlnRecordLike, InMemoryAlignmentStore, TranscriptInfo, prefetch_txp,
+    AlnInfo, AlnRecordLike, InMemoryAlignmentStore, TranscriptInfo, add_coverage_adds,
+    prefetch_read,
 };
 use crate::util::projection::projected_to_records;
 use crate::util::read_ends::EndEvidence;
@@ -357,20 +358,62 @@ pub fn parse_alignments(
     // profiles, the discard counts and the read names come out exactly as a serial pass
     // builds them. Only the compact fields cross threads, never the records. (Filtering each
     // batch in parallel on the rayon pool instead was slower than one adder thread.)
+    //
+    // Under the coverage model the coverage adds (`add_unit_interval`), which would bound the
+    // adder, run on a third thread that owns the transcripts: the adder filters with a copy of
+    // the transcripts' lengths (all the filters read of them) and sends each batch's kept
+    // alignments, in order, to that thread, which makes the adds in the order the adder would
+    // have (see `add_coverage_adds`).
     let header = store.aln_header;
     let tail_evidence = store.filter_opts.tail_neutral.is_some();
     let keep_names = name_vec.is_some();
+    let defer_coverage = store.filter_opts.model_coverage;
+    let lens: Vec<usize> = if defer_coverage {
+        txps.iter().map(|t| t.len.get()).collect()
+    } else {
+        Vec::new()
+    };
     let (batch_tx, batch_rx) = std::sync::mpsc::sync_channel::<ReadBatch>(2);
     let (recycle_tx, recycle_rx) = std::sync::mpsc::channel::<ReadBatch>();
+    let (adds_tx, adds_rx) = std::sync::mpsc::sync_channel::<Vec<AlnInfo>>(2);
+    let (adds_recycle_tx, adds_recycle_rx) = std::sync::mpsc::channel::<Vec<AlnInfo>>();
     std::thread::scope(|scope| -> anyhow::Result<()> {
+        let (mut adder_txps, coverage) = if defer_coverage {
+            let coverage = scope.spawn(move || {
+                for mut adds in adds_rx {
+                    add_coverage_adds(txps, &adds);
+                    adds.clear();
+                    // the adder may have stopped; the list is then dropped
+                    let _ = adds_recycle_tx.send(adds);
+                }
+            });
+            let adder_txps = AdderTxps::Deferred {
+                lens: &lens,
+                adds: Vec::new(),
+            };
+            (adder_txps, Some(coverage))
+        } else {
+            (AdderTxps::Direct(txps), None)
+        };
         let adder = scope.spawn(move || {
             let mut group = Vec::new();
+            let mut coverage_gone = false;
             for mut batch in batch_rx {
-                add_read_batch(store, name_vec, txps, &mut batch, &mut group);
+                add_read_batch(store, name_vec, &mut adder_txps, &mut batch, &mut group);
                 batch.clear();
                 // the reader may have stopped early (on an error); the batch is then dropped
                 let _ = recycle_tx.send(batch);
+                if let AdderTxps::Deferred { adds, .. } = &mut adder_txps {
+                    if coverage_gone {
+                        adds.clear();
+                    } else if !adds.is_empty() {
+                        let next = adds_recycle_rx.try_recv().unwrap_or_default();
+                        // the coverage thread has gone only if it panicked; joining it says why
+                        coverage_gone = adds_tx.send(std::mem::replace(adds, next)).is_err();
+                    }
+                }
             }
+            // dropping `adds_tx` here lets the coverage thread finish the queued lists and stop
         });
 
         let mut n_records = 0_u64;
@@ -454,6 +497,11 @@ pub fn parse_alignments(
         // closing the channel lets the adder finish the queued batches and stop
         drop(batch_tx);
         if let Err(panic) = adder.join() {
+            std::panic::resume_unwind(panic);
+        }
+        if let Some(coverage) = coverage
+            && let Err(panic) = coverage.join()
+        {
             std::panic::resume_unwind(panic);
         }
         read_result
@@ -716,46 +764,35 @@ impl ReadBatch {
 fn add_read_batch(
     store: &mut InMemoryAlignmentStore,
     name_vec: &mut Option<SwapVec<String>>,
-    txps: &mut [TranscriptInfo],
+    txps: &mut AdderTxps<'_>,
     batch: &mut ReadBatch,
     group: &mut Vec<ParsedAln>,
 ) {
-    // Under the coverage model each kept alignment's add (`add_unit_interval`) runs a chain
-    // of dependent cache misses: its `TranscriptInfo`, then that transcript's coverage bins
-    // and full-bin counts. Prefetch the chain ahead of the adds, in two stages: the
-    // `TranscriptInfo` `PREFETCH_TXP_AHEAD` alignments ahead, and, `PREFETCH_COV_AHEAD`
-    // ahead, the bins read through that (by then cached) entry. Prefetches change no value,
-    // and one for an alignment the filters then drop is only a wasted line fill.
-    const PREFETCH_TXP_AHEAD: usize = 16;
-    const PREFETCH_COV_AHEAD: usize = 8;
-    let prefetch = store.filter_opts.model_coverage;
+    // Under the coverage model the filter reads each alignment's transcript length from the
+    // compact `lens` (random reads into it, as the adds' were into the transcripts); prefetch
+    // those `PREFETCH_LEN_AHEAD` alignments ahead. A prefetch changes no value.
+    const PREFETCH_LEN_AHEAD: usize = 16;
     let n_alns = batch.alns.len();
-    let (mut txp_next, mut cov_next) = (0_usize, 0_usize);
+    let mut len_next = 0_usize;
     let mut start = 0;
     for (i, &end) in batch.ends.iter().enumerate() {
-        if prefetch {
-            let txp_to = (end + PREFETCH_TXP_AHEAD).min(n_alns);
-            for a in &batch.alns[txp_next.min(txp_to)..txp_to] {
-                if let Some(tid) = a.ref_id {
-                    prefetch_txp(txps, tid);
-                }
-            }
-            txp_next = txp_next.max(txp_to);
-            let cov_to = (end + PREFETCH_COV_AHEAD).min(n_alns);
-            for a in &batch.alns[cov_next.min(cov_to)..cov_to] {
-                if let (Some(tid), Some(s)) = (a.ref_id, a.start)
-                    && let Some(t) = txps.get(tid)
-                {
-                    let e = s.wrapping_add(a.span.unwrap_or(1) as u32);
-                    t.prefetch_unit_interval(s, e);
-                }
-            }
-            cov_next = cov_next.max(cov_to);
-        }
         group.clear();
         group.extend_from_slice(&batch.alns[start..end]);
         start = end;
-        if store.add_group(txps, group) {
+        let added = match txps {
+            AdderTxps::Direct(txps) => store.add_group(txps, group),
+            AdderTxps::Deferred { lens, adds } => {
+                let len_to = (end + PREFETCH_LEN_AHEAD).min(n_alns);
+                for a in &batch.alns[len_next.min(len_to)..len_to] {
+                    if let Some(tid) = a.ref_id {
+                        prefetch_read(lens.as_ptr().wrapping_add(tid));
+                    }
+                }
+                len_next = len_next.max(len_to);
+                store.add_group_deferring_coverage(|tid| lens[tid], group, adds)
+            }
+        };
+        if added {
             // if we are keeping read names, for the purpose of reporting read assignment
             // probabilities
             if let Some(nvec) = name_vec {
@@ -767,6 +804,17 @@ fn add_read_batch(
             }
         }
     }
+}
+
+/// How the adder of [`parse_alignments`] reaches the transcripts: directly (it filters with
+/// their lengths and makes the coverage adds itself), or, under the coverage model, through
+/// a copy of their lengths, listing the coverage adds in `adds` for the coverage thread.
+enum AdderTxps<'a> {
+    Direct(&'a mut [TranscriptInfo]),
+    Deferred {
+        lens: &'a [usize],
+        adds: Vec<AlnInfo>,
+    },
 }
 
 /// Map a noodles CIGAR [`CigarKind`] to the SAM op code byte expected by
