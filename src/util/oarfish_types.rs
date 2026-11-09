@@ -594,6 +594,48 @@ pub fn for_each_evidence_bin(
     }
 }
 
+/// A hint to bring the cache line holding `p` into the cache (all levels); it never faults
+/// and has no effect on any value, so `p` may point anywhere. `prefetcht0` on x86_64 (SSE,
+/// part of the baseline), `prfm pldl1keep` on aarch64, nothing elsewhere.
+#[inline(always)]
+pub fn prefetch_read<T>(p: *const T) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+        #[allow(unused_unsafe)]
+        // SAFETY: a prefetch does not access memory and cannot fault, whatever the address
+        unsafe {
+            _mm_prefetch::<_MM_HINT_T0>(p as *const i8)
+        };
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: as above; `prfm` is a hint that cannot fault
+        unsafe {
+            core::arch::asm!(
+                "prfm pldl1keep, [{0}]",
+                in(reg) p,
+                options(nostack, preserves_flags, readonly)
+            );
+        }
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        let _ = p;
+    }
+}
+
+/// Prefetches the `TranscriptInfo` at `txps[tid]` (both cache lines its bytes can span),
+/// when `tid` is in range.
+#[inline(always)]
+pub fn prefetch_txp(txps: &[TranscriptInfo], tid: usize) {
+    if tid < txps.len() {
+        let p = txps.as_ptr().wrapping_add(tid) as *const u8;
+        prefetch_read(p);
+        prefetch_read(p.wrapping_add(std::mem::size_of::<TranscriptInfo>() - 1));
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TranscriptInfo {
     pub len: NonZeroUsize,
@@ -764,6 +806,35 @@ impl TranscriptInfo {
             *c += run as f64;
         }
         self.full_bin_diff = Vec::new();
+    }
+
+    /// Software-prefetches the coverage state that
+    /// [`add_unit_interval(start, stop)`](Self::add_unit_interval) is about to touch: the
+    /// alignment's first and last coverage bins and the `full_bin_diff` words near its first
+    /// and last full bins. The bins are estimated (one division, two multiplications) and
+    /// clamped into range; a prefetch has no effect on any value, so an estimate that is off
+    /// by a bin, or an alignment the filters later drop, costs at most a wasted line fill.
+    #[inline(always)]
+    pub fn prefetch_unit_interval(&self, start: u32, stop: u32) {
+        let n = self.coverage_bins.len();
+        if n == 0 || self.lenf <= 0.0 {
+            return;
+        }
+        let inv_w = n as f64 / self.lenf;
+        let last = n - 1;
+        // `as usize` saturates (a negative or NaN product gives 0)
+        let first = ((start as f64 * inv_w) as usize).min(last);
+        let end = ((stop as f64 * inv_w) as usize).min(last);
+        let bins = self.coverage_bins.as_ptr();
+        prefetch_read(bins.wrapping_add(first));
+        prefetch_read(bins.wrapping_add(end));
+        let diff = &self.full_bin_diff;
+        if !diff.is_empty() {
+            let d = diff.as_ptr();
+            let m = diff.len() - 1;
+            prefetch_read(d.wrapping_add((first + 1).min(m)));
+            prefetch_read(d.wrapping_add(end.min(m)));
+        }
     }
 
     #[allow(dead_code)]

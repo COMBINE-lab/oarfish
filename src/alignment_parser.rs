@@ -1,7 +1,9 @@
 use crate::prog_opts::ProjProbSource;
 use crate::util::bgzf_records::RawRecord;
 use crate::util::constants::EMPTY_READ_NAME;
-use crate::util::oarfish_types::{AlnRecordLike, InMemoryAlignmentStore, TranscriptInfo};
+use crate::util::oarfish_types::{
+    AlnRecordLike, InMemoryAlignmentStore, TranscriptInfo, prefetch_txp,
+};
 use crate::util::projection::projected_to_records;
 use crate::util::read_ends::EndEvidence;
 use bramble_rs::g2t::G2TTree;
@@ -718,8 +720,38 @@ fn add_read_batch(
     batch: &mut ReadBatch,
     group: &mut Vec<ParsedAln>,
 ) {
+    // Under the coverage model each kept alignment's add (`add_unit_interval`) runs a chain
+    // of dependent cache misses: its `TranscriptInfo`, then that transcript's coverage bins
+    // and full-bin counts. Prefetch the chain ahead of the adds, in two stages: the
+    // `TranscriptInfo` `PREFETCH_TXP_AHEAD` alignments ahead, and, `PREFETCH_COV_AHEAD`
+    // ahead, the bins read through that (by then cached) entry. Prefetches change no value,
+    // and one for an alignment the filters then drop is only a wasted line fill.
+    const PREFETCH_TXP_AHEAD: usize = 16;
+    const PREFETCH_COV_AHEAD: usize = 8;
+    let prefetch = store.filter_opts.model_coverage;
+    let n_alns = batch.alns.len();
+    let (mut txp_next, mut cov_next) = (0_usize, 0_usize);
     let mut start = 0;
     for (i, &end) in batch.ends.iter().enumerate() {
+        if prefetch {
+            let txp_to = (end + PREFETCH_TXP_AHEAD).min(n_alns);
+            for a in &batch.alns[txp_next.min(txp_to)..txp_to] {
+                if let Some(tid) = a.ref_id {
+                    prefetch_txp(txps, tid);
+                }
+            }
+            txp_next = txp_next.max(txp_to);
+            let cov_to = (end + PREFETCH_COV_AHEAD).min(n_alns);
+            for a in &batch.alns[cov_next.min(cov_to)..cov_to] {
+                if let (Some(tid), Some(s)) = (a.ref_id, a.start)
+                    && let Some(t) = txps.get(tid)
+                {
+                    let e = s.wrapping_add(a.span.unwrap_or(1) as u32);
+                    t.prefetch_unit_interval(s, e);
+                }
+            }
+            cov_next = cov_next.max(cov_to);
+        }
         group.clear();
         group.extend_from_slice(&batch.alns[start..end]);
         start = end;
