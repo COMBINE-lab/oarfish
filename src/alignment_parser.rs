@@ -1,7 +1,8 @@
 use crate::prog_opts::ProjProbSource;
 use crate::util::constants::EMPTY_READ_NAME;
-use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
+use crate::util::oarfish_types::{AlnRecordLike, InMemoryAlignmentStore, TranscriptInfo};
 use crate::util::projection::projected_to_records;
+use crate::util::read_ends::EndEvidence;
 use bramble_rs::g2t::G2TTree;
 use bramble_rs::{GenomicAlignment, ProjectionConfig, ProjectionContext, project_group_with};
 use noodles_bam as bam;
@@ -321,7 +322,6 @@ pub fn parse_alignments<R: io::BufRead>(
     // to which reads.
     let mut prev_read: Vec<u8> = Vec::new();
     let mut num_unmapped = 0_u64;
-    let mut records_for_read = vec![];
 
     let pb = if quiet {
         indicatif::ProgressBar::hidden()
@@ -338,104 +338,124 @@ pub fn parse_alignments<R: io::BufRead>(
     );
     pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
 
-    // Adds the read name for the read corresponding to the provided alignment group
-    // `recs`, **if** we are keeping read names for the purpose of reporting read
-    // assignment probabilities.
-    let mut add_read_name = |recs: &Vec<bam::Record>| {
-        if let Some(nvec) = name_vec {
-            let first_aln = recs.first().expect("alignment group should be non-empty");
-            let read_name = first_aln
-                .name()
-                .unwrap_or(bstr::BStr::new(EMPTY_READ_NAME))
-                .to_string();
-            nvec.push(read_name)
-                .expect("cannot push name to read name vector");
-        }
-    };
-
     // Parse the input alignemnt file, gathering the alignments aggregated
     // by their source read. **Note**: this requires that we have a
     // name-sorted input bam file (currently, aligned against the transcriptome).
     //
     // Records are read undecoded (`bam::Record`, whose fields are read from its bytes on
-    // demand) into buffers that are reused once their read has been added, so a record costs
-    // no allocation and no decoding of fields the filters never look at.
-    let mut n_records = 0_u64;
-    let mut spare: Vec<bam::Record> = Vec::new();
-    loop {
-        let mut record = spare.pop().unwrap_or_default();
-        if reader.read_record(&mut record)? == 0 {
-            break;
-        }
-        n_records += 1;
-        if n_records.is_multiple_of(4096) {
-            pb.set_position(n_records);
-        }
+    // demand) into one reused buffer, so a record costs no allocation and no decoding of
+    // fields the filters never look at.
+    //
+    // The work is pipelined: this thread reads the records, takes from each the few fields
+    // the filters and the store use (a `ParsedAln`, each read once), and groups them by read
+    // into batches of `PARSE_BATCH_READS` reads; a second thread filters the batches' reads
+    // and adds them to the store, in input order (see `add_read_batch`), so the store, the
+    // coverage profiles, the discard counts and the read names come out exactly as a serial
+    // pass builds them. Only the compact fields cross threads, never the records, so the
+    // record buffer stays hot in this thread's cache. (Filtering each batch in parallel on
+    // the rayon pool instead was slower: its workers slowed this thread, which bounds the
+    // parse.)
+    let header = store.aln_header;
+    let tail_evidence = store.filter_opts.tail_neutral.is_some();
+    let keep_names = name_vec.is_some();
+    let (batch_tx, batch_rx) = std::sync::mpsc::sync_channel::<ReadBatch>(2);
+    let (recycle_tx, recycle_rx) = std::sync::mpsc::channel::<ReadBatch>();
+    std::thread::scope(|scope| -> anyhow::Result<()> {
+        let adder = scope.spawn(move || {
+            let mut group = Vec::new();
+            for mut batch in batch_rx {
+                add_read_batch(store, name_vec, txps, &mut batch, &mut group);
+                batch.clear();
+                // the reader may have stopped early (on an error); the batch is then dropped
+                let _ = recycle_tx.send(batch);
+            }
+        });
 
-        // unmapped reads don't contribute to quantification
-        // but we track them.
-        if record.flags().is_unmapped() {
-            num_unmapped += 1;
-            spare.push(record);
-            continue;
-        }
-        let Some(rname) = record.name() else {
-            spare.push(record);
-            continue;
-        };
-        // if this is an alignment for the same read, then
-        // push it onto our temporary vector.
-        if prev_read.as_slice() != <_ as AsRef<[u8]>>::as_ref(rname) {
-            // otherwise, record the alignment range for the
-            // previous read record.
-            if !prev_read.is_empty() {
-                if store.add_group(txps, &mut records_for_read) {
-                    add_read_name(&records_for_read);
-                    if records_for_read.len() == 1 {
-                        store.inc_unique_alignments();
+        let read_result = (|| -> anyhow::Result<()> {
+            let mut n_records = 0_u64;
+            let mut record = bam::Record::default();
+            let mut batch = ReadBatch::default();
+            // where the current read's alignments start in `batch.alns`
+            let mut read_start = 0_usize;
+
+            loop {
+                if reader.read_record(&mut record)? == 0 {
+                    break;
+                }
+                n_records += 1;
+                if n_records.is_multiple_of(4096) {
+                    pb.set_position(n_records);
+                }
+
+                // unmapped reads don't contribute to quantification
+                // but we track them.
+                if record.flags().is_unmapped() {
+                    num_unmapped += 1;
+                    continue;
+                }
+                let Some(rname) = record.name() else {
+                    continue;
+                };
+                // if this is an alignment for the same read, then
+                // push it onto our temporary vector.
+                if prev_read.as_slice() != <_ as AsRef<[u8]>>::as_ref(rname) {
+                    // otherwise, close the previous read's group (a read none of whose
+                    // records has a reference adds nothing, as `add_group` would).
+                    if batch.alns.len() > read_start {
+                        batch.close_read(keep_names, &prev_read);
+                        if batch.len() == PARSE_BATCH_READS {
+                            let next = recycle_rx.try_recv().unwrap_or_default();
+                            if batch_tx.send(std::mem::replace(&mut batch, next)).is_err() {
+                                // the adder has gone (it panicked); joining it reports why
+                                return Ok(());
+                            }
+                        }
+                        read_start = batch.alns.len();
+                    }
+                    // the new "prev_read" name is the current read name
+                    // so it becomes the first on the new alignment range
+                    // vector.
+                    prev_read.clear();
+                    prev_read.extend_from_slice(rname.as_ref());
+                    if rg_num < check_order_thresh {
+                        if !read_name_map.insert(prev_read.clone()) {
+                            error!(
+                                "It appears that the input BAM file is not name-collated. oarfish is not designed to process coordinate sorted BAM files."
+                            );
+                            anyhow::bail!(
+                                "You appear to have provided a coordinate-sorted BAM, but oarfish does not support processing these.\n\
+                                        You should provide a BAM file collated by record name (which is the \"natural\" minimap2 order).\n\
+                                        Alignment records for the same read {} were observed twice in a non-contiguous block.",
+                                String::from_utf8_lossy(&prev_read)
+                            );
+                        }
+                        rg_num += 1;
                     }
                 }
-                spare.append(&mut records_for_read);
-            }
-            // the new "prev_read" name is the current read name
-            // so it becomes the first on the new alignment range
-            // vector.
-            prev_read.clear();
-            prev_read.extend_from_slice(rname.as_ref());
-            if rg_num < check_order_thresh {
-                if !read_name_map.insert(prev_read.clone()) {
-                    error!(
-                        "It appears that the input BAM file is not name-collated. oarfish is not designed to process coordinate sorted BAM files."
-                    );
-                    anyhow::bail!(
-                        "You appear to have provided a coordinate-sorted BAM, but oarfish does not support processing these.\n\
-                                You should provide a BAM file collated by record name (which is the \"natural\" minimap2 order).\n\
-                                Alignment records for the same read {} were observed twice in a non-contiguous block.",
-                        String::from_utf8_lossy(&prev_read)
-                    );
+                if record.reference_sequence_id().is_some() {
+                    batch
+                        .alns
+                        .push(ParsedAln::new(&record, header, tail_evidence));
                 }
-                rg_num += 1;
             }
-        }
-        if record.reference_sequence_id().is_some() {
-            records_for_read.push(record);
-        } else {
-            spare.push(record);
-        }
-    }
-    pb.set_position(n_records);
-    // if we end with a non-empty alignment range vector, then
-    // add that group.
-    if !records_for_read.is_empty() {
-        // if we are using read names and we added the group here
-        if store.add_group(txps, &mut records_for_read) {
-            add_read_name(&records_for_read);
-            if records_for_read.len() == 1 {
-                store.inc_unique_alignments();
+            pb.set_position(n_records);
+            // if we end with a non-empty alignment range vector, then
+            // add that group.
+            if batch.alns.len() > read_start {
+                batch.close_read(keep_names, &prev_read);
             }
+            if batch.len() > 0 {
+                let _ = batch_tx.send(batch);
+            }
+            Ok(())
+        })();
+        // closing the channel lets the adder finish the queued batches and stop
+        drop(batch_tx);
+        if let Err(panic) = adder.join() {
+            std::panic::resume_unwind(panic);
         }
-        records_for_read.clear();
-    }
+        read_result
+    })?;
 
     pb.finish_with_message("Finished processing alignments.");
 
@@ -445,6 +465,153 @@ pub fn parse_alignments<R: io::BufRead>(
     );
 
     Ok(())
+}
+
+/// How many reads [`parse_alignments`] groups into one batch for the adder.
+const PARSE_BATCH_READS: usize = 4096;
+
+/// The fields of one BAM alignment record that the filters ([`AlignmentFilters::filter`])
+/// and the store read, each taken from the record once. As an [`AlnRecordLike`] it answers
+/// every query exactly as the record would.
+///
+/// [`AlignmentFilters::filter`]: crate::util::oarfish_types::AlignmentFilters::filter
+#[derive(Clone, Copy, Debug)]
+struct ParsedAln {
+    ref_id: Option<usize>,
+    /// zero-based start (`None`: the record has no valid position)
+    start: Option<u32>,
+    span: Option<usize>,
+    score: Option<i64>,
+    flags: noodles_sam::alignment::record::Flags,
+    seq_len: usize,
+    /// read only when tail-neutral scores are on; otherwise [`EndEvidence::UNKNOWN`]
+    ends: EndEvidence,
+}
+
+impl ParsedAln {
+    fn new(rec: &bam::Record, header: &Header, tail_evidence: bool) -> Self {
+        Self {
+            ref_id: rec.ref_id(header).ok(),
+            start: rec
+                .alignment_start()
+                .and_then(|p| p.ok())
+                .map(|p| p.get() as u32 - 1),
+            span: rec.aln_span(),
+            score: rec.aln_score(),
+            flags: rec.flags(),
+            seq_len: rec.sequence().len(),
+            ends: if tail_evidence {
+                rec.end_evidence()
+            } else {
+                EndEvidence::UNKNOWN
+            },
+        }
+    }
+}
+
+impl AlnRecordLike for ParsedAln {
+    fn opt_sequence_len(&self) -> Option<usize> {
+        Some(self.seq_len)
+    }
+
+    fn is_reverse_complemented(&self) -> bool {
+        self.flags.is_reverse_complemented()
+    }
+
+    fn is_unmapped(&self) -> bool {
+        self.flags.is_unmapped()
+    }
+
+    fn ref_id(&self, _header: &Header) -> anyhow::Result<usize> {
+        self.ref_id
+            .ok_or_else(|| anyhow::anyhow!("alignment record has no valid reference sequence id"))
+    }
+
+    fn aln_span(&self) -> Option<usize> {
+        self.span
+    }
+
+    fn aln_score(&self) -> Option<i64> {
+        self.score
+    }
+
+    fn aln_start(&self) -> u32 {
+        self.start.expect("valid aln start")
+    }
+
+    fn aln_end(&self) -> u32 {
+        self.aln_start() + self.span.unwrap_or(1) as u32
+    }
+
+    fn is_supp(&self) -> bool {
+        self.flags.is_supplementary()
+    }
+
+    fn end_evidence(&self) -> EndEvidence {
+        self.ends
+    }
+
+    fn name(&self) -> Option<String> {
+        None
+    }
+}
+
+/// A batch of reads for the adder: the alignments of each read in turn, where each read's
+/// end, and (only when read names are kept) each read's name.
+#[derive(Default)]
+struct ReadBatch {
+    alns: Vec<ParsedAln>,
+    ends: Vec<usize>,
+    names: Vec<String>,
+}
+
+impl ReadBatch {
+    fn len(&self) -> usize {
+        self.ends.len()
+    }
+
+    /// Ends the current read, whose alignments are the ones pushed since the last end.
+    fn close_read(&mut self, keep_name: bool, name: &[u8]) {
+        self.ends.push(self.alns.len());
+        if keep_name {
+            self.names.push(bstr::BStr::new(name).to_string());
+        }
+    }
+
+    fn clear(&mut self) {
+        self.alns.clear();
+        self.ends.clear();
+        self.names.clear();
+    }
+}
+
+/// Filters the reads of `batch` and adds each to `store`, in batch order, exactly as
+/// [`InMemoryAlignmentStore::add_group`] would: the discard counts, the coverage profiles, the
+/// read names and the count of uniquely aligned reads all come out the same.
+fn add_read_batch(
+    store: &mut InMemoryAlignmentStore,
+    name_vec: &mut Option<SwapVec<String>>,
+    txps: &mut [TranscriptInfo],
+    batch: &mut ReadBatch,
+    group: &mut Vec<ParsedAln>,
+) {
+    let mut start = 0;
+    for (i, &end) in batch.ends.iter().enumerate() {
+        group.clear();
+        group.extend_from_slice(&batch.alns[start..end]);
+        start = end;
+        if store.add_group(txps, group) {
+            // if we are keeping read names, for the purpose of reporting read assignment
+            // probabilities
+            if let Some(nvec) = name_vec {
+                nvec.push(std::mem::take(&mut batch.names[i]))
+                    .expect("cannot push name to read name vector");
+            }
+            if group.len() == 1 {
+                store.inc_unique_alignments();
+            }
+        }
+    }
 }
 
 /// Map a noodles CIGAR [`CigarKind`] to the SAM op code byte expected by
