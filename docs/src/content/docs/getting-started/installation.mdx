@@ -1,0 +1,37 @@
+---
+title: Installation
+description: Install oarfish from precompiled binaries, with cargo, or from Bioconda.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`oarfish` can be installed in a variety of ways.
+
+<Tabs syncKey="install">
+	<TabItem label="Precompiled binaries">
+		Binaries are available via [GitHub Releases](https://github.com/COMBINE-lab/oarfish/releases).
+		You can quickly install the latest release using the following helper script:
+
+		```sh
+		curl --proto '=https' --tlsv1.2 -LsSf https://github.com/COMBINE-lab/oarfish/releases/latest/download/oarfish-installer.sh | sh
+		```
+	</TabItem>
+	<TabItem label="cargo">
+		If you have `cargo` installed, you can install `oarfish` directly from the source code:
+
+		```sh
+		cargo install oarfish
+		```
+
+		You can find the crate on [crates.io](https://crates.io/crates/oarfish).
+	</TabItem>
+	<TabItem label="Bioconda">
+		`oarfish` is available via [Bioconda](https://anaconda.org/bioconda/oarfish):
+
+		```sh
+		conda install -c bioconda oarfish
+		```
+	</TabItem>
+</Tabs>
+
+Next, see the [usage examples](/oarfish/getting-started/usage-examples/).

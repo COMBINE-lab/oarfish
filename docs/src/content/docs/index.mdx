@@ -1,0 +1,63 @@
+---
+title: oarfish
+description: Fast, accurate and versatile transcript quantification from long-read RNA-seq data.
+template: splash
+hero:
+  tagline: Transcript-level quantification from long-read RNA-seq (Oxford Nanopore cDNA and direct RNA, and PacBio), with multi-mapping reads allocated by an EM algorithm.
+  actions:
+    - text: Get started
+      link: /oarfish/getting-started/installation/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/COMBINE-lab/oarfish
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+`oarfish` is a program, written in [Rust](https://www.rust-lang.org/), for quantifying transcript-level expression from long-read sequencing technologies. It handles multi-mapping reads through probabilistic allocation via an expectation-maximization (EM) algorithm.
+
+<CardGrid>
+	<Card title="Several ways in" icon="puzzle">
+		Quantify a transcriptome BAM, let `oarfish` map raw reads to the transcriptome for you
+		(with rammap or spearfish), or start from the genome and project alignments onto annotated
+		transcripts. See [Quantification modes](/oarfish/guides/quantification-modes/).
+	</Card>
+	<Card title="Models for where reads land" icon="random">
+		Optional coverage and truncation models use where reads fall on each transcript to
+		improve accuracy. See [Coverage and truncation models](/oarfish/guides/models/).
+	</Card>
+	<Card title="Filters" icon="setting">
+		Optional filters, derived from [NanoCount](https://github.com/a-slide/NanoCount)[^Gleeson],
+		discard alignments that may reduce accuracy. See
+		[Command-line options](/oarfish/reference/command-line/).
+	</Card>
+	<Card title="Uncertainty and detail" icon="list-format">
+		Inferential replicates by bootstrap, read-level assignment probabilities, and a
+		single-cell mode. See [Output files](/oarfish/reference/output/).
+	</Card>
+</CardGrid>
+
+`oarfish` is scientific software in active development. Please check the [GitHub Releases](https://github.com/COMBINE-lab/oarfish/releases) page to make sure that you are using the latest version.
+
+## Citing oarfish
+
+You can read more about `oarfish`[^preprint] in the [preprint](https://www.biorxiv.org/content/10.1101/2024.02.28.582591v1). Please cite the preprint if you use `oarfish` in your work or analysis.
+
+<CardGrid>
+	<LinkCard
+		title="Installation"
+		description="Precompiled binaries, cargo, or Bioconda."
+		href="/oarfish/getting-started/installation/"
+	/>
+	<LinkCard
+		title="Usage examples"
+		description="From a transcriptome BAM, raw reads, or the genome."
+		href="/oarfish/getting-started/usage-examples/"
+	/>
+</CardGrid>
+
+[^Gleeson]: Josie Gleeson, Adrien Leger, Yair D J Prawer, Tracy A Lane, Paul J Harrison, Wilfried Haerty, Michael B Clark, Accurate expression quantification from nanopore direct RNA sequencing with NanoCount, Nucleic Acids Research, Volume 50, Issue 4, 28 February 2022, Page e19, [https://doi.org/10.1093/nar/gkab1129](https://doi.org/10.1093/nar/gkab1129)
+
+[^preprint]: Zahra Zare Jousheghani, Rob Patro. Oarfish: Enhanced probabilistic modeling leads to improved accuracy in long read transcriptome quantification, bioRxiv 2024.02.28.582591; doi: [https://doi.org/10.1101/2024.02.28.582591](https://doi.org/10.1101/2024.02.28.582591)

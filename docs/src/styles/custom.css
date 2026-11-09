@@ -1,0 +1,17 @@
+/* oarfish accent: a deep sea-teal, in place of Starlight's default purple. */
+:root {
+	--sl-color-accent-low: #0b2e33;
+	--sl-color-accent: #1f8a96;
+	--sl-color-accent-high: #b9e6ea;
+}
+
+:root[data-theme='light'] {
+	--sl-color-accent-low: #cdeef1;
+	--sl-color-accent: #146b75;
+	--sl-color-accent-high: #0b3a40;
+}
+
+/* Keep flags such as `--annotated` in table cells on one line. */
+.sl-markdown-content td code {
+	white-space: nowrap;
+}
