@@ -176,6 +176,53 @@ pub(crate) fn read_digest_footer(idx_file: &str) -> anyhow::Result<NamedDigestVe
     }
 }
 
+/// A reference signature that is either already computed or still being
+/// computed on a scoped thread (see [`DeferredDigest::spawn_from_header`]).
+/// The signature is only needed when `meta_info.json` is assembled, so the BAM
+/// path computes it while the alignments are parsed and quantified, and
+/// [`DeferredDigest::resolve`] joins it just before it is written.
+pub(crate) enum DeferredDigest<'scope> {
+    Ready(NamedDigestVec),
+    Pending {
+        name: String,
+        job: std::thread::ScopedJoinHandle<'scope, anyhow::Result<seqcol_rs::DigestResult>>,
+    },
+}
+
+impl From<NamedDigestVec> for DeferredDigest<'_> {
+    fn from(d: NamedDigestVec) -> Self {
+        DeferredDigest::Ready(d)
+    }
+}
+
+impl<'scope> DeferredDigest<'scope> {
+    /// Start [`digest_from_header`] on a thread of `scope`; the result is
+    /// recorded under `name` once resolved.
+    pub(crate) fn spawn_from_header<'env>(
+        scope: &'scope std::thread::Scope<'scope, 'env>,
+        header: &'env noodles_sam::header::Header,
+        name: &str,
+    ) -> Self {
+        DeferredDigest::Pending {
+            name: name.to_string(),
+            job: scope.spawn(move || digest_from_header(header)),
+        }
+    }
+
+    /// The computed signature, waiting for the digest thread if it is still running.
+    pub(crate) fn resolve(self) -> anyhow::Result<NamedDigestVec> {
+        match self {
+            DeferredDigest::Ready(d) => Ok(d),
+            DeferredDigest::Pending { name, job } => {
+                let d = job
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("the seqcol digest thread panicked"))??;
+                Ok(vec![(name, d)].into())
+            }
+        }
+    }
+}
+
 pub(crate) fn digest_from_header(
     header: &noodles_sam::header::Header,
 ) -> anyhow::Result<seqcol_rs::DigestResult> {

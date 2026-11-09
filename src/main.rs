@@ -449,8 +449,11 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // `digest` is `None` for a BAM given as --alignments: its signature comes from
+    // the header and is computed below, beside the parse on the bulk path.
     let (header, reader, aligner, digest) = if args.alignments.is_none() {
-        get_aligner_from_args(&mut args)?
+        let (header, reader, aligner, digest) = get_aligner_from_args(&mut args)?;
+        (header, reader, aligner, Some(digest))
     } else {
         let alignments = args.alignments.clone().unwrap();
         let afile = File::open(&alignments)?;
@@ -483,13 +486,7 @@ fn main() -> anyhow::Result<()> {
         // parse the header, and ensure that the reads were mapped with a known long-read
         // aligner (as far as we can tell).
         let header = alignment_parser::read_and_verify_header(&mut reader, &alignments)?;
-        let seqcol_digest = digest_utils::digest_from_header(&header)?;
-        (
-            header,
-            Some(reader),
-            None,
-            vec![("bam_digest".to_string(), seqcol_digest)].into(),
-        )
+        (header, Some(reader), None, None)
     };
 
     // Tail-neutral scores need the aligner's per-base match score: --tail-match-score if given
@@ -535,6 +532,14 @@ fn main() -> anyhow::Result<()> {
             }
         })?;
 
+        let digest = match digest {
+            Some(d) => d,
+            None => vec![(
+                "bam_digest".to_string(),
+                digest_utils::digest_from_header(&header)?,
+            )]
+            .into(),
+        };
         single_cell::quantify_single_cell_from_collated_bam(
             &header,
             &filter_opts,
@@ -544,15 +549,25 @@ fn main() -> anyhow::Result<()> {
             digest,
         )?;
     } else if args.alignments.is_some() {
-        bulk::quantify_bulk_alignments_from_bam(
-            &header,
-            filter_opts,
-            reader.unwrap(),
-            &mut txps,
-            &txps_name,
-            &args,
-            digest,
-        )?;
+        // The signature is needed only for meta_info.json: compute it on a scoped
+        // thread while the alignments are parsed and quantified.
+        std::thread::scope(|scope| {
+            let digest = match digest {
+                Some(d) => d.into(),
+                None => {
+                    digest_utils::DeferredDigest::spawn_from_header(scope, &header, "bam_digest")
+                }
+            };
+            bulk::quantify_bulk_alignments_from_bam(
+                &header,
+                filter_opts,
+                reader.unwrap(),
+                &mut txps,
+                &txps_name,
+                &args,
+                digest,
+            )
+        })?;
     } else {
         bulk::quantify_bulk_alignments_raw_reads(
             &header,
@@ -562,7 +577,7 @@ fn main() -> anyhow::Result<()> {
             &mut txps,
             &txps_name,
             &args,
-            digest,
+            digest.expect("read-based mode computes the reference digest"),
         )?;
     }
 

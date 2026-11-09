@@ -5,6 +5,7 @@ use crate::eq_classes::{self, EqClasses};
 use crate::kde_utils;
 use crate::prog_opts::Args;
 use crate::util::constants::EMPTY_READ_NAME;
+use crate::util::digest_utils::DeferredDigest;
 use crate::util::oarfish_types::AlnInfo;
 use crate::util::oarfish_types::DiscardTable;
 use crate::util::oarfish_types::{
@@ -89,7 +90,7 @@ pub(crate) fn perform_inference_and_write_output(
     name_vec: Option<SwapVec<String>>,
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
-    seqcol_digest: NamedDigestVec,
+    seqcol_digest: DeferredDigest<'_>,
     aln_time: std::time::Duration,
     args: &Args,
 ) -> anyhow::Result<()> {
@@ -264,6 +265,7 @@ pub(crate) fn perform_inference_and_write_output(
 
     // prepare the JSON object we'll write
     // to meta_info.json
+    let seqcol_digest = seqcol_digest.resolve()?;
     let json_info = get_json_info(args, &emi, &seqcol_digest, aln_time);
 
     // write the output
@@ -336,7 +338,7 @@ pub fn quantify_bulk_alignments_from_bam(
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
     args: &Args,
-    seqcol_digest: NamedDigestVec,
+    seqcol_digest: DeferredDigest<'_>,
 ) -> anyhow::Result<()> {
     let mut name_vec = if filter_opts.write_assignment_probs {
         Some(SwapVec::<String>::with_config(SwapVecConfig {
@@ -449,7 +451,7 @@ pub fn quantify_genome_alignments_from_bam<R: BufRead>(
         name_vec,
         txps,
         txps_name,
-        seqcol_digest,
+        seqcol_digest.into(),
         read_aln_time,
         args,
     )
@@ -826,7 +828,7 @@ pub fn quantify_genome_raw_reads(
         name_vec,
         txps,
         txps_name,
-        seqcol_digest,
+        seqcol_digest.into(),
         aln_time,
         args,
     )
@@ -1180,7 +1182,7 @@ pub fn quantify_bulk_alignments_raw_reads(
         name_vec,
         txps,
         txps_name,
-        seqcol_digest,
+        seqcol_digest.into(),
         aln_time,
         args,
     )
