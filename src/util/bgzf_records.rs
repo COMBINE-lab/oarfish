@@ -231,15 +231,17 @@ impl Chain {
 }
 
 /// Reads one BGZF frame into `buf`, as noodles' BGZF readers do: `false` at the end of the
-/// stream (including a partial frame header there).
+/// stream (including a partial frame header there). The header is read into a stack array so
+/// that a recycled `buf` is resized straight from its previous frame's length: frames are of
+/// similar size, so only the growth (if any) is zero-filled before `read_exact` overwrites it.
 fn read_frame_into<R: Read>(reader: &mut R, buf: &mut Vec<u8>) -> io::Result<bool> {
-    buf.resize(BGZF_HEADER_SIZE, 0);
-    match reader.read_exact(buf) {
+    let mut header = [0_u8; BGZF_HEADER_SIZE];
+    match reader.read_exact(&mut header) {
         Ok(()) => {}
         Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(false),
         Err(e) => return Err(e),
     }
-    let bsize = u16::from_le_bytes([buf[16], buf[17]]);
+    let bsize = u16::from_le_bytes([header[16], header[17]]);
     let block_size = usize::from(bsize) + 1;
     if block_size < MIN_FRAME_SIZE {
         return Err(io::Error::new(
@@ -248,6 +250,7 @@ fn read_frame_into<R: Read>(reader: &mut R, buf: &mut Vec<u8>) -> io::Result<boo
         ));
     }
     buf.resize(block_size, 0);
+    buf[..BGZF_HEADER_SIZE].copy_from_slice(&header);
     reader.read_exact(&mut buf[BGZF_HEADER_SIZE..])?;
     Ok(true)
 }
