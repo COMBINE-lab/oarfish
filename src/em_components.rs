@@ -15,6 +15,8 @@
 //! holds partway through a tile, every component replays the tile from its start up to that
 //! round. The rounds are therefore those of the plain loop, up to summation order.
 
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+
 use rayon::prelude::*;
 
 use crate::util::constants;
@@ -28,6 +30,8 @@ const LARGE: usize = 1 << 16;
 /// its own buffer; the buffers are summed in block order, so the result does not depend on the
 /// number of threads.
 const BLOCKS: usize = 64;
+// Block ids are stored as `u8`.
+const _: () = assert!(BLOCKS <= 256);
 
 /// Whether the plain EMs run on the component layout: yes unless `OARFISH_EM_COMPONENTS=0`.
 pub fn enabled() -> bool {
@@ -57,7 +61,9 @@ impl Counts<'_> {
 
 /// One component: transcripts `tx` (global ids; the local id is the index), and classes
 /// `off[k]..off[k + 1]` over `lab` (local ids) and `w` (weights), with class ids `cls[k]`.
-/// Large components' classes are grouped into blocks `blk[b]..blk[b + 1]`.
+/// Large components' classes are grouped into blocks `blk[b]..blk[b + 1]`; block `b` touches
+/// the labels `touch[touch_off[b]..touch_off[b + 1]]` (ascending), and label `l` is touched by
+/// the blocks `by[by_off[l]..by_off[l + 1]]` (ascending).
 struct Comp<W> {
     tx: Vec<u32>,
     off: Vec<u32>,
@@ -65,6 +71,10 @@ struct Comp<W> {
     w: Vec<W>,
     cls: Vec<u32>,
     blk: Vec<u32>,
+    touch_off: Vec<usize>,
+    touch: Vec<u32>,
+    by_off: Vec<u32>,
+    by: Vec<u8>,
 }
 
 impl<W> Comp<W> {
@@ -93,6 +103,58 @@ fn find(p: &mut [u32], mut x: u32) -> u32 {
     x
 }
 
+/// The root of `x` in the shared forest `p`, halving the path on the way. A parent only ever
+/// moves to a smaller id that is an ancestor, so the forest stays acyclic under any interleaving.
+fn find_shared(p: &[AtomicU32], mut x: u32) -> u32 {
+    loop {
+        let px = p[x as usize].load(Relaxed);
+        if px == x {
+            return x;
+        }
+        let gp = p[px as usize].load(Relaxed);
+        if gp != px {
+            let _ = p[x as usize].compare_exchange_weak(px, gp, Relaxed, Relaxed);
+        }
+        x = gp;
+    }
+}
+
+/// Joins the trees of `a` and `b` in the shared forest `p`, always linking the larger root under
+/// the smaller, so every root is its tree's smallest id whatever the order of the joins. Returns
+/// a member of the joined tree.
+fn union_shared(p: &[AtomicU32], a: u32, b: u32) -> u32 {
+    let (mut a, mut b) = (a, b);
+    loop {
+        a = find_shared(p, a);
+        b = find_shared(p, b);
+        if a == b {
+            return a;
+        }
+        let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+        // Fails only if `hi` stopped being a root meanwhile; then retry from the new roots.
+        if p[hi as usize]
+            .compare_exchange(hi, lo, Relaxed, Relaxed)
+            .is_ok()
+        {
+            return lo;
+        }
+        (a, b) = (lo, hi);
+    }
+}
+
+/// A buffer that parallel tasks write at disjoint positions.
+struct Disjoint<T>(*mut T);
+// SAFETY: used only for writes to positions no two tasks share.
+unsafe impl<T: Send> Sync for Disjoint<T> {}
+impl<T> Disjoint<T> {
+    /// # Safety
+    /// `i` is in bounds and no other task writes it.
+    #[inline(always)]
+    unsafe fn write(&self, i: usize, x: T) {
+        unsafe { self.0.add(i).write(x) }
+    }
+}
+
 impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
     /// Classes `c` with entries `offsets[c]..offsets[c + 1]`, entry `k` having target
     /// `target(k)` and weight `w(k)`. With `by_heaviest`, each component's classes are ordered
@@ -109,21 +171,29 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
         let ncls = offsets.len() - 1;
         let class = |c: usize| offsets[c]..offsets[c + 1];
         let multi = |c: usize| offsets[c + 1] - offsets[c] >= 2;
-        let mut p: Vec<u32> = (0..ntx as u32).collect();
-        let mut in_multi = vec![false; ntx];
-        for c in (0..ncls).filter(|&c| multi(c)) {
-            let mut a = find(&mut p, target(offsets[c]));
-            for k in class(c) {
-                let t = target(k);
-                in_multi[t as usize] = true;
-                let b = find(&mut p, t);
-                if a != b {
-                    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
-                    p[hi as usize] = lo;
-                    a = lo;
-                }
-            }
-        }
+        // The class-transcript graph's components, joined concurrently; each root is its
+        // component's smallest transcript, so the result is that of a serial pass.
+        let (mut p, in_multi) = {
+            let p: Vec<AtomicU32> = (0..ntx as u32).map(AtomicU32::new).collect();
+            let in_multi: Vec<AtomicBool> = (0..ntx).map(|_| AtomicBool::new(false)).collect();
+            (0..ncls)
+                .into_par_iter()
+                .with_min_len(4096)
+                .filter(|&c| multi(c))
+                .for_each(|c| {
+                    let mut a = target(offsets[c]);
+                    for k in class(c) {
+                        let t = target(k);
+                        if !in_multi[t as usize].load(Relaxed) {
+                            in_multi[t as usize].store(true, Relaxed);
+                        }
+                        a = union_shared(&p, a, t);
+                    }
+                });
+            let p: Vec<u32> = p.into_iter().map(AtomicU32::into_inner).collect();
+            let in_multi: Vec<bool> = in_multi.into_iter().map(AtomicBool::into_inner).collect();
+            (p, in_multi)
+        };
         // Components of the transcripts that multi-target classes reference, numbered by their
         // smallest transcript; local ids ascend with global ids.
         let mut comp_of_root = vec![u32::MAX; ntx];
@@ -145,18 +215,58 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
             ntx_of[k as usize] += 1;
         }
         drop((p, comp_of_root, in_multi));
-        // Size every component exactly before filling it.
+        // Count each component's classes (and incidences) per chunk of classes, and each chunk's
+        // single-target classes; the counts' running sums, in component then chunk order, place
+        // each chunk's classes after those of the chunks before it, so every component keeps
+        // class order. Every buffer that outlives this is allocated on the calling thread, as
+        // the serial passes did (an allocator with per-thread heaps reuses that thread's freed
+        // memory, not the workers').
         let ncomp = ntx_of.len();
+        let comp = |c: usize| comp_of[target(offsets[c]) as usize] as usize;
+        let width = ncomp.max(1);
+        let nchunk = ncls
+            .div_ceil(1 << 16)
+            .min(4 * rayon::current_num_threads())
+            .min((1 << 21) / width)
+            .max(1);
+        let per = ncls.div_ceil(nchunk).max(1);
+        let chunk = |j: usize| (j * per).min(ncls)..((j + 1) * per).min(ncls);
+        let mut at = vec![0_usize; nchunk * width];
+        let mut inc = vec![0_usize; nchunk * width];
+        let mut sat = vec![0_usize; nchunk];
+        at.par_chunks_mut(width)
+            .zip(inc.par_chunks_mut(width))
+            .zip(sat.par_iter_mut())
+            .enumerate()
+            .for_each(|(j, ((n, i), s))| {
+                for c in chunk(j) {
+                    let len = offsets[c + 1] - offsets[c];
+                    if len >= 2 {
+                        let k = comp(c);
+                        n[k] += 1;
+                        i[k] += len;
+                    } else if len == 1 {
+                        *s += 1;
+                    }
+                }
+            });
+        let mut start = vec![0_usize; ncomp + 1];
         let (mut ncls_of, mut ninc_of) = (vec![0_usize; ncomp], vec![0_usize; ncomp]);
-        let mut nsingle = 0;
-        for c in 0..ncls {
-            if multi(c) {
-                let k = comp_of[target(offsets[c]) as usize] as usize;
-                ncls_of[k] += 1;
-                ninc_of[k] += offsets[c + 1] - offsets[c];
-            } else if offsets[c + 1] > offsets[c] {
-                nsingle += 1;
+        for k in 0..ncomp {
+            let mut run = start[k];
+            for j in 0..nchunk {
+                let n = at[j * width + k];
+                at[j * width + k] = run;
+                run += n;
+                ninc_of[k] += inc[j * width + k];
             }
+            ncls_of[k] = run - start[k];
+            start[k + 1] = run;
+        }
+        drop(inc);
+        let mut nsingle = 0;
+        for s in sat.iter_mut() {
+            (*s, nsingle) = (nsingle, nsingle + *s);
         }
         let mut comps: Vec<Comp<W>> = (0..ncomp)
             .map(|k| Comp {
@@ -170,6 +280,10 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
                 w: Vec::with_capacity(ninc_of[k]),
                 cls: Vec::with_capacity(ncls_of[k]),
                 blk: Vec::new(),
+                touch_off: Vec::new(),
+                touch: Vec::new(),
+                by_off: Vec::new(),
+                by: Vec::new(),
             })
             .collect();
         for t in 0..ntx {
@@ -179,24 +293,33 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
         }
         // Each component's classes, in class order or by their heaviest target (then by class
         // id), packed as (heaviest target's local id) << 32 | class id.
-        let mut start = vec![0_usize; ncomp + 1];
-        for k in 0..ncomp {
-            start[k + 1] = start[k] + ncls_of[k];
-        }
         let mut order = vec![0_u64; start[ncomp]];
-        let mut singles = Vec::with_capacity(nsingle);
+        let mut singles = vec![(0_u32, 0_u32); nsingle];
         {
-            let mut at = start[..ncomp].to_vec();
-            for c in 0..ncls {
-                if multi(c) {
-                    let k = comp_of[target(offsets[c]) as usize] as usize;
-                    order[at[k]] = c as u64;
-                    at[k] += 1;
-                } else if offsets[c + 1] > offsets[c] {
-                    singles.push((target(offsets[c]), c as u32));
-                }
-            }
+            let out = Disjoint(order.as_mut_ptr());
+            let one = Disjoint(singles.as_mut_ptr());
+            at.par_chunks_mut(width)
+                .zip(sat.par_iter_mut())
+                .enumerate()
+                .for_each(|(j, (at, s))| {
+                    for c in chunk(j) {
+                        let len = offsets[c + 1] - offsets[c];
+                        if len >= 2 {
+                            let k = comp(c);
+                            // SAFETY: chunk `j`'s classes of component `k` own positions
+                            // `at[k]..` up to the next chunk's start, all below `start[ncomp]`.
+                            unsafe { out.write(at[k], c as u64) };
+                            at[k] += 1;
+                        } else if len == 1 {
+                            // SAFETY: as above, chunk `j`'s single-target classes own
+                            // positions `*s..` up to the next chunk's, all below `nsingle`.
+                            unsafe { one.write(*s, (target(offsets[c]), c as u32)) };
+                            *s += 1;
+                        }
+                    }
+                });
         }
+        drop((at, sat));
         if by_heaviest {
             order.par_iter_mut().with_min_len(4096).for_each(|x| {
                 let c = *x as usize;
@@ -268,6 +391,43 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
                 }
             }
             cm.blk.push(cm.cls.len() as u32);
+            // The labels each block touches, and for each label the blocks that touch it.
+            let nblk = cm.blk.len() - 1;
+            let m = cm.tx.len();
+            let lists: Vec<Vec<u32>> = (0..nblk)
+                .into_par_iter()
+                .map(|b| {
+                    let r = cm.off[cm.blk[b] as usize] as usize
+                        ..cm.off[cm.blk[b + 1] as usize] as usize;
+                    let mut seen = vec![false; m];
+                    for &l in &cm.lab[r] {
+                        seen[l as usize] = true;
+                    }
+                    (0..m as u32).filter(|&l| seen[l as usize]).collect()
+                })
+                .collect();
+            cm.touch_off = Vec::with_capacity(nblk + 1);
+            cm.touch_off.push(0);
+            let mut by_off = vec![0_u32; m + 1];
+            for v in &lists {
+                cm.touch_off.push(cm.touch_off.last().unwrap() + v.len());
+                for &l in v {
+                    by_off[l as usize + 1] += 1;
+                }
+            }
+            for l in 0..m {
+                by_off[l + 1] += by_off[l];
+            }
+            let mut at = by_off[..m].to_vec();
+            cm.by = vec![0_u8; by_off[m] as usize];
+            for (b, v) in lists.iter().enumerate() {
+                for &l in v {
+                    cm.by[at[l as usize] as usize] = b as u8;
+                    at[l as usize] += 1;
+                }
+            }
+            cm.by_off = by_off;
+            cm.touch = lists.concat();
         }
         Plan {
             comps,
@@ -315,14 +475,22 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
     /// Returns the round's convergence statistic (largest relative increase over transcripts
     /// above [`constants::MIN_READ_THRESH`]). `acc` is scratch: one buffer of the component's
     /// size per block (one for a small component).
+    #[cfg(test)]
     fn step(&self, n: Counts, base: &[f64], prev: &[f64], out: &mut [f64], acc: &mut [f64]) -> f64 {
-        self.step_by(n, base, prev, out, acc, rel_increase)
+        self.step_by(self.count_of(n), base, prev, out, acc, rel_increase)
     }
 
-    /// [`Comp::step`], with the convergence statistic the largest `stat(prev, out)`.
+    /// The read count of each of this component's classes, in component order.
+    #[inline(always)]
+    fn count_of<'a>(&'a self, n: Counts<'a>) -> impl Fn(usize) -> f64 + Sync + Copy + 'a {
+        move |k| n.get(self.cls[k])
+    }
+
+    /// One EM round as `Comp::step` takes it, with the convergence statistic the largest
+    /// `stat(prev, out)`, and `n(k)` the read count of the component's class `k` (local index).
     fn step_by(
         &self,
-        n: Counts,
+        n: impl Fn(usize) -> f64 + Sync + Copy,
         base: &[f64],
         prev: &[f64],
         out: &mut [f64],
@@ -333,7 +501,7 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
         if !self.is_large() {
             acc.fill(0.0);
             for k in 0..self.cls.len() {
-                self.push(k, n.get(self.cls[k]), prev, acc);
+                self.push(k, n(k), prev, acc);
             }
             let mut rd = 0.0_f64;
             for l in 0..m {
@@ -342,10 +510,16 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
             }
             return rd;
         }
+        // Each block zeroes and fills only the labels it touches, and each label sums only the
+        // blocks that touch it, in block order: the skipped addends are the +0.0 of untouched
+        // entries, so the sums are those over every block.
         acc.par_chunks_mut(m).enumerate().for_each(|(b, a)| {
-            a.fill(0.0);
+            // SAFETY: the labels are below `m`, the length of `a`.
+            for &l in &self.touch[self.touch_off[b]..self.touch_off[b + 1]] {
+                unsafe { *a.get_unchecked_mut(l as usize) = 0.0 };
+            }
             for k in self.blk[b] as usize..self.blk[b + 1] as usize {
-                self.push(k, n.get(self.cls[k]), prev, a);
+                self.push(k, n(k), prev, a);
             }
         });
         let acc = &*acc;
@@ -353,7 +527,13 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
             .with_min_len(256)
             .enumerate()
             .map(|(l, o)| {
-                let s: f64 = acc.chunks(m).map(|a| a[l]).sum();
+                let bs = &self.by[self.by_off[l] as usize..self.by_off[l + 1] as usize];
+                // SAFETY: each block id is below the block count, and `acc` holds that many
+                // buffers of length `m`.
+                let s: f64 = bs
+                    .iter()
+                    .map(|&b| unsafe { *acc.get_unchecked(b as usize * m + l) })
+                    .sum();
                 *o = base[l] + prev[l] * s;
                 stat(prev[l], *o)
             })
@@ -381,10 +561,12 @@ fn rel_increase(prev: f64, curr: f64) -> f64 {
     }
 }
 
-/// A component's state: its single-target constant, abundances, scratch, and the convergence
-/// statistic of each round of the current tile.
+/// A component's state: its single-target constant, its classes' read counts gathered into
+/// component order (empty when every class is one read), abundances, scratch, and the
+/// convergence statistic of each round of the current tile.
 struct State {
     base: Vec<f64>,
+    cnt: Vec<f64>,
     prev: Vec<f64>,
     curr: Vec<f64>,
     acc: Vec<f64>,
@@ -412,6 +594,10 @@ pub fn run<W: Copy + Into<f64> + Send + Sync>(
         .iter()
         .map(|cm| State {
             base: cm.tx.iter().map(|&t| single[t as usize]).collect(),
+            cnt: match n {
+                Counts::Unit => Vec::new(),
+                _ => cm.cls.iter().map(|&c| n.get(c)).collect(),
+            },
             prev: cm.tx.iter().map(|&t| init[t as usize]).collect(),
             curr: vec![0.0; cm.tx.len()],
             acc: vec![0.0; cm.tx.len() * cm.blk.len().saturating_sub(1).max(1)],
@@ -447,8 +633,10 @@ pub fn run<W: Copy + Into<f64> + Send + Sync>(
         jobs.par_iter_mut().with_max_len(1).for_each(|(k, s)| {
             let cm = &plan.comps[*k];
             s.rd.clear();
+            let (unit, cnt) = (matches!(n, Counts::Unit), &s.cnt[..]);
+            let nk = move |k: usize| if unit { 1.0 } else { cnt[k] };
             for _ in 0..steps {
-                let r = cm.step(n, &s.base, &s.prev, &mut s.curr, &mut s.acc);
+                let r = cm.step_by(nk, &s.base, &s.prev, &mut s.curr, &mut s.acc, rel_increase);
                 s.rd.push(r);
                 std::mem::swap(&mut s.prev, &mut s.curr);
             }
@@ -505,46 +693,70 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
     /// The component's log-likelihood at abundances `theta`, up to a constant: over its
     /// classes (read counts `n`) and its single-target reads `base`, with `theta` normalized to
     /// proportions, as the truncation EM's `loglik_static` computes it over all reads.
+    #[cfg(test)]
     fn loglik(&self, n: Counts, base: &[f64], theta: &[f64]) -> f64 {
-        let class_ll = |k: usize| -> (f64, f64) {
+        self.loglik_pair(n, base, theta, theta).0
+    }
+
+    /// [`Comp::loglik`] at two abundance vectors `a` and `b` in one pass over the classes:
+    /// each of the two is summed in the order a separate call would sum it, so both results
+    /// are those of separate calls.
+    fn loglik_pair(&self, n: Counts, base: &[f64], a: &[f64], b: &[f64]) -> (f64, f64) {
+        type Acc = (f64, f64, f64, f64);
+        let add = |x: Acc, y: Acc| (x.0 + y.0, x.1 + y.1, x.2 + y.2, x.3 + y.3);
+        let class_ll = |k: usize| -> Acc {
             let c = n.get(self.cls[k]);
             let r = self.off[k] as usize..self.off[k + 1] as usize;
-            let d: f64 = self.lab[r.clone()]
-                .iter()
-                .zip(&self.w[r])
-                .map(|(&l, &w)| theta[l as usize] * w.into())
-                .sum();
-            if c > 0.0 && d > constants::EM_DENOM_THRESH {
-                (c * d.ln(), c)
+            let (mut da, mut db) = (0.0_f64, 0.0_f64);
+            for (&l, &w) in self.lab[r.clone()].iter().zip(&self.w[r]) {
+                let w: f64 = w.into();
+                da += a[l as usize] * w;
+                db += b[l as usize] * w;
+            }
+            let (la, ra) = if c > 0.0 && da > constants::EM_DENOM_THRESH {
+                (c * da.ln(), c)
             } else {
                 (0.0, 0.0)
-            }
+            };
+            let (lb, rb) = if c > 0.0 && db > constants::EM_DENOM_THRESH {
+                (c * db.ln(), c)
+            } else {
+                (0.0, 0.0)
+            };
+            (la, ra, lb, rb)
         };
-        let (mut ll, mut reads) = if self.is_large() {
-            let parts: Vec<(f64, f64)> = (0..self.blk.len() - 1)
+        let zero = (0.0, 0.0, 0.0, 0.0);
+        let (mut lla, mut ra, mut llb, mut rb) = if self.is_large() {
+            let parts: Vec<Acc> = (0..self.blk.len() - 1)
                 .into_par_iter()
                 .map(|b| {
                     (self.blk[b] as usize..self.blk[b + 1] as usize)
                         .map(class_ll)
-                        .fold((0.0, 0.0), |a, x| (a.0 + x.0, a.1 + x.1))
+                        .fold(zero, add)
                 })
                 .collect();
-            parts
-                .into_iter()
-                .fold((0.0, 0.0), |a, x| (a.0 + x.0, a.1 + x.1))
+            parts.into_iter().fold(zero, add)
         } else {
-            (0..self.cls.len())
-                .map(class_ll)
-                .fold((0.0, 0.0), |a, x| (a.0 + x.0, a.1 + x.1))
+            (0..self.cls.len()).map(class_ll).fold(zero, add)
         };
-        for (&s, &t) in base.iter().zip(theta) {
-            if s > 0.0 && t > constants::EM_DENOM_THRESH {
-                ll += s * t.ln();
-                reads += s;
+        for ((&s, &ta), &tb) in base.iter().zip(a).zip(b) {
+            if s > 0.0 {
+                if ta > constants::EM_DENOM_THRESH {
+                    lla += s * ta.ln();
+                    ra += s;
+                }
+                if tb > constants::EM_DENOM_THRESH {
+                    llb += s * tb.ln();
+                    rb += s;
+                }
             }
         }
-        let total: f64 = theta.iter().sum();
-        ll - reads * total.ln()
+        let (mut ta, mut tb) = (0.0_f64, 0.0_f64);
+        for (&x, &y) in a.iter().zip(b) {
+            ta += x;
+            tb += y;
+        }
+        (lla - ra * ta.ln(), llb - rb * tb.ln())
     }
 }
 
@@ -588,8 +800,9 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
     /// Leaves the result in `s.prev` and returns the last EM step's statistic.
     fn squarem_cycle(&self, n: Counts, s: &mut SqState) -> f64 {
         s.t0.copy_from_slice(&s.prev);
-        self.step_by(n, &s.base, &s.t0, &mut s.t1, &mut s.acc, rel_change);
-        let rd2 = self.step_by(n, &s.base, &s.t1, &mut s.t2, &mut s.acc, rel_change);
+        let nk = self.count_of(n);
+        self.step_by(nk, &s.base, &s.t0, &mut s.t1, &mut s.acc, rel_change);
+        let rd2 = self.step_by(nk, &s.base, &s.t1, &mut s.t2, &mut s.acc, rel_change);
         let (mut rr, mut vv) = (0.0_f64, 0.0_f64);
         for i in 0..s.t0.len() {
             let (a, b, c) = (s.t0[i], s.t1[i], s.t2[i]);
@@ -616,11 +829,8 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
             let (r, v) = (b - a, c - 2.0 * b + a);
             s.prev[i] = (a + 2.0 * st * r + st * st * v).max(0.0);
         }
-        let rd3 = self.step_by(n, &s.base, &s.prev, &mut s.curr, &mut s.acc, rel_change);
-        let (l3, l2) = (
-            self.loglik(n, &s.base, &s.curr),
-            self.loglik(n, &s.base, &s.t2),
-        );
+        let rd3 = self.step_by(nk, &s.base, &s.prev, &mut s.curr, &mut s.acc, rel_change);
+        let (l3, l2) = self.loglik_pair(n, &s.base, &s.curr, &s.t2);
         if l3.is_finite() && l3 >= l2 {
             s.sq.acc += 1;
             if hit {
@@ -720,7 +930,14 @@ pub fn run_squarem<W: Copy + Into<f64> + Send + Sync>(
                     cm.squarem_cycle(n, s)
                 } else {
                     niter += 1;
-                    let r = cm.step_by(n, &s.base, &s.prev, &mut s.curr, &mut s.acc, rel_change);
+                    let r = cm.step_by(
+                        cm.count_of(n),
+                        &s.base,
+                        &s.prev,
+                        &mut s.curr,
+                        &mut s.acc,
+                        rel_change,
+                    );
                     std::mem::swap(&mut s.prev, &mut s.curr);
                     r
                 };
@@ -779,7 +996,14 @@ pub fn run_squarem<W: Copy + Into<f64> + Send + Sync>(
                     *x = 0.0;
                 }
             }
-            cm.step_by(n, &s.base, &s.prev, &mut s.curr, &mut s.acc, rel_change);
+            cm.step_by(
+                cm.count_of(n),
+                &s.base,
+                &s.prev,
+                &mut s.curr,
+                &mut s.acc,
+                rel_change,
+            );
         });
     for (cm, s) in plan.comps.iter().zip(&st) {
         for (&t, &x) in cm.tx.iter().zip(&s.curr) {
