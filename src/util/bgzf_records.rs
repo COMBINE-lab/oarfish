@@ -182,10 +182,11 @@ fn is_valid_header(src: &[u8]) -> bool {
 }
 
 /// Inflates one frame into `data` (which keeps its length across blocks, so it is not cleared
-/// for each block) and checks its CRC; returns the inflated length.
+/// for each block) and checks its CRC; returns the inflated length. The raw-deflate payload is
+/// inflated in one call through libdeflate, reusing the worker's decompressor.
 fn inflate_frame(
     frame: &[u8],
-    inflater: &mut flate2::Decompress,
+    inflater: &mut libdeflater::Decompressor,
     data: &mut Vec<u8>,
 ) -> io::Result<usize> {
     if frame.len() < MIN_FRAME_SIZE || !is_valid_header(&frame[..BGZF_HEADER_SIZE]) {
@@ -203,20 +204,17 @@ fn inflate_frame(
     }
     let dst = &mut data[..isize];
     if isize > 0 {
-        inflater.reset(false);
-        inflater
-            .decompress(cdata, dst, flate2::FlushDecompress::Finish)
+        let n = inflater
+            .deflate_decompress(cdata, dst)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        if inflater.total_out() != isize as u64 {
+        if n != isize {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "failed to fill whole buffer",
             ));
         }
     }
-    let mut crc = flate2::Crc::new();
-    crc.update(dst);
-    if crc.sum() != crc32 {
+    if libdeflater::crc32(dst) != crc32 {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "block data checksum mismatch",
@@ -230,7 +228,7 @@ fn block_size_at(src: &[u8]) -> usize {
 }
 
 struct Worker {
-    inflater: flate2::Decompress,
+    inflater: libdeflater::Decompressor,
     spare: Vec<u8>,
     first_skip: usize,
 }
@@ -692,7 +690,7 @@ where
             let work = &work;
             scope.spawn(move || {
                 let mut w = Worker {
-                    inflater: flate2::Decompress::new(false),
+                    inflater: libdeflater::Decompressor::new(),
                     spare: Vec::new(),
                     first_skip,
                 };

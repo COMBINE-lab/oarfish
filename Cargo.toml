@@ -59,10 +59,10 @@ arrow2 = { version = "0.18.0", features = [
   "io_parquet_snappy",
 ] }
 kders = { git = "https://github.com/COMBINE-lab/kde-rs.git", branch = "dev", version = "0.1.1" }
-noodles-bgzf = { version = "0.46.0" }
+noodles-bgzf = { version = "0.46.0", features = ["libdeflate"] }
 # raw-deflate inflate + CRC32 of BGZF blocks in the BAM record pipeline (util/bgzf_records.rs);
-# the same backend (zlib-rs) noodles-bgzf uses.
-flate2 = { version = "1.1.0", default-features = false, features = ["zlib-rs"] }
+# libdeflate's C source is vendored and compiled with the cc crate (no cmake/pkg-config).
+libdeflater = "1.25.2"
 crossbeam = { version = "0.8.4", features = [
   "crossbeam-queue",
   "crossbeam-channel",
