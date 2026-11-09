@@ -378,10 +378,8 @@ fn main() -> anyhow::Result<()> {
                 "--mapper spearfish supports transcriptome read mode only (not genome mode)"
             );
         }
-        if args.only_index || args.index_out.is_some() {
-            anyhow::bail!(
-                "--mapper spearfish builds its index in seconds; use `spearfish index` to write one (and pass it with --index)"
-            );
+        if args.only_index && args.index_out.is_none() {
+            anyhow::bail!("--only-index needs --index-out, the path to write the index to");
         }
         // spearfish scores are scaled by SPEARFISH_SCORE_SCALE; a hit Δ below the best weighs
         // exp(-Δ) in spearfish units.
@@ -392,7 +390,12 @@ fn main() -> anyhow::Result<()> {
 
     // if we are just indexing, don't bother with anything else
     if args.only_index {
-        let (header, _reader, _aligner, digest) = get_aligner_from_fastas(&mut args)?;
+        let (header, _reader, _aligner, digest) =
+            if args.mapper == crate::prog_opts::MapperBackend::Spearfish {
+                get_aligner_from_args(&mut args)?
+            } else {
+                get_aligner_from_fastas(&mut args)?
+            };
         info!(
             "indexing completed; index over {} references written to {}",
             header.reference_sequences().len(),

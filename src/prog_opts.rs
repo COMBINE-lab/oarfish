@@ -492,7 +492,8 @@ pub struct Args {
     #[arg(long, help_heading = "indexing")]
     pub only_index: bool,
 
-    /// path where the index will be written (if provided)
+    /// path where the index will be written (if provided): a rammap index, or with
+    /// `--mapper spearfish` a spearfish `.sfi` (with its build manifest as `<path>.json`)
     #[arg(long, conflicts_with_all = ["alignments", "index"], requires_ifs([(ArgPredicate::IsPresent, "only_index")]), help_heading = "indexing")]
     pub index_out: Option<PathBuf>,
 
@@ -506,8 +507,9 @@ pub struct Args {
     pub seq_tech: Option<SequencingTech>,
 
     /// read-mode mapping backend for transcriptome quantification: `rammap` (default) or
-    /// `spearfish`. spearfish builds its own index from `--annotated`/`--novel` (or opens a
-    /// spearfish `.sfi` given as `--index`); its preset follows `--seq-tech`.
+    /// `spearfish`. spearfish builds its own index from `--annotated`/`--novel` (and writes it
+    /// with `--index-out`), or opens a spearfish `.sfi` given as `--index`; its preset follows
+    /// `--seq-tech`.
     #[arg(long, value_enum, default_value_t = MapperBackend::Rammap, help_heading = "raw read mode")]
     pub mapper: MapperBackend,
 

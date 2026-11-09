@@ -94,6 +94,12 @@ fn get_aligner_from_index(args: &mut Args) -> anyhow::Result<HeaderReaderAligner
     let idx_str = idx_file
         .to_str()
         .expect("could not convert index path to &str");
+    if is_spearfish_index(&idx_file) {
+        anyhow::bail!(
+            "{} is a spearfish index; pass --mapper spearfish to use it",
+            idx_file.display()
+        );
+    }
 
     warn!(
         "You are using an existing index with the rammap backend (rammap reads both its own RMMI \
@@ -169,18 +175,43 @@ fn spearfish_preset(seq_tech: &Option<SequencingTech>) -> anyhow::Result<spearfi
     }
 }
 
+/// Whether `path` is a spearfish index (`.sfi`): its first bytes are spearfish's magic.
+pub(crate) fn is_spearfish_index(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 8];
+    File::open(path)
+        .and_then(|mut f| f.read_exact(&mut magic))
+        .is_ok_and(|_| &magic == b"SPFISH01")
+}
+
 /// Build (from `--annotated`/`--novel`) or open (`--index`, a spearfish `.sfi`) a spearfish
 /// index and mapper. The header lists transcripts in index order (= FASTA order), with
-/// spearfish's transcript names (FASTA IDs cut at the first `|`).
+/// spearfish's transcript names (FASTA IDs cut at the first `|`). With `--index-out`, the
+/// built index is written there (with the reference digests in oarfish's footer) and mapped
+/// from the file.
 fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDigest> {
     info!("oarfish is operating in read-based mode (spearfish backend)");
     let mut digests = NamedDigestVec::new();
     let index = if let Some(idx) = &args.index {
         let index = spearfish::Index::open(idx)?;
-        digests.push((
-            "prexisting_index".to_string(),
-            digest_utils::digest_from_header(&spearfish_header(&index)?)?,
-        ));
+        // Prefer the digests oarfish wrote into the footer when it built the index; an index
+        // from `spearfish index` has none, so fall back to a name/length digest.
+        let idx_str = idx
+            .to_str()
+            .expect("could not convert --index path to &str");
+        match digest_utils::read_digest_footer(idx_str) {
+            Ok(d) => digests = d,
+            Err(_) => {
+                warn!(
+                    "the provided spearfish index has no oarfish digest footer; recording a \
+                     sequence-name/length digest instead of the full reference signature."
+                );
+                digests.push((
+                    "prexisting_index".to_string(),
+                    digest_utils::digest_from_header(&spearfish_header(&index)?)?,
+                ));
+            }
+        }
         index
     } else {
         rammap_set_index_threads(args.threads.max(1));
@@ -205,7 +236,35 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
         }
         info!("read {} transcripts in {:.1}s", txs.len(), t_read.elapsed().as_secs_f64());
         let t = std::time::Instant::now();
-        let (index, rep) = spearfish::Index::build(txs, &spearfish::IndexOptions::default())?;
+        let idx_opts = spearfish::IndexOptions::default();
+        let (index, rep) = if let Some(out) = &args.index_out {
+            let input = spearfish::provenance::InputInfo {
+                path: [&args.annotated, &args.novel]
+                    .into_iter()
+                    .flatten()
+                    .map(|f| spearfish::provenance::absolute(f))
+                    .collect::<Vec<_>>()
+                    .join(","),
+                genes_from: if txs.iter().any(|(name, gene, _)| name != gene) {
+                    "fasta"
+                } else {
+                    "none"
+                }
+                .to_string(),
+                ..Default::default()
+            };
+            let (_, rep, _) = spearfish::Index::build_to_file_with(
+                txs,
+                &idx_opts,
+                out,
+                input,
+                std::env::args().collect(),
+            )?;
+            (None, rep)
+        } else {
+            let (index, rep) = spearfish::Index::build(txs, &idx_opts)?;
+            (Some(index), rep)
+        };
         info!(
             "built spearfish index over {} transcripts ({} genes) in {:.1}s ({})",
             rep.transcripts.to_formatted_string(&Locale::en),
@@ -220,7 +279,21 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
         for (label, h) in digest_handles {
             digests.push((label.to_string(), h.join().expect("valid digest")?));
         }
-        index
+        match index {
+            Some(index) => index,
+            None => {
+                let out = args
+                    .index_out
+                    .as_ref()
+                    .expect("index written to --index-out");
+                let out_str = out
+                    .to_str()
+                    .expect("could not convert --index-out path to &str");
+                digest_utils::append_digest_footer(out_str, &digests)?;
+                info!("wrote spearfish index to {}", out.display());
+                spearfish::Index::open(out)?
+            }
+        }
     };
     let header = spearfish_header(&index)?;
     let preset = spearfish_preset(&args.seq_tech)?;

@@ -444,4 +444,88 @@ mod tests {
         let _ = std::fs::remove_file(&fasta_path);
         let _ = std::fs::remove_file(&idx_path);
     }
+
+    /// Round-trip for a spearfish index written as `--index-out` writes it: built to a file,
+    /// with the oarfish footer appended. Confirms (a) spearfish opens it despite the trailing
+    /// footer and it holds the same transcripts, (b) it maps a read as the in-memory index
+    /// does, and (c) the footer reads back. This guards against a future spearfish change to
+    /// trailing-byte handling.
+    #[test]
+    fn spearfish_index_footer_roundtrip() {
+        let dir = std::env::temp_dir();
+        let stamp = std::process::id();
+        let fasta_path = dir.join(format!("oarfish_sig_test_{stamp}_sf.fa"));
+        let idx_path = dir.join(format!("oarfish_sig_test_{stamp}.sfi"));
+
+        // three pseudo-random 3 kb transcripts (xorshift, fixed seed)
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        let mut base = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            b"ACGT"[(state >> 33) as usize % 4]
+        };
+        let txs: Vec<(String, String, Vec<u8>)> = (0..3)
+            .map(|i| {
+                (
+                    format!("tx{i}"),
+                    format!("tx{i}"),
+                    (0..3000).map(|_| base()).collect(),
+                )
+            })
+            .collect();
+        let read = txs[1].2[500..2000].to_vec();
+        {
+            let mut f = std::fs::File::create(&fasta_path).unwrap();
+            for (n, _, s) in &txs {
+                writeln!(f, ">{n}\n{}", std::str::from_utf8(s).unwrap()).unwrap();
+            }
+        }
+
+        let opts = spearfish::IndexOptions::default();
+        let (mem, _) = spearfish::Index::build(txs.clone(), &opts).unwrap();
+        spearfish::Index::build_to_file(txs, &opts, &idx_path).unwrap();
+        let idx_str = idx_path.to_str().unwrap();
+        let mut ndv = NamedDigestVec::new();
+        ndv.push((
+            "annotated_transcripts_digest".to_string(),
+            get_digest_from_fasta(&fasta_path).join().unwrap().unwrap(),
+        ));
+        append_digest_footer(idx_str, &ndv).unwrap();
+
+        // (a) spearfish opens the file with its footer; same transcripts.
+        assert!(crate::util::aligner::is_spearfish_index(&idx_path));
+        let disk = spearfish::Index::open(&idx_path).unwrap();
+        assert_eq!(disk.n_transcripts(), mem.n_transcripts());
+        for t in 0..mem.n_transcripts() as u32 {
+            assert_eq!(disk.tx_name(t), mem.tx_name(t));
+            assert_eq!(disk.tx_len(t), mem.tx_len(t));
+        }
+
+        // (b) the read maps to the same hits through either index.
+        let map_opts = spearfish::MapOptions::preset(spearfish::Preset::Ont);
+        let hits = |idx| {
+            spearfish::Mapper::new(std::sync::Arc::new(idx), &map_opts)
+                .unwrap()
+                .map(&read)
+                .hits
+        };
+        let (mem_hits, disk_hits) = (hits(mem), hits(disk));
+        assert!(
+            mem_hits.iter().any(|h| h.tx == 1),
+            "read did not map to its transcript"
+        );
+        assert_eq!(disk_hits, mem_hits);
+
+        // (c) the footer round-trips.
+        let read_back = read_digest_footer(idx_str).unwrap();
+        assert_eq!(
+            serde_json::to_string(&read_back.to_json()).unwrap(),
+            serde_json::to_string(&ndv.to_json()).unwrap()
+        );
+
+        let _ = std::fs::remove_file(&fasta_path);
+        let _ = std::fs::remove_file(&idx_path);
+        let _ = std::fs::remove_file(spearfish::provenance::sidecar(&idx_path));
+    }
 }
