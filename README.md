@@ -6,7 +6,7 @@
 
 It optionally employs many filters to help discard alignments that may reduce quantification accuracy. Currently, the set of filters applied in `oarfish` are directly derived from the [`NanoCount`](https://github.com/a-slide/NanoCount)[^Gleeson] tool; both the filters that exist, and the way their values are set (with the exception of the `--three-prime-clip` filter, which is not set by default in `oarfish` but is in `NanoCount`).
 
-Additionally, `oarfish` provides options to make use of coverage profiles derived from the aligned reads to improve quantification accuracy. The use of this coverage model is enabled with the `--model-coverage` flag. You can read more about `oarfish`[^preprint] in the [preprint](https://www.biorxiv.org/content/10.1101/2024.02.28.582591v1). Please cite the preprint if you use `oarfish` in your work or analysis.
+Additionally, `oarfish` provides options to make use of coverage profiles derived from the aligned reads to improve quantification accuracy. The use of this coverage model is enabled with the `--model-coverage` flag. You can read more about `oarfish`[^paper] in the [paper](https://doi.org/10.1093/bioinformatics/btaf240) published in *Bioinformatics*. Please cite the paper if you use `oarfish` in your work or analysis.
 
 Also, please note that `oarfish` is scientific software in active development. Therefore, please check the [GitHub Release](https://github.com/COMBINE-lab/oarfish/releases) page to make sure that you are using the latest version
 
@@ -371,4 +371,4 @@ The `--output` option passed to `oarfish` corresponds to a path prefix (this pre
 
 [^Gleeson]: Josie Gleeson, Adrien Leger, Yair D J Prawer, Tracy A Lane, Paul J Harrison, Wilfried Haerty, Michael B Clark, Accurate expression quantification from nanopore direct RNA sequencing with NanoCount, Nucleic Acids Research, Volume 50, Issue 4, 28 February 2022, Page e19, [https://doi.org/10.1093/nar/gkab1129](https://doi.org/10.1093/nar/gkab1129)
 
-[^preprint]: Zahra Zare Jousheghani, Rob Patro. Oarfish: Enhanced probabilistic modeling leads to improved accuracy in long read transcriptome quantification, bioRxiv 2024.02.28.582591; doi: [https://doi.org/10.1101/2024.02.28.582591](https://doi.org/10.1101/2024.02.28.582591)
+[^paper]: Zahra Zare Jousheghani, Noor Pratap Singh, Rob Patro, Oarfish: enhanced probabilistic modeling leads to improved accuracy in long read transcriptome quantification, Bioinformatics, Volume 41, Issue Supplement_1, July 2025, Pages i304–i313, [https://doi.org/10.1093/bioinformatics/btaf240](https://doi.org/10.1093/bioinformatics/btaf240)
