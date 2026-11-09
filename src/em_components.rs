@@ -65,7 +65,10 @@ impl Counts<'_> {
 /// `off[k]..off[k + 1]` over `lab` (local ids) and `w` (weights), with class ids `cls[k]`.
 /// Large components' classes are grouped into blocks `blk[b]..blk[b + 1]`; block `b` touches
 /// the labels `touch[touch_off[b]..touch_off[b + 1]]` (ascending), and label `l` is touched by
-/// the blocks `by[by_off[l]..by_off[l + 1]]` (ascending).
+/// the blocks `by[by_off[l]..by_off[l + 1]]` (ascending). A plan built by size also records the
+/// runs of classes of one entry count: block `b` (the whole component, for a small one) is the
+/// runs `runs[run_blk[b]..run_blk[b + 1]]`, each (entry count, first class, end class); without
+/// them (`runs` empty) the classes are taken one at a time.
 struct Comp<W> {
     tx: Vec<u32>,
     off: Vec<u32>,
@@ -77,6 +80,8 @@ struct Comp<W> {
     touch: Vec<u32>,
     by_off: Vec<u32>,
     by: Vec<u8>,
+    runs: Vec<(u32, u32, u32)>,
+    run_blk: Vec<u32>,
 }
 
 impl<W> Comp<W> {
@@ -311,6 +316,8 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
                 touch: Vec::new(),
                 by_off: Vec::new(),
                 by: Vec::new(),
+                runs: Vec::new(),
+                run_blk: Vec::new(),
             })
             .collect();
         for t in 0..ntx {
@@ -500,6 +507,34 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
             cm.by_off = by_off;
             cm.touch = lists.concat();
         }
+        if by_size {
+            // Each block's maximal runs of classes with one entry count.
+            comps.par_iter_mut().for_each(|cm| {
+                let blk: &[u32] = if cm.is_large() {
+                    &cm.blk
+                } else {
+                    &[0, cm.cls.len() as u32]
+                };
+                let (mut runs, mut run_blk) = (Vec::new(), Vec::with_capacity(blk.len()));
+                run_blk.push(0);
+                for b in 0..blk.len() - 1 {
+                    let (k0, k1) = (blk[b] as usize, blk[b + 1] as usize);
+                    let mut a = k0;
+                    while a < k1 {
+                        let size = cm.off[a + 1] - cm.off[a];
+                        let mut e = a + 1;
+                        while e < k1 && cm.off[e + 1] - cm.off[e] == size {
+                            e += 1;
+                        }
+                        runs.push((size, a as u32, e as u32));
+                        a = e;
+                    }
+                    run_blk.push(runs.len() as u32);
+                }
+                cm.runs = runs;
+                cm.run_blk = run_blk;
+            });
+        }
         Plan {
             comps,
             singles,
@@ -542,6 +577,77 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
         }
     }
 
+    /// [`Comp::push`] over the classes `k0..k1`, all of `N` entries: the same sums in the same
+    /// order, with the entry loops unrolled.
+    #[inline(always)]
+    fn push_n<const N: usize>(
+        &self,
+        k0: usize,
+        k1: usize,
+        n: impl Fn(usize) -> f64,
+        prev: &[f64],
+        acc: &mut [f64],
+    ) {
+        let r = self.off[k0] as usize..self.off[k1] as usize;
+        let (lab, w) = (&self.lab[r.clone()], &self.w[r]);
+        for (k, (l, w)) in (k0..k1).zip(lab.as_chunks::<N>().0.iter().zip(w.as_chunks::<N>().0)) {
+            let nk = n(k);
+            if nk == 0.0 {
+                continue;
+            }
+            // SAFETY: as in `push`. The sum is `push`'s left fold: its -0.0 start adds nothing.
+            let mut d = unsafe { *prev.get_unchecked(l[0] as usize) } * w[0].into();
+            for j in 1..N {
+                d += unsafe { *prev.get_unchecked(l[j] as usize) } * w[j].into();
+            }
+            if d > constants::EM_DENOM_THRESH {
+                let s = nk / d;
+                for j in 0..N {
+                    unsafe { *acc.get_unchecked_mut(l[j] as usize) += w[j].into() * s };
+                }
+            }
+        }
+    }
+
+    /// Adds the round of block `b`'s classes `k0..k1` (the whole component, `b` 0, for a small
+    /// one) to `acc`, a run of classes of 2 to 32 entries at a time when the plan has runs.
+    #[inline(always)]
+    fn push_block(
+        &self,
+        b: usize,
+        k0: usize,
+        k1: usize,
+        n: impl Fn(usize) -> f64 + Copy,
+        prev: &[f64],
+        acc: &mut [f64],
+    ) {
+        if self.runs.is_empty() {
+            for k in k0..k1 {
+                self.push(k, n(k), prev, acc);
+            }
+            return;
+        }
+        let runs = &self.runs[self.run_blk[b] as usize..self.run_blk[b + 1] as usize];
+        for &(size, a, e) in runs {
+            let (a, e) = (a as usize, e as usize);
+            macro_rules! unrolled {
+                ($($s:literal)*) => {
+                    match size {
+                        $($s => self.push_n::<$s>(a, e, n, prev, acc),)*
+                        _ => {
+                            for k in a..e {
+                                self.push(k, n(k), prev, acc);
+                            }
+                        }
+                    }
+                };
+            }
+            unrolled!(
+                2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32
+            );
+        }
+    }
+
     /// One EM round: `out[l] = base[l] + prev[l] * sum over l's classes of w * n / denom`.
     /// Returns the round's convergence statistic (largest relative increase over transcripts
     /// above [`constants::MIN_READ_THRESH`]). `acc` is scratch: one buffer of the component's
@@ -571,9 +677,7 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
         let m = self.tx.len();
         if !self.is_large() {
             acc.fill(0.0);
-            for k in 0..self.cls.len() {
-                self.push(k, n(k), prev, acc);
-            }
+            self.push_block(0, 0, self.cls.len(), n, prev, acc);
             let mut rd = 0.0_f64;
             for l in 0..m {
                 out[l] = base[l] + prev[l] * acc[l];
@@ -589,9 +693,14 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
             for &l in &self.touch[self.touch_off[b]..self.touch_off[b + 1]] {
                 unsafe { *a.get_unchecked_mut(l as usize) = 0.0 };
             }
-            for k in self.blk[b] as usize..self.blk[b + 1] as usize {
-                self.push(k, n(k), prev, a);
-            }
+            self.push_block(
+                b,
+                self.blk[b] as usize,
+                self.blk[b + 1] as usize,
+                n,
+                prev,
+                a,
+            );
         });
         let acc = &*acc;
         out.par_iter_mut()

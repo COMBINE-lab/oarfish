@@ -12,10 +12,11 @@
 //! Without the presence model (which couples all transcripts through its base rate), the same
 //! rounds run on the component layout of [`crate::em_components`] instead.
 
+use hashbrown::HashTable;
 use num_format::{Locale, ToFormattedString};
 use rand::rng as trng;
 use rayon::prelude::*;
-use rustc_hash::{FxBuildHasher, FxHashMap};
+use rustc_hash::FxBuildHasher;
 use std::hash::BuildHasher;
 use tracing::{info, span, trace};
 
@@ -24,7 +25,7 @@ use crate::em_components::{self, Counts, Plan};
 use crate::presence::{Presence, PresenceOpts};
 use crate::util::constants;
 use crate::util::oarfish_types::{
-    InMemoryAlignmentStore, InMemoryAlignmentStoreIter, TranscriptInfo,
+    InMemoryAlignmentStore, InMemoryAlignmentStoreIter, TranscriptInfo, release_freed_memory,
 };
 
 /// Reads collapsed by their (target, probability) multisets.
@@ -65,7 +66,9 @@ impl Local {
         R: Iterator<Item = I>,
         I: Iterator<Item = (u32, f32)>,
     {
-        let mut ids: FxHashMap<Vec<(u32, u32)>, u32> = FxHashMap::default();
+        // Local class ids, hashed and compared through their keys in `local.keys`, so a class's
+        // key is stored once, flat, rather than also as an owned key per map entry.
+        let mut ids: HashTable<u32> = HashTable::new();
         let mut local = Local {
             keys: Vec::new(),
             offsets: vec![0],
@@ -77,20 +80,25 @@ impl Local {
             key.clear();
             key.extend(read.map(|(t, p)| (t, p.to_bits())));
             key.sort_unstable();
-            let c = match ids.get(key.as_slice()) {
+            let h = FxBuildHasher.hash_one(key.as_slice());
+            let c = match ids.find(h, |&c| local.key(c as usize) == key.as_slice()) {
                 Some(&c) => c,
                 None => {
                     let c = local.counts.len() as u32;
-                    ids.insert(key.clone(), c);
                     local.keys.extend_from_slice(&key);
                     local.offsets.push(local.keys.len());
                     local.counts.push(0);
+                    ids.insert_unique(h, c, |&c| FxBuildHasher.hash_one(local.key(c as usize)));
                     c
                 }
             };
             local.counts[c as usize] += 1;
             local.read_class.push(c);
         }
+        // The chunks are keyed concurrently, each on its own worker; return this worker's
+        // freed memory (the map, the keys' regrowth) before the merge allocates its own.
+        drop(ids);
+        release_freed_memory();
         local
     }
 
@@ -108,6 +116,8 @@ impl EqClasses {
     /// rayon pool, then merged in chunk order, so the classes, their order (first occurrence
     /// in the store), counts and `read_class` do not depend on the number of threads.
     pub fn from_store(store: &InMemoryAlignmentStore, ntx: usize) -> Self {
+        // Memory the parse freed is still resident until the allocator purges it.
+        release_freed_memory();
         let n = store.len();
         let nchunks = rayon::current_num_threads()
             .min(n.div_ceil(MIN_CHUNK_READS))
@@ -154,6 +164,7 @@ impl EqClasses {
             Self::merge_sharded(&locals)
         };
         drop(locals);
+        release_freed_memory();
         eqc.transpose(ntx);
         eqc
     }
@@ -188,7 +199,14 @@ impl EqClasses {
         let shards: Vec<Shard> = (0..nshards)
             .into_par_iter()
             .map(|s| {
-                let mut map: FxHashMap<&[(u32, u32)], u32> = FxHashMap::default();
+                // Shard class ids, keyed through their first (chunk, local class); sized for
+                // every bucket entry, so the table never grows.
+                let entries: usize = buckets.iter().map(|b| b[s].len()).sum();
+                let mut map: HashTable<u32> = HashTable::with_capacity(entries);
+                let key_of = |first: &[(u32, u32)], id: u32| {
+                    let (k, c) = first[id as usize];
+                    locals[k as usize].key(c as usize)
+                };
                 let mut sh = Shard {
                     first: Vec::new(),
                     counts: Vec::new(),
@@ -198,12 +216,20 @@ impl EqClasses {
                     let bucket = &buckets[k][s];
                     let mut ids = Vec::with_capacity(bucket.len());
                     for &c in bucket {
-                        let next = sh.first.len() as u32;
-                        let id = *map.entry(l.key(c as usize)).or_insert_with(|| {
-                            sh.first.push((k as u32, c));
-                            sh.counts.push(0);
-                            next
-                        });
+                        let key = l.key(c as usize);
+                        let h = FxBuildHasher.hash_one(key);
+                        let id = match map.find(h, |&id| key_of(&sh.first, id) == key) {
+                            Some(&id) => id,
+                            None => {
+                                let id = sh.first.len() as u32;
+                                sh.first.push((k as u32, c));
+                                sh.counts.push(0);
+                                map.insert_unique(h, id, |&id| {
+                                    FxBuildHasher.hash_one(key_of(&sh.first, id))
+                                });
+                                id
+                            }
+                        };
                         sh.counts[id as usize] += u64::from(l.counts[c as usize]);
                         ids.push(id);
                     }

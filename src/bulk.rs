@@ -203,11 +203,8 @@ pub(crate) fn perform_inference_and_write_output(
     // Without per-read model terms, reads with the same (target, probability) multiset are
     // interchangeable: run the EM over equivalence classes.
     let eqc = (!per_read_terms && !args.per_read_em).then(|| {
-        let eqc = rayon::ThreadPoolBuilder::new()
-            .num_threads(args.threads)
-            .build()
-            .expect("could not build the thread pool for the equivalence classes")
-            .install(|| EqClasses::from_store(emi.eq_map, emi.txp_info.len()));
+        // On the global pool, which main sizes to -j.
+        let eqc = EqClasses::from_store(emi.eq_map, emi.txp_info.len());
         info!(
             "{} reads in {} equivalence classes",
             emi.eq_map
