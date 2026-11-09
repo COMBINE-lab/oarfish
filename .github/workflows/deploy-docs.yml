@@ -1,9 +1,10 @@
 name: Deploy docs
 
-# Build the mkdocs-material site and publish it to the `gh-pages` branch
+# Build the Astro + Starlight site in docs/ and publish it to the `gh-pages` branch
 # (served at https://COMBINE-lab.github.io/oarfish/). Runs only when the docs
 # sources actually change, and can also be triggered manually from the Actions
-# tab ("Run workflow").
+# tab ("Run workflow"). Pull requests that touch the docs build the site without
+# publishing it, so a broken page is caught before merge.
 #
 # Branches: `dev` is the active integration branch where docs are edited; `main`
 # is the default/release branch. Both publish to the same `gh-pages` site, so a
@@ -16,7 +17,10 @@ on:
       - dev
     paths:
       - "docs/**"
-      - "mkdocs.yml"
+      - ".github/workflows/deploy-docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
       - ".github/workflows/deploy-docs.yml"
   workflow_dispatch:
 
@@ -26,35 +30,40 @@ permissions:
 
 # Don't let concurrent runs race to publish gh-pages; cancel older in-flight runs.
 concurrency:
-  group: deploy-docs
+  group: deploy-docs-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docs
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure git for gh-pages push
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-      - uses: actions/setup-python@v5
+      # Astro 7 needs Node.js 22.23.4 or later.
+      - uses: actions/setup-node@v4
         with:
-          python-version: "3.x"
+          node-version: 22
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
 
-      # Cache mkdocs-material's build cache (keyed weekly) to speed up builds.
-      - run: echo "cache_id=$(date --utc '+%V')" >> "$GITHUB_ENV"
-      - uses: actions/cache@v4
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the site
+        run: npm run build
+
+      # Replace the gh-pages branch with the built site (one commit, no history),
+      # as `mkdocs gh-deploy --force --no-history` did. Adds .nojekyll, so Pages
+      # serves Astro's `_astro/` assets.
+      - name: Publish to gh-pages
+        if: github.event_name != 'pull_request'
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          key: mkdocs-material-${{ env.cache_id }}
-          path: .cache
-          restore-keys: |
-            mkdocs-material-
-
-      - name: Install build dependencies
-        run: pip install mkdocs-material pymdown-extensions
-
-      - name: Build and deploy to gh-pages
-        run: mkdocs gh-deploy --force --no-history
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: docs/dist
+          force_orphan: true
+          user_name: "github-actions[bot]"
+          user_email: "41898282+github-actions[bot]@users.noreply.github.com"
