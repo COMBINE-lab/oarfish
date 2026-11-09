@@ -1,0 +1,42 @@
+cff-version: 1.2.0
+message: "If you use oarfish in your work or analysis, please cite the paper below."
+title: "oarfish"
+abstract: "A fast, accurate and versatile tool for long-read transcript quantification."
+type: software
+authors:
+  - family-names: "Zare Jousheghani"
+    given-names: "Zahra"
+    affiliation: "University of Maryland, College Park"
+  - family-names: "Singh"
+    given-names: "Noor Pratap"
+    affiliation: "University of Maryland, College Park"
+  - family-names: "Patro"
+    given-names: "Rob"
+    affiliation: "University of Maryland, College Park"
+repository-code: "https://github.com/COMBINE-lab/oarfish"
+url: "https://combine-lab.github.io/oarfish/"
+license: BSD-3-Clause
+keywords:
+  - RNA-seq
+  - transcript quantification
+  - long reads
+  - Oxford Nanopore
+  - PacBio
+preferred-citation:
+  type: article
+  title: "Oarfish: enhanced probabilistic modeling leads to improved accuracy in long read transcriptome quantification"
+  authors:
+    - family-names: "Zare Jousheghani"
+      given-names: "Zahra"
+    - family-names: "Singh"
+      given-names: "Noor Pratap"
+    - family-names: "Patro"
+      given-names: "Rob"
+  journal: "Bioinformatics"
+  volume: 41
+  issue: "Supplement_1"
+  start: "i304"
+  end: "i313"
+  year: 2025
+  month: 7
+  doi: "10.1093/bioinformatics/btaf240"
