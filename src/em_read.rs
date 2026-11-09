@@ -12,7 +12,9 @@
 //!   sums `w / normalizer` over the transcript's alignments through a precomputed transpose.
 //!   Each pass writes only its own slots, and the result does not depend on scheduling.
 //!
-//! `OARFISH_READ_EM=local` or `OARFISH_READ_EM=atomic` selects the other layouts.
+//! `OARFISH_READ_EM=local` or `OARFISH_READ_EM=atomic` selects the other layouts. With `Csr`,
+//! the per-read EM runs the same rounds on the component layout of [`crate::em_components`]
+//! (`OARFISH_EM_COMPONENTS=0` keeps the CSR layout); the truncation EM keeps the CSR layout.
 
 use std::time::Instant;
 
@@ -21,6 +23,7 @@ use num_format::{Locale, ToFormattedString};
 use rayon::prelude::*;
 use tracing::{info, span, trace};
 
+use crate::em_components;
 use crate::util::constants;
 use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
 
@@ -210,6 +213,30 @@ fn run(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
         Some(ref v) => v.clone(),
         None => vec![total_weight / ntx as f64; ntx],
     };
+    if how == Impl::Csr && em_components::enabled() {
+        let plan = em_components::Plan::new(|k| f.target(k), |k| f.w(k), f.off, ntx, true);
+        info!(
+            "per-read EM (components): {} reads, {} alignments, {} connected components, setup {:.2}s",
+            f.nreads().to_formatted_string(&Locale::en),
+            f.n().to_formatted_string(&Locale::en),
+            plan.n_components().to_formatted_string(&Locale::en),
+            t0.elapsed().as_secs_f64()
+        );
+        let t1 = Instant::now();
+        let out = em_components::run(
+            &plan,
+            em_components::Counts::Unit,
+            &prev,
+            em_info.max_iter,
+            em_info.convergence_thresh,
+            1,
+        );
+        info!(
+            "per-read EM (components): {:.2}s",
+            t1.elapsed().as_secs_f64()
+        );
+        return out;
+    }
     let mut curr = vec![0.0; ntx];
     // Layout-specific state, built once.
     let tr = (how == Impl::Csr).then(|| Transpose::new(&f, ntx));
@@ -270,6 +297,48 @@ fn run(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
         t1.elapsed().as_secs_f64()
     );
     curr
+}
+
+/// Bootstrap replicates of the per-read EM on the component layout: each resamples the reads
+/// with replacement, as [`crate::em::bootstrap`] does, and runs that EM's rounds (at least 50
+/// before it may stop) with each read counted as often as it was drawn. One layout serves every
+/// replicate.
+pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f64>> {
+    let span = span!(tracing::Level::INFO, "bootstrap");
+    let _guard = span.enter();
+    info!("will collect {num_boot} bootstraps");
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(nthreads)
+        .build()
+        .unwrap();
+    pool.install(|| {
+        let ntx = em_info.txp_info.len();
+        let f = Flat::new(em_info);
+        let plan = em_components::Plan::new(|k| f.target(k), |k| f.w(k), f.off, ntx, true);
+        let total_weight = em_info.eq_map.num_aligned_reads() as f64;
+        let init = match em_info.init_abundances {
+            Some(ref v) => v.clone(),
+            None => vec![total_weight / ntx as f64; ntx],
+        };
+        (0..num_boot)
+            .into_par_iter()
+            .map(|i| {
+                info!("evaluating bootstrap replicate {}", i);
+                let mut mult = vec![0.0_f64; f.nreads()];
+                for r in crate::bootstrap::get_sample_inds(f.nreads(), &mut rand::rng()) {
+                    mult[r] += 1.0;
+                }
+                em_components::run(
+                    &plan,
+                    em_components::Counts::Of(&mult),
+                    &init,
+                    em_info.max_iter,
+                    em_info.convergence_thresh,
+                    50,
+                )
+            })
+            .collect()
+    })
 }
 
 /// One iteration: each chunk accumulates into its own buffer; buffers are summed per block of

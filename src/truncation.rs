@@ -896,27 +896,15 @@ pub fn em(em_info: &EMInfo, presence: Option<PresenceOpts>, nthreads: usize) -> 
         .unwrap();
     pool.install(|| {
         let f = Flat::new(em_info);
-        let nreads = f.off.len() - 1;
-        let sample = sample_reads();
-        let start = if sample > 0 && nreads > sample && Layout::can_freeze_default() {
-            let k = nreads.div_ceil(sample);
-            let (a, par) = {
-                let sub = f.every(k);
-                info!(
-                    "estimating the positional parameters on one read in {k} ({} reads)",
-                    (sub.off.len() - 1).to_formatted_string(&Locale::en)
-                );
-                let share = (sub.off.len() - 1) as f64 / nreads as f64;
-                run_from(em_info, &sub, None, None, Start::EstimateOnly(share))
-            };
-            // The sample's tables are freed; return them to the OS before the full-data ones
-            // are built (the allocator would otherwise keep them resident for a while).
-            crate::util::oarfish_types::release_freed_memory();
-            Start::Frozen(Box::new(par), warm_start(&a, nreads as f64))
-        } else {
-            Start::Estimate
-        };
-        let (counts, par) = run_from(em_info, &f, None, presence, start);
+        let sample = Sample::of(&f);
+        if let Some(s) = &sample {
+            info!(
+                "estimating the positional parameters on one read in {} ({} reads)",
+                s.k,
+                (s.f.off.len() - 1).to_formatted_string(&Locale::en)
+            );
+        }
+        let (counts, par) = fit(em_info, &f, sample.as_ref(), None, presence);
         info!(
             "truncation model: 3'-anchored {:.3} (mean length {:.0} nt), 5'-anchored {:.3} \
              (mean length {:.0} nt), full length {:.3}, uniformly placed {:.3} (mean length {:.0} nt); \
@@ -935,8 +923,66 @@ pub fn em(em_info: &EMInfo, presence: Option<PresenceOpts>, nthreads: usize) -> 
     })
 }
 
+/// Every `k`-th read of `f` (see [`SAMPLE_READS`]), on which the positional parameters are
+/// estimated when `f` has more reads than that.
+struct Sample {
+    f: Flat<'static>,
+    k: usize,
+}
+
+impl Sample {
+    fn of(f: &Flat) -> Option<Sample> {
+        let (nreads, sample) = (f.off.len() - 1, sample_reads());
+        (sample > 0 && nreads > sample && Layout::can_freeze_default()).then(|| {
+            let k = nreads.div_ceil(sample);
+            Sample { f: f.every(k), k }
+        })
+    }
+}
+
+/// Abundances and positional parameters for the reads of `f`, each counted `mult` times (once
+/// if `None`): with a `sample`, the parameters are estimated on it and the EM over all reads
+/// starts with them fixed, from the sample's abundances ([`Start::Frozen`]); else they are
+/// estimated on all reads.
+fn fit(
+    em_info: &EMInfo,
+    f: &Flat,
+    sample: Option<&Sample>,
+    mult: Option<&[u32]>,
+    presence: Option<PresenceOpts>,
+) -> (Vec<f64>, Params) {
+    let nreads = f.off.len() - 1;
+    let start = match sample {
+        Some(s) => {
+            let sub_mult: Option<Vec<u32>> =
+                mult.map(|m| (0..nreads).step_by(s.k).map(|r| m[r]).collect());
+            let (reads, sub_reads) = match (mult, &sub_mult) {
+                (Some(m), Some(sm)) => (
+                    m.iter().map(|&x| x as f64).sum::<f64>(),
+                    sm.iter().map(|&x| x as f64).sum::<f64>(),
+                ),
+                _ => (nreads as f64, (s.f.off.len() - 1) as f64),
+            };
+            let (a, par) = run_from(
+                em_info,
+                &s.f,
+                sub_mult.as_deref(),
+                None,
+                Start::EstimateOnly(sub_reads / reads),
+            );
+            // The sample's tables are freed; return them to the OS before the full-data ones
+            // are built (the allocator would otherwise keep them resident for a while).
+            crate::util::oarfish_types::release_freed_memory();
+            Start::Frozen(Box::new(par), warm_start(&a, reads))
+        }
+        None => Start::Estimate,
+    };
+    run_from(em_info, f, mult, presence, start)
+}
+
 /// Bootstrap replicates under the truncation-aware model. Each replicate resamples the reads
-/// with replacement and re-fits both the abundances and the positional parameters, so the
+/// with replacement and re-fits both the abundances and the positional parameters (on the same
+/// sample of reads as the point estimate, with the replicate's multiplicities), so the
 /// parameters' uncertainty propagates into the replicates.
 pub fn bootstrap(
     em_info: &EMInfo,
@@ -954,6 +1000,8 @@ pub fn bootstrap(
     pool.install(|| {
         let f = Flat::new(em_info);
         let nreads = f.off.len() - 1;
+        // The same reads make each replicate's sample, with the replicate's multiplicities.
+        let sample = Sample::of(&f);
         let mut rng = rand::rng();
         (0..num_boot)
             .map(|i| {
@@ -961,7 +1009,7 @@ pub fn bootstrap(
                 for r in crate::bootstrap::get_sample_inds(nreads, &mut rng) {
                     mult[r] += 1;
                 }
-                let (counts, par) = run(em_info, &f, Some(&mult), presence);
+                let (counts, par) = fit(em_info, &f, sample.as_ref(), Some(&mult), presence);
                 info!("bootstrap replicate {i}: {par:?}");
                 counts
             })
@@ -1553,13 +1601,56 @@ fn sample_reads() -> usize {
         .unwrap_or(SAMPLE_READS)
 }
 
-fn run(
+/// The frozen-weight EM on the component layout of `crate::em_components`, with SQUAREM per
+/// component: from iteration `niter` and abundances `init` up to `max_iter`, with `plain_first`
+/// plain EM steps first (see [`PLAIN_FIRST`]). Each alignment's weight is its score probability times its
+/// positional likelihood under `par`, as in [`Fixed`], computed as the layout is built.
+#[allow(clippy::too_many_arguments)]
+fn frozen_on_components(
     em_info: &EMInfo,
     f: &Flat,
+    par: &Params,
+    init: &[f64],
     mult: Option<&[u32]>,
-    presence: Option<PresenceOpts>,
-) -> (Vec<f64>, Params) {
-    run_from(em_info, f, mult, presence, Start::Estimate)
+    niter: u32,
+    max_iter: u32,
+    plain_first: u32,
+) -> Vec<f64> {
+    let t0 = std::time::Instant::now();
+    let e = Exps::new(par, f.max_len());
+    let plan = crate::em_components::Plan::new(
+        |k| f.target(k),
+        |k| {
+            let g = f.geo(k);
+            g.p as f64 * par.terms(&g, &e).total()
+        },
+        &f.off,
+        em_info.txp_info.len(),
+        // `bulk` has ordered the reads by likeliest target.
+        false,
+    );
+    info!(
+        "frozen-weight EM on {} connected components, laid out in {:.2}s",
+        plan.n_components().to_formatted_string(&Locale::en),
+        t0.elapsed().as_secs_f64()
+    );
+    let n = mult.map_or(crate::em_components::Counts::Unit, |m| {
+        crate::em_components::Counts::OfU32(m)
+    });
+    let (out, rep) = crate::em_components::run_squarem(
+        &plan,
+        n,
+        init,
+        niter,
+        max_iter,
+        em_info.convergence_thresh,
+        plain_first,
+    );
+    info!(
+        "truncation EM: {} iterations; SQUAREM cycles over components {} extrapolated, {} rejected, {} plain",
+        rep.niter, rep.acc, rep.rej, rep.plain
+    );
+    out
 }
 
 fn run_from(
@@ -1585,6 +1676,26 @@ fn run_from(
         Start::EstimateOnly(share) => FREEZE_LL_GAIN * share,
         _ => FREEZE_LL_GAIN,
     };
+    // Once the parameters are frozen, the loop continues on the component layout
+    // (`crate::em_components`), with SQUAREM per component, unless the presence model (which
+    // couples all transcripts) is on or `OARFISH_EM_COMPONENTS=0`.
+    let on_components = presence.is_none() && crate::em_components::enabled();
+    let plain_first = if started_frozen { PLAIN_FIRST } else { 0 };
+    if let (true, Start::Frozen(par, _)) = (on_components, &start) {
+        let init: Vec<f64> = prev.iter().map(|x| x.load(Ordering::Relaxed)).collect();
+        drop((prev, curr));
+        let counts = frozen_on_components(
+            em_info,
+            f,
+            par,
+            &init,
+            mult,
+            0,
+            em_info.max_iter,
+            plain_first,
+        );
+        return (counts, (**par).clone());
+    }
     let (mut par, mut lay, mut frozen, estimate_only) = match start {
         Start::Frozen(par, _) => {
             let fx = Fixed::new(f, &par);
@@ -1616,7 +1727,6 @@ fn run_from(
         Vec::new()
     };
     let mut sq = Squarem::new(tinfo.len());
-    let plain_first = if started_frozen { PLAIN_FIRST } else { 0 };
     while niter < em_info.max_iter {
         if let Some(p) = &mut pres {
             refresh_presence(
@@ -1655,7 +1765,6 @@ fn run_from(
                 };
                 par = next;
                 if can_freeze && still >= FREEZE_AFTER {
-                    let fx = Fixed::new(f, &par);
                     info!(
                         "truncation parameters frozen after {} iterations: {:?}",
                         niter + 1,
@@ -1665,6 +1774,36 @@ fn run_from(
                         let a = curr.iter().map(|x| x.load(Ordering::Relaxed)).collect();
                         return (a, par);
                     }
+                    if on_components {
+                        // Continue from this iteration's result as the loop would: stop if
+                        // its convergence test passes, else go on from the next iteration.
+                        drop(lay);
+                        let mut rel_diff = 0.0_f64;
+                        for (p, c) in prev.iter().zip(&curr) {
+                            let pc = p.load(Ordering::Relaxed);
+                            if pc > constants::MIN_READ_THRESH {
+                                rel_diff =
+                                    rel_diff.max((c.load(Ordering::Relaxed) - pc).abs() / pc);
+                            }
+                        }
+                        let done = rel_diff < em_info.convergence_thresh && niter > 1;
+                        let init: Vec<f64> =
+                            curr.iter().map(|x| x.load(Ordering::Relaxed)).collect();
+                        drop((prev, curr));
+                        let max_iter = if done { niter + 1 } else { em_info.max_iter };
+                        let counts = frozen_on_components(
+                            em_info,
+                            f,
+                            &par,
+                            &init,
+                            mult,
+                            niter + 1,
+                            max_iter,
+                            0,
+                        );
+                        return (counts, par);
+                    }
+                    let fx = Fixed::new(f, &par);
                     lay = std::mem::replace(&mut lay, Layout::Atomic).frozen(&fx);
                     frozen = Some(fx);
                 }

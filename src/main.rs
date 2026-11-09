@@ -22,6 +22,7 @@ mod alignment_parser;
 mod bootstrap;
 mod bulk;
 mod em;
+mod em_components;
 mod em_read;
 mod eq_classes;
 mod presence;
