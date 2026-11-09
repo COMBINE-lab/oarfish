@@ -9,9 +9,11 @@
 //! per-block outputs and calls `stitch` on them in block order.
 //!
 //! The records, their order and their fields are exactly what [`noodles_bam::io::Reader`]
-//! reads from the same stream: the records are read with that reader, over the record bytes.
-//! As in that reader, a record block size of 0 ends the stream, and a stream that ends inside
-//! a record is an error.
+//! reads from the same stream: each record is read in place from the inflated block (a
+//! [`RawRecord`] over its bytes, which reads every field as `noodles_bam::Record` reads it),
+//! and only a record cut by a block end is first joined into a buffer. As in that reader, a
+//! record block size of 0 ends the stream, and a stream that ends inside a record is an
+//! error.
 
 use std::fs::File;
 use std::io::{self, BufReader, Read};
@@ -19,7 +21,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 
 use crossbeam::channel;
-use noodles_bam as bam;
 
 /// What a worker builds from the records of one block.
 pub trait BlockOutput: Default + Send {
@@ -231,7 +232,6 @@ fn block_size_at(src: &[u8]) -> usize {
 struct Worker {
     inflater: flate2::Decompress,
     spare: Vec<u8>,
-    rec: bam::Record,
     first_skip: usize,
 }
 
@@ -252,7 +252,7 @@ impl Worker {
     ) -> Done<O>
     where
         O: BlockOutput,
-        W: Fn(&bam::Record, &mut O),
+        W: Fn(&RawRecord<'_>, &mut O),
     {
         if carry.state == ChainState::Failed {
             chain.put(idx + 1, carry);
@@ -347,11 +347,11 @@ impl Worker {
         out.clear();
         let mut res = Ok(());
         if let Some(s) = straddle {
-            res = read_records(&s, &mut self.rec, &mut out, work);
+            res = read_records(&s, &mut out, work);
             self.spare = s;
         }
         if res.is_ok() {
-            res = read_records(&d[start..end], &mut self.rec, &mut out, work);
+            res = read_records(&d[start..end], &mut out, work);
         }
         Done {
             idx,
@@ -361,16 +361,273 @@ impl Worker {
     }
 }
 
-/// Calls `work` on each record of `src`, a whole number of length-prefixed records.
-fn read_records<O, W>(src: &[u8], rec: &mut bam::Record, out: &mut O, work: &W) -> io::Result<()>
+/// Calls `work` on each record of `src`, a whole number of length-prefixed records, read in
+/// place, with the outcomes of `noodles_bam::io::Reader::read_record` over the same bytes: the
+/// end of `src` or a block size of 0 ends the records, a cut length prefix or record is an
+/// error.
+fn read_records<O, W>(mut src: &[u8], out: &mut O, work: &W) -> io::Result<()>
 where
-    W: Fn(&bam::Record, &mut O),
+    W: Fn(&RawRecord<'_>, &mut O),
 {
-    let mut reader = bam::io::Reader::from(src);
-    while reader.read_record(rec)? != 0 {
-        work(rec, out);
+    loop {
+        if src.is_empty() {
+            return Ok(());
+        }
+        if src.len() < 4 {
+            return Err(cut_record());
+        }
+        let bs = block_size_at(src);
+        if bs == 0 {
+            return Ok(());
+        }
+        let rest = &src[4..];
+        if rest.len() < bs {
+            return Err(cut_record());
+        }
+        let (buf, next) = rest.split_at(bs);
+        work(&RawRecord::new(buf)?, out);
+        src = next;
     }
-    Ok(())
+}
+
+fn cut_record() -> io::Error {
+    io::Error::new(io::ErrorKind::UnexpectedEof, "failed to fill whole buffer")
+}
+
+/// One BAM record, read in place from its bytes (those after its block size): each field is
+/// read as `noodles_bam::Record` reads it from the same bytes, and only when asked for.
+#[derive(Clone, Copy)]
+pub struct RawRecord<'a> {
+    buf: &'a [u8],
+    name_end: usize,
+    cigar_end: usize,
+    sequence_end: usize,
+    quality_scores_end: usize,
+}
+
+impl<'a> RawRecord<'a> {
+    const NAME_START: usize = 32;
+
+    /// Indexes the record's fields, failing as `noodles_bam` does on a record too short for
+    /// its fixed fields or for the lengths they give.
+    #[inline]
+    pub fn new(buf: &'a [u8]) -> io::Result<Self> {
+        if buf.len() < Self::NAME_START {
+            return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+        }
+        let name_end = Self::NAME_START + usize::from(buf[8]);
+        let cigar_op_count = usize::from(u16::from_le_bytes([buf[12], buf[13]]));
+        let cigar_end = name_end + 4 * cigar_op_count;
+        let base_count = usize::try_from(u32::from_le_bytes(buf[16..20].try_into().unwrap()))
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let sequence_end = cigar_end + base_count.div_ceil(2);
+        let quality_scores_end = sequence_end + base_count;
+        if buf.len() < quality_scores_end {
+            return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+        }
+        Ok(Self {
+            buf,
+            name_end,
+            cigar_end,
+            sequence_end,
+            quality_scores_end,
+        })
+    }
+
+    #[inline]
+    fn i32_at(&self, i: usize) -> i32 {
+        i32::from_le_bytes(self.buf[i..i + 4].try_into().unwrap())
+    }
+
+    /// The reference sequence id as stored (`None`: -1, no reference).
+    #[inline]
+    pub fn reference_sequence_id(&self) -> Option<i32> {
+        match self.i32_at(0) {
+            -1 => None,
+            n => Some(n),
+        }
+    }
+
+    /// The zero-based alignment start as stored (`None`: -1, no position).
+    #[inline]
+    pub fn alignment_start(&self) -> Option<i32> {
+        match self.i32_at(4) {
+            -1 => None,
+            n => Some(n),
+        }
+    }
+
+    #[inline]
+    pub fn flags(&self) -> u16 {
+        u16::from_le_bytes([self.buf[14], self.buf[15]])
+    }
+
+    /// The read name without its NUL (`None`: the missing name `*`).
+    #[inline]
+    pub fn name(&self) -> Option<&'a [u8]> {
+        match &self.buf[Self::NAME_START..self.name_end] {
+            b"*\0" => None,
+            n => Some(n.strip_suffix(&[0]).unwrap_or(n)),
+        }
+    }
+
+    /// The number of bases (`l_seq`).
+    #[inline]
+    pub fn sequence_len(&self) -> usize {
+        self.quality_scores_end - self.sequence_end
+    }
+
+    /// The 4-bit code of base `i` (< `sequence_len()`).
+    #[inline]
+    pub fn base_code(&self, i: usize) -> u8 {
+        let b = self.buf[self.cigar_end + i / 2];
+        if i.is_multiple_of(2) {
+            b >> 4
+        } else {
+            b & 0x0f
+        }
+    }
+
+    /// The packed CIGAR ops (`len << 4 | kind`, 4 bytes each), as `noodles_bam::Record::cigar`
+    /// gives them: a record whose stored CIGAR is the placeholder `<l_seq>S<n>N` and whose data
+    /// holds a `CG:B` array has that array's bytes.
+    #[inline]
+    pub fn cigar(&self) -> &'a [u8] {
+        const SKIP: u32 = 3;
+        const SOFT_CLIP: u32 = 4;
+        let src = &self.buf[self.name_end..self.cigar_end];
+        if src.len() == 8 {
+            let op_1 = u32::from_le_bytes(src[..4].try_into().unwrap());
+            let op_2 = u32::from_le_bytes(src[4..].try_into().unwrap());
+            if op_1 & 0x0f == SOFT_CLIP
+                && (op_1 >> 4) as usize == self.sequence_len()
+                && op_2 & 0x0f == SKIP
+                && let Ok(Some(buf)) = raw_cigar_tag(self.data())
+            {
+                return buf;
+            }
+        }
+        src
+    }
+
+    /// The optional fields' bytes.
+    #[inline]
+    pub fn data(&self) -> &'a [u8] {
+        &self.buf[self.quality_scores_end..]
+    }
+
+    /// The integer value of tag `tag`, as `noodles_bam::record::Data::get` and `Value::as_int`
+    /// give it: `None` when no field has the tag, `Some(Ok(None))` when its value is not an
+    /// integer, and an error when a field up to it cannot be decoded.
+    #[inline]
+    pub fn int_tag(&self, tag: [u8; 2]) -> Option<io::Result<Option<i64>>> {
+        let mut src = self.data();
+        while !src.is_empty() {
+            match decode_field(&mut src, tag) {
+                Ok(Some(v)) => return Some(Ok(v)),
+                Ok(None) => {}
+                Err(e) => return Some(Err(e)),
+            }
+        }
+        None
+    }
+}
+
+fn take_bytes<'a>(src: &mut &'a [u8], n: usize) -> io::Result<&'a [u8]> {
+    if src.len() < n {
+        return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+    }
+    let (a, b) = src.split_at(n);
+    *src = b;
+    Ok(a)
+}
+
+/// The raw bytes of a `B` array value (after its type byte), as `noodles_bam` decodes them.
+fn raw_array<'a>(src: &mut &'a [u8]) -> io::Result<&'a [u8]> {
+    let width = match take_bytes(src, 1)?[0] {
+        b'c' | b'C' => 1,
+        b's' | b'S' => 2,
+        b'i' | b'I' | b'f' => 4,
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid subtype",
+            ));
+        }
+    };
+    let n = u32::from_le_bytes(take_bytes(src, 4)?.try_into().unwrap());
+    let n = usize::try_from(n).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    take_bytes(src, n * width)
+}
+
+/// Skips a value of type `ty` as `noodles_bam`'s `decode_value` reads it (with its errors),
+/// returning it as `Value::as_int` gives it.
+#[inline]
+fn decode_value(src: &mut &[u8], ty: u8) -> io::Result<Option<i64>> {
+    Ok(match ty {
+        b'A' => {
+            take_bytes(src, 1)?;
+            None
+        }
+        b'c' => Some(i64::from(take_bytes(src, 1)?[0] as i8)),
+        b'C' => Some(i64::from(take_bytes(src, 1)?[0])),
+        b's' => Some(i64::from(i16::from_le_bytes(
+            take_bytes(src, 2)?.try_into().unwrap(),
+        ))),
+        b'S' => Some(i64::from(u16::from_le_bytes(
+            take_bytes(src, 2)?.try_into().unwrap(),
+        ))),
+        b'i' => Some(i64::from(i32::from_le_bytes(
+            take_bytes(src, 4)?.try_into().unwrap(),
+        ))),
+        b'I' => Some(i64::from(u32::from_le_bytes(
+            take_bytes(src, 4)?.try_into().unwrap(),
+        ))),
+        b'f' => {
+            take_bytes(src, 4)?;
+            None
+        }
+        b'Z' | b'H' => {
+            let len = src.iter().position(|&b| b == 0).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "string not NUL terminated")
+            })?;
+            *src = &src[len + 1..];
+            None
+        }
+        b'B' => {
+            raw_array(src)?;
+            None
+        }
+        _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid type")),
+    })
+}
+
+/// Decodes one field as `noodles_bam`'s `decode_field` does; when its tag is `want`, returns
+/// its value as `Value::as_int` gives it.
+#[inline]
+fn decode_field(src: &mut &[u8], want: [u8; 2]) -> io::Result<Option<Option<i64>>> {
+    let tag = take_bytes(src, 2)?;
+    let ty = take_bytes(src, 1)?[0];
+    let v = decode_value(src, ty)?;
+    Ok((tag == want).then_some(v))
+}
+
+/// The raw bytes of the first `CG:B` array in `src`, as `noodles_bam`'s `get_raw_cigar` finds
+/// them (an error when a field before it cannot be decoded).
+fn raw_cigar_tag(mut src: &[u8]) -> io::Result<Option<&[u8]>> {
+    while !src.is_empty() {
+        let tag = take_bytes(&mut src, 2)?;
+        let ty = take_bytes(&mut src, 1)?[0];
+        if ty == b'B' {
+            let buf = raw_array(&mut src)?;
+            if tag == b"CG" {
+                return Ok(Some(buf));
+            }
+        } else {
+            decode_value(&mut src, ty)?;
+        }
+    }
+    Ok(None)
 }
 
 /// Reads the BAM records of `input` (a BGZF stream positioned at the start of a block, whose
@@ -387,7 +644,7 @@ pub fn for_each_block<O, W, S>(
 ) -> anyhow::Result<()>
 where
     O: BlockOutput,
-    W: Fn(&bam::Record, &mut O) + Sync,
+    W: Fn(&RawRecord<'_>, &mut O) + Sync,
     S: FnMut(&mut O) -> anyhow::Result<bool>,
 {
     let workers = workers.max(1);
@@ -437,7 +694,6 @@ where
                 let mut w = Worker {
                     inflater: flate2::Decompress::new(false),
                     spare: Vec::new(),
-                    rec: bam::Record::default(),
                     first_skip,
                 };
                 let mut data = Vec::<u8>::new();

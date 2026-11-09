@@ -1,4 +1,5 @@
 use crate::prog_opts::ProjProbSource;
+use crate::util::bgzf_records::RawRecord;
 use crate::util::constants::EMPTY_READ_NAME;
 use crate::util::oarfish_types::{AlnRecordLike, InMemoryAlignmentStore, TranscriptInfo};
 use crate::util::projection::projected_to_records;
@@ -6,6 +7,7 @@ use crate::util::read_ends::EndEvidence;
 use bramble_rs::g2t::G2TTree;
 use bramble_rs::{GenomicAlignment, ProjectionConfig, ProjectionContext, project_group_with};
 use noodles_bam as bam;
+use noodles_sam::alignment::record::Flags;
 use noodles_sam::alignment::record::cigar::op::Kind as CigarKind;
 use noodles_sam::header::record::value::map::tag;
 use noodles_sam::{Header, alignment::RecordBuf};
@@ -343,8 +345,8 @@ pub fn parse_alignments(
     // name-sorted input bam file (currently, aligned against the transcriptome).
     //
     // The work is pipelined (see `util::bgzf_records`): the workers that inflate the BGZF
-    // blocks also read each block's records (undecoded `bam::Record`s, whose fields are read
-    // from their bytes on demand) and take from each the few fields the filters and the store
+    // blocks also read each block's records (in place, as `RawRecord`s, whose fields are read
+    // from the inflated bytes on demand) and take from each the few fields the filters and the store
     // use (a `ParsedAln`, each read once), grouping a block's consecutive records of one read
     // name into runs. This thread joins the blocks' runs in input order into reads (a read cut
     // by a block end is joined here), checks the collation, and groups the reads into batches
@@ -379,7 +381,7 @@ pub fn parse_alignments(
             input.file,
             input.first_block_skip,
             input.workers,
-            |record: &bam::Record, out: &mut BlockReads| out.push(record, header, tail_evidence),
+            |record: &RawRecord<'_>, out: &mut BlockReads| out.push(record, header, tail_evidence),
             |out: &mut BlockReads| -> anyhow::Result<bool> {
                 n_records += out.n_records;
                 num_unmapped += out.n_unmapped;
@@ -501,18 +503,17 @@ impl BlockReads {
     /// skipped, records without a name skipped, and a record joins its read's alignments only
     /// when it has a reference.
     #[inline]
-    fn push(&mut self, record: &bam::Record, header: &Header, tail_evidence: bool) {
+    fn push(&mut self, record: &RawRecord<'_>, header: &Header, tail_evidence: bool) {
         self.n_records += 1;
         // unmapped reads don't contribute to quantification
         // but we track them.
-        if record.flags().is_unmapped() {
+        if Flags::from(record.flags()).is_unmapped() {
             self.n_unmapped += 1;
             return;
         }
         let Some(rname) = record.name() else {
             return;
         };
-        let rname: &[u8] = rname.as_ref();
         let same = self
             .runs
             .last()
@@ -559,30 +560,75 @@ struct ParsedAln {
     start: Option<u32>,
     span: Option<usize>,
     score: Option<i64>,
-    flags: noodles_sam::alignment::record::Flags,
+    flags: Flags,
     seq_len: usize,
     /// read only when tail-neutral scores are on; otherwise [`EndEvidence::UNKNOWN`]
     ends: EndEvidence,
 }
 
 impl ParsedAln {
-    fn new(rec: &bam::Record, header: &Header, tail_evidence: bool) -> Self {
+    /// Takes the fields from the record's bytes as the `noodles_bam::Record` backend of
+    /// [`AlnRecordLike`] reads them (a negative reference id or position is no valid one).
+    fn new(rec: &RawRecord<'_>, _header: &Header, tail_evidence: bool) -> Self {
+        let cigar = rec.cigar();
         Self {
-            ref_id: rec.ref_id(header).ok(),
-            start: rec
-                .alignment_start()
-                .and_then(|p| p.ok())
-                .map(|p| p.get() as u32 - 1),
-            span: rec.aln_span(),
-            score: rec.aln_score(),
-            flags: rec.flags(),
-            seq_len: rec.sequence().len(),
+            ref_id: rec
+                .reference_sequence_id()
+                .and_then(|n| usize::try_from(n).ok()),
+            start: rec.alignment_start().and_then(|n| u32::try_from(n).ok()),
+            span: raw_aln_span(cigar),
+            score: rec
+                .int_tag(*b"AS")
+                .expect("alignment record should have an AS tag")
+                .expect("could not get value"),
+            flags: Flags::from(rec.flags()),
+            seq_len: rec.sequence_len(),
             ends: if tail_evidence {
-                rec.end_evidence()
+                raw_end_evidence(rec, cigar)
             } else {
                 EndEvidence::UNKNOWN
             },
         }
+    }
+}
+
+/// The reference span of packed CIGAR ops (`len << 4 | kind`): M, D, N, = and X (kinds 0, 2,
+/// 3, 7 and 8) consume the reference; `None` for a span of 0.
+#[inline]
+fn raw_aln_span(cigar: &[u8]) -> Option<usize> {
+    const CONSUMES_REF: u32 = 1 << 0 | 1 << 2 | 1 << 3 | 1 << 7 | 1 << 8;
+    let (ops, _) = cigar.as_chunks::<4>();
+    let span: usize = ops
+        .iter()
+        .map(|b| u32::from_le_bytes(*b))
+        .filter(|n| CONSUMES_REF >> (n & 0xf) & 1 == 1)
+        .map(|n| (n >> 4) as usize)
+        .sum();
+    (span > 0).then_some(span)
+}
+
+/// What a record says about the read's ends (see [`crate::util::read_ends`]): its terminal
+/// clips (kinds 4 and 5) and, when it holds SEQ, the A-run at SEQ's right end, which is the
+/// molecule's tail whichever strand the read aligned to (SEQ is in reference orientation).
+#[inline]
+fn raw_end_evidence(rec: &RawRecord<'_>, ops: &[u8]) -> EndEvidence {
+    // the base symbols of the 4-bit codes, as `noodles_bam` decodes them
+    const BASES: &[u8; 16] = b"=ACMGRSVTWYHKDBN";
+    let clip = |op: Option<&[u8]>| {
+        op.map(|b| u32::from_le_bytes(b.try_into().expect("4-byte CIGAR op")))
+            .filter(|n| matches!(n & 0xf, 4 | 5))
+            .map_or(0, |n| n >> 4)
+    };
+    let n = rec.sequence_len();
+    EndEvidence {
+        clip_left: Some(clip(ops.get(..4))),
+        clip_right: Some(clip(ops.len().checked_sub(4).map(|i| &ops[i..]))),
+        tail: (n > 0).then(|| {
+            crate::util::read_ends::terminal_run(
+                (0..n).rev().map(|i| BASES[rec.base_code(i) as usize]),
+                b'A',
+            )
+        }),
     }
 }
 
