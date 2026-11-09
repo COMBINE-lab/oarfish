@@ -47,6 +47,7 @@ pub fn logistic_prob(
     let compute_txp_coverage_probs = |_i: usize, t: &mut TranscriptInfo| {
         let temp_prob: Vec<f64> = if *bin_width != 0 {
             assert!(!t.coverage_bins.is_empty());
+            t.settle_coverage();
             let min_cov = t.total_weight / 100.;
             t.coverage_bins.iter_mut().for_each(|elem| *elem += min_cov);
             let (bin_counts, bin_lengths) = t.get_normalized_counts_and_lengths();

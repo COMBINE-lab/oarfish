@@ -46,6 +46,29 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the same 1M-read sample as the point estimate. NanoSim NA12878 cDNA, 16 threads:
   8 replicates 18.5 s to 4.9 s (default model) and 115 s to 29 s (coverage model);
   4 replicates 123 s to 25 s (truncation model). Replicate spread is unchanged.
+- **Faster BAM parsing and EM inner loops.** The BAM is read by a BGZF pipeline of
+  oarfish's own: each of `-j` workers inflates a block (with libdeflate) and reads its
+  records in place, while a second thread filters the alignments and fills the store (and,
+  under `--model-coverage`, a third adds the coverage). The equivalence classes are built
+  in parallel, the header's seqcol digest is streamed and computed during the parse, and
+  the component EMs' and the truncation fit's inner loops do less work per class. Wall
+  time, 16 threads, from the component-layout EM above to now (median of 3):
+
+  | | NanoSim NA12878 cDNA | TKSM SQ2 |
+  |---|---|---|
+  | default model | 11.0 s to 3.6 s | 16.8 s to 5.4 s |
+  | coverage model | 13.4 s to 4.4 s | 25.0 s to 7.5 s |
+  | truncation model | 15.8 s to 7.5 s | 28.3 s to 14.1 s |
+
+  - At 4 threads, NanoSim NA12878 cDNA with the default model: 21.5 s to 13.0 s.
+  - Peak memory is within 1.5% on these runs. On the smaller Panel B simulations it
+    rises by up to 0.6 GB (H9 dRNA with the coverage model: 2.26 GB to 2.86 GB).
+  - The estimates are unchanged except for summation order: the per-read EM orders each
+    block's classes by size (NumReads move by at most 2.3e-8), and the truncation
+    model's estimates move by rounding (on the six Panel B simulations, Spearman changes
+    by -4e-5 to +7e-5 and MARD by at most 2e-5).
+  - libdeflate's C source is vendored by `libdeflate-sys` and built with the `cc` crate,
+    so the build still needs only a C compiler.
 
 ### Fixed
 

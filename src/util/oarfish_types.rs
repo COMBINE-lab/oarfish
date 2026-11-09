@@ -594,6 +594,71 @@ pub fn for_each_evidence_bin(
     }
 }
 
+/// A hint to bring the cache line holding `p` into the cache (all levels); it never faults
+/// and has no effect on any value, so `p` may point anywhere. `prefetcht0` on x86_64 (SSE,
+/// part of the baseline), `prfm pldl1keep` on aarch64, nothing elsewhere.
+#[inline(always)]
+pub fn prefetch_read<T>(p: *const T) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        use core::arch::x86_64::{_MM_HINT_T0, _mm_prefetch};
+        #[allow(unused_unsafe)]
+        // SAFETY: a prefetch does not access memory and cannot fault, whatever the address
+        unsafe {
+            _mm_prefetch::<_MM_HINT_T0>(p as *const i8)
+        };
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        // SAFETY: as above; `prfm` is a hint that cannot fault
+        unsafe {
+            core::arch::asm!(
+                "prfm pldl1keep, [{0}]",
+                in(reg) p,
+                options(nostack, preserves_flags, readonly)
+            );
+        }
+    }
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    {
+        let _ = p;
+    }
+}
+
+/// Prefetches the `TranscriptInfo` at `txps[tid]` (both cache lines its bytes can span),
+/// when `tid` is in range.
+#[inline(always)]
+pub fn prefetch_txp(txps: &[TranscriptInfo], tid: usize) {
+    if tid < txps.len() {
+        let p = txps.as_ptr().wrapping_add(tid) as *const u8;
+        prefetch_read(p);
+        prefetch_read(p.wrapping_add(std::mem::size_of::<TranscriptInfo>() - 1));
+    }
+}
+
+/// Makes the coverage adds that [`InMemoryAlignmentStore::add_group_deferring_coverage`]
+/// listed (`add_unit_interval` of each, in order), so a list applied in order gives the
+/// profiles and weights that `add_group` gives. Each add runs a chain of dependent cache
+/// misses: its `TranscriptInfo`, then that transcript's coverage bins and full-bin counts. The
+/// chain is prefetched ahead of the adds in two stages: the `TranscriptInfo`
+/// `PREFETCH_TXP_AHEAD` adds ahead, and, `PREFETCH_COV_AHEAD` ahead, the bins read through
+/// that (by then cached) entry. Prefetches change no value.
+pub fn add_coverage_adds(txps: &mut [TranscriptInfo], adds: &[AlnInfo]) {
+    const PREFETCH_TXP_AHEAD: usize = 16;
+    const PREFETCH_COV_AHEAD: usize = 8;
+    for (i, a) in adds.iter().enumerate() {
+        if let Some(n) = adds.get(i + PREFETCH_TXP_AHEAD) {
+            prefetch_txp(txps, n.ref_id as usize);
+        }
+        if let Some(n) = adds.get(i + PREFETCH_COV_AHEAD)
+            && let Some(t) = txps.get(n.ref_id as usize)
+        {
+            t.prefetch_unit_interval(n.start, n.end);
+        }
+        txps[a.ref_id as usize].add_unit_interval(a.start, a.end);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TranscriptInfo {
     pub len: NonZeroUsize,
@@ -601,6 +666,11 @@ pub struct TranscriptInfo {
     pub coverage_bins: Vec<f64>,
     pub coverage_prob: Vec<f64>,
     pub lenf: f64,
+    /// The fully covered bins of the alignments added by [`add_unit_interval`]
+    /// (Self::add_unit_interval) and not yet folded into `coverage_bins`, as a difference
+    /// array of counts (`nbins + 1` entries, wrapping; empty while there are none):
+    /// [`settle_coverage`](Self::settle_coverage) folds them in.
+    full_bin_diff: Vec<u32>,
 }
 
 impl TranscriptInfo {
@@ -612,6 +682,7 @@ impl TranscriptInfo {
             coverage_bins: vec![0.0_f64; 10],
             coverage_prob: Vec::new(),
             lenf: 0_f64,
+            full_bin_diff: Vec::new(),
         }
     }
 
@@ -622,6 +693,7 @@ impl TranscriptInfo {
             coverage_bins: vec![0.0_f64; 10],
             coverage_prob: Vec::new(),
             lenf: len.get() as f64,
+            full_bin_diff: Vec::new(),
         }
     }
     pub fn with_len_and_bin_width(len: NonZeroUsize, bin_width: u32) -> Self {
@@ -631,6 +703,7 @@ impl TranscriptInfo {
             coverage_bins: vec![0.0_f64; ((len.get() as f64) / (bin_width as f64)).ceil() as usize],
             coverage_prob: Vec::new(),
             lenf: len.get() as f64,
+            full_bin_diff: Vec::new(),
         }
     }
 
@@ -638,6 +711,10 @@ impl TranscriptInfo {
     /// [`for_each_bin_overlap`]).
     #[inline(always)]
     pub fn get_normalized_counts_and_lengths(&self) -> (Vec<f32>, Vec<f32>) {
+        debug_assert!(
+            self.full_bin_diff.is_empty(),
+            "coverage read before settle_coverage"
+        );
         let n = self.coverage_bins.len();
         let w = (self.lenf / n.max(1) as f64) as f32;
         let cov_f32 = self.coverage_bins.iter().map(|f| *f as f32).collect();
@@ -646,7 +723,9 @@ impl TranscriptInfo {
 
     /// Adds an alignment spanning `[start, stop)` (zero-based, half-open) to the coverage
     /// profile: each of its evidence bins ([`for_each_evidence_bin`]) gains `weight` times the
-    /// fraction of the bin it covers.
+    /// fraction of the bin it covers. The parse uses [`add_unit_interval`](Self::add_unit_interval);
+    /// the tests check it against this.
+    #[cfg(test)]
     #[inline(always)]
     pub fn add_interval(&mut self, start: u32, stop: u32, weight: f64) {
         let (lenf, n) = (self.lenf, self.coverage_bins.len());
@@ -657,9 +736,134 @@ impl TranscriptInfo {
         self.total_weight += weight;
     }
 
+    /// `add_interval` with weight 1, the same evidence bins and the same
+    /// fractions, but the bins the alignment covers fully (fraction exactly 1) are only marked
+    /// in a difference array, in O(1), instead of walked one by one: `coverage_bins` holds just
+    /// the partly covered end bins until [`settle_coverage`](Self::settle_coverage) adds the
+    /// counts of the full ones. Each bin's total is the same sum regrouped (counts apart from
+    /// fractions), so it can differ from `add_interval`'s in the last bits.
+    #[inline(always)]
+    pub fn add_unit_interval(&mut self, start: u32, stop: u32) {
+        self.total_weight += 1.0_f64;
+        let (len, n) = (self.lenf, self.coverage_bins.len());
+        if n == 0 || len <= 0.0 {
+            return;
+        }
+        // the bin arithmetic of `for_each_bin_overlap`, step for step
+        let w = len / n as f64;
+        let (st, en) = (start as f64, stop as f64);
+        let (s, e) = (st.min(en).max(0.0), st.max(en).min(len));
+        if e <= s {
+            return;
+        }
+        let first = ((s / w).floor() as usize).min(n - 1);
+        let last = ((e / w).ceil() as usize).clamp(first + 1, n);
+        let bs = |b: usize| b as f64 * w;
+        let be = |b: usize| ((b + 1) as f64 * w).min(len);
+        // [lo, hi): the bins with s <= bs and be <= e (both bounds are monotone in b). Their
+        // overlap is exactly be - bs, so their fraction is exactly 1 (be > bs: w is at least
+        // 0.1 here, far above the rounding of b * w).
+        let mut lo = first;
+        while lo < last && bs(lo) < s {
+            lo += 1;
+        }
+        let mut hi = ((e / w).floor() as usize).clamp(lo, last);
+        while hi > lo && be(hi - 1) > e {
+            hi -= 1;
+        }
+        while hi < last && be(hi) <= e {
+            hi += 1;
+        }
+        // The few bins outside [lo, hi) take `for_each_evidence_bin`'s path: each overlapped
+        // one is held back until the next shows whether it was the last.
+        const FULL: f64 = 1.0 - 1e-9;
+        let frac = |b: usize| {
+            let ov = e.min(be(b)) - s.max(bs(b));
+            (ov > 0.0).then(|| ov / (be(b) - bs(b)))
+        };
+        let bins = &mut self.coverage_bins;
+        let (mut held, mut any_full): (Option<(usize, f64)>, bool) = (None, hi > lo);
+        for b in first..lo {
+            if let Some(f) = frac(b) {
+                if let Some((hb, hf)) = held.replace((b, f)) {
+                    bins[hb] += hf;
+                }
+                any_full |= f >= FULL;
+            }
+        }
+        if hi > lo {
+            if let Some((hb, hf)) = held.take() {
+                bins[hb] += hf;
+            }
+            if self.full_bin_diff.is_empty() {
+                self.full_bin_diff = vec![0_u32; n + 1];
+            }
+            self.full_bin_diff[lo] = self.full_bin_diff[lo].wrapping_add(1);
+            self.full_bin_diff[hi] = self.full_bin_diff[hi].wrapping_sub(1);
+        }
+        for b in hi..last {
+            if let Some(f) = frac(b) {
+                if let Some((hb, hf)) = held.replace((b, f)) {
+                    bins[hb] += hf;
+                }
+                any_full |= f >= FULL;
+            }
+        }
+        if let Some((b, f)) = held
+            && !(f < FULL && any_full)
+        {
+            bins[b] += f;
+        }
+    }
+
+    /// Folds the full-bin counts held by [`add_unit_interval`](Self::add_unit_interval) into
+    /// `coverage_bins` (one prefix pass). Readers of the coverage profile call this first; a
+    /// second call does nothing.
+    pub fn settle_coverage(&mut self) {
+        if self.full_bin_diff.is_empty() {
+            return;
+        }
+        let mut run = 0_u32;
+        for (c, d) in self.coverage_bins.iter_mut().zip(&self.full_bin_diff) {
+            run = run.wrapping_add(*d);
+            *c += run as f64;
+        }
+        self.full_bin_diff = Vec::new();
+    }
+
+    /// Software-prefetches the coverage state that
+    /// [`add_unit_interval(start, stop)`](Self::add_unit_interval) is about to touch: the
+    /// alignment's first and last coverage bins and the `full_bin_diff` words near its first
+    /// and last full bins. The bins are estimated (one division, two multiplications) and
+    /// clamped into range; a prefetch has no effect on any value, so an estimate that is off
+    /// by a bin, or an alignment the filters later drop, costs at most a wasted line fill.
+    #[inline(always)]
+    pub fn prefetch_unit_interval(&self, start: u32, stop: u32) {
+        let n = self.coverage_bins.len();
+        if n == 0 || self.lenf <= 0.0 {
+            return;
+        }
+        let inv_w = n as f64 / self.lenf;
+        let last = n - 1;
+        // `as usize` saturates (a negative or NaN product gives 0)
+        let first = ((start as f64 * inv_w) as usize).min(last);
+        let end = ((stop as f64 * inv_w) as usize).min(last);
+        let bins = self.coverage_bins.as_ptr();
+        prefetch_read(bins.wrapping_add(first));
+        prefetch_read(bins.wrapping_add(end));
+        let diff = &self.full_bin_diff;
+        if !diff.is_empty() {
+            let d = diff.as_ptr();
+            let m = diff.len() - 1;
+            prefetch_read(d.wrapping_add((first + 1).min(m)));
+            prefetch_read(d.wrapping_add(end.min(m)));
+        }
+    }
+
     #[allow(dead_code)]
     pub fn clear_coverage_dist(&mut self) {
         self.coverage_bins.fill(0.0_f64);
+        self.full_bin_diff = Vec::new();
         self.total_weight = 0.0_f64;
     }
 }
@@ -973,19 +1177,53 @@ impl<'h> InMemoryAlignmentStore<'h> {
             if self.filter_opts.model_coverage {
                 for a in alns.iter() {
                     let tid = a.ref_id as usize;
-                    txps[tid].add_interval(a.start, a.end, 1.0_f64);
+                    txps[tid].add_unit_interval(a.start, a.end);
                 }
             }
-            self.alignments.extend_from_slice(alns);
-            self.as_probabilities.extend_from_slice(as_probs);
-            if alns.len() > self.zeros.len() {
-                self.zeros.resize(alns.len(), 0.0);
-            }
-            self.boundaries.push(self.alignments.len());
+            self.append_filtered(alns, as_probs);
             true
         } else {
             false
         }
+    }
+
+    /// [`add_group`](Self::add_group) for a caller that does not hold the transcripts: the
+    /// filters read each transcript's length through `len_of` (`len_of(tid)` is
+    /// `txps[tid].len.get()`), and under the coverage model the kept alignments are appended
+    /// to `coverage_adds` instead of added to the coverage profiles. Passing those lists, in
+    /// order, to [`add_coverage_adds`] makes the same adds in the same order as `add_group`.
+    #[inline(always)]
+    pub fn add_group_deferring_coverage<T: AlnRecordLike + std::fmt::Debug>(
+        &mut self,
+        len_of: impl Fn(usize) -> usize,
+        ag: &mut Vec<T>,
+        coverage_adds: &mut Vec<AlnInfo>,
+    ) -> bool {
+        if ag.is_empty() {
+            return false;
+        }
+        let (alns, as_probs) =
+            self.filter_opts
+                .filter_by_len(&mut self.discard_table, self.aln_header, len_of, ag);
+        if alns.is_empty() {
+            return false;
+        }
+        if self.filter_opts.model_coverage {
+            coverage_adds.extend_from_slice(&alns);
+        }
+        self.append_filtered(&alns, &as_probs);
+        true
+    }
+
+    /// Appends one read's kept (non-empty) alignments and their probabilities.
+    #[inline(always)]
+    fn append_filtered(&mut self, alns: &[AlnInfo], as_probs: &[f32]) {
+        self.alignments.extend_from_slice(alns);
+        self.as_probabilities.extend_from_slice(as_probs);
+        if alns.len() > self.zeros.len() {
+            self.zeros.resize(alns.len(), 0.0);
+        }
+        self.boundaries.push(self.alignments.len());
     }
 
     #[inline(always)]
@@ -1214,6 +1452,19 @@ impl AlignmentFilters {
         txps: &[TranscriptInfo],
         ag: &mut Vec<T>,
     ) -> (Vec<AlnInfo>, Vec<f32>) {
+        self.filter_by_len(discard_table, aln_header, |tid| txps[tid].len.get(), ag)
+    }
+
+    /// [`filter`](Self::filter), reading each transcript's length (the only thing it reads
+    /// of the transcripts) through `len_of`: `len_of(tid)` is `txps[tid].len.get()`.
+    #[inline(always)]
+    pub fn filter_by_len<T: AlnRecordLike + std::fmt::Debug>(
+        &mut self,
+        discard_table: &mut DiscardTable,
+        aln_header: &Header,
+        len_of: impl Fn(usize) -> usize,
+        ag: &mut Vec<T>,
+    ) -> (Vec<AlnInfo>, Vec<f32>) {
         // track the best score of any alignment we've seen
         // so far for this read (this will designate the
         // "primary" alignment for the read).
@@ -1308,8 +1559,7 @@ impl AlignmentFilters {
                 }
 
                 // not too far from the 3' end
-                let filt_3p =
-                    (x.aln_end() as i64) <= (txps[tid].len.get() as i64 - self.three_prime_clip);
+                let filt_3p = (x.aln_end() as i64) <= (len_of(tid) as i64 - self.three_prime_clip);
                 if filt_3p {
                     discard_table.discard_3p += 1;
                     return false;

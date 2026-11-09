@@ -222,7 +222,7 @@ pub fn quantify(
         None,
         txps,
         txps_name,
-        seqcol_digest,
+        seqcol_digest.into(),
         elapsed,
         args,
     )
