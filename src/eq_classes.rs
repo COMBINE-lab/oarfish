@@ -15,14 +15,17 @@
 use num_format::{Locale, ToFormattedString};
 use rand::rng as trng;
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxBuildHasher, FxHashMap};
+use std::hash::BuildHasher;
 use tracing::{info, span, trace};
 
 use crate::bootstrap;
 use crate::em_components::{self, Counts, Plan};
 use crate::presence::{Presence, PresenceOpts};
 use crate::util::constants;
-use crate::util::oarfish_types::{InMemoryAlignmentStore, TranscriptInfo};
+use crate::util::oarfish_types::{
+    InMemoryAlignmentStore, InMemoryAlignmentStoreIter, TranscriptInfo,
+};
 
 /// Reads collapsed by their (target, probability) multisets.
 pub struct EqClasses {
@@ -42,53 +45,287 @@ pub struct EqClasses {
     t_prob: Vec<f32>,
 }
 
-impl EqClasses {
-    pub fn from_store(store: &InMemoryAlignmentStore, ntx: usize) -> Self {
-        Self::from_reads(
-            store
-                .iter()
-                .map(|(alns, probs, _)| alns.iter().zip(probs).map(|(a, &p)| (a.ref_id, p))),
-            store.len(),
-            ntx,
-        )
-    }
+/// Reads per chunk below which [`EqClasses::from_store`] adds no further chunk.
+const MIN_CHUNK_READS: usize = 16_384;
 
-    /// Classes from each read's (target, probability) pairs, over `ntx` transcripts.
-    fn from_reads<R, I>(reads: R, nreads: usize, ntx: usize) -> Self
+/// One chunk's classes, numbered in order of first occurrence within the chunk.
+struct Local {
+    /// Sorted (target, probability bits) key of local class `c`: `keys[offsets[c]..offsets[c + 1]]`.
+    keys: Vec<(u32, u32)>,
+    offsets: Vec<usize>,
+    /// Reads per local class.
+    counts: Vec<u32>,
+    /// Local class of each of the chunk's reads.
+    read_class: Vec<u32>,
+}
+
+impl Local {
+    fn build<R, I>(reads: R, nreads: usize) -> Self
     where
         R: Iterator<Item = I>,
         I: Iterator<Item = (u32, f32)>,
     {
         let mut ids: FxHashMap<Vec<(u32, u32)>, u32> = FxHashMap::default();
-        let mut eqc = EqClasses {
-            targets: Vec::new(),
-            probs: Vec::new(),
+        let mut local = Local {
+            keys: Vec::new(),
             offsets: vec![0],
             counts: Vec::new(),
             read_class: Vec::with_capacity(nreads),
-            t_off: Vec::new(),
-            t_class: Vec::new(),
-            t_prob: Vec::new(),
         };
         let mut key: Vec<(u32, u32)> = Vec::new();
         for read in reads {
             key.clear();
             key.extend(read.map(|(t, p)| (t, p.to_bits())));
             key.sort_unstable();
-            let next = eqc.counts.len() as u32;
-            let c = *ids.entry(key.clone()).or_insert_with(|| {
-                eqc.targets.extend(key.iter().map(|&(t, _)| t));
-                eqc.probs
-                    .extend(key.iter().map(|&(_, p)| f32::from_bits(p)));
-                eqc.offsets.push(eqc.targets.len());
-                eqc.counts.push(0.0);
-                next
-            });
-            eqc.counts[c as usize] += 1.0;
-            eqc.read_class.push(c);
+            let c = match ids.get(key.as_slice()) {
+                Some(&c) => c,
+                None => {
+                    let c = local.counts.len() as u32;
+                    ids.insert(key.clone(), c);
+                    local.keys.extend_from_slice(&key);
+                    local.offsets.push(local.keys.len());
+                    local.counts.push(0);
+                    c
+                }
+            };
+            local.counts[c as usize] += 1;
+            local.read_class.push(c);
         }
+        local
+    }
+
+    fn len(&self) -> usize {
+        self.counts.len()
+    }
+
+    fn key(&self, c: usize) -> &[(u32, u32)] {
+        &self.keys[self.offsets[c]..self.offsets[c + 1]]
+    }
+}
+
+impl EqClasses {
+    /// Classes of the store's reads. The reads are keyed in chunks in parallel on the current
+    /// rayon pool, then merged in chunk order, so the classes, their order (first occurrence
+    /// in the store), counts and `read_class` do not depend on the number of threads.
+    pub fn from_store(store: &InMemoryAlignmentStore, ntx: usize) -> Self {
+        let n = store.len();
+        let nchunks = rayon::current_num_threads()
+            .min(n.div_ceil(MIN_CHUNK_READS))
+            .max(1);
+        let locals: Vec<Local> = (0..nchunks)
+            .into_par_iter()
+            .map(|i| {
+                let (lo, hi) = (i * n / nchunks, (i + 1) * n / nchunks);
+                let reads = InMemoryAlignmentStoreIter { store, idx: lo }
+                    .take(hi - lo)
+                    .map(|(alns, probs, _)| alns.iter().zip(probs).map(|(a, &p)| (a.ref_id, p)));
+                Local::build(reads, hi - lo)
+            })
+            .collect();
+        Self::merge(locals, ntx)
+    }
+
+    /// Classes from each read's (target, probability) pairs, over `ntx` transcripts.
+    #[cfg(test)]
+    fn from_reads<R, I>(reads: R, nreads: usize, ntx: usize) -> Self
+    where
+        R: Iterator<Item = I>,
+        I: Iterator<Item = (u32, f32)>,
+    {
+        Self::merge(vec![Local::build(reads, nreads)], ntx)
+    }
+
+    /// The classes of consecutive chunks of reads: a class's global id is its first
+    /// occurrence over the chunks in order, so the result is that of one chunk of all reads.
+    fn merge(mut locals: Vec<Local>, ntx: usize) -> Self {
+        let mut eqc = if locals.len() == 1 {
+            let l = locals.pop().unwrap();
+            EqClasses {
+                targets: l.keys.iter().map(|&(t, _)| t).collect(),
+                probs: l.keys.iter().map(|&(_, p)| f32::from_bits(p)).collect(),
+                offsets: l.offsets,
+                counts: l.counts.iter().map(|&k| k as f64).collect(),
+                read_class: l.read_class,
+                t_off: Vec::new(),
+                t_class: Vec::new(),
+                t_prob: Vec::new(),
+            }
+        } else {
+            Self::merge_sharded(&locals)
+        };
+        drop(locals);
         eqc.transpose(ntx);
         eqc
+    }
+
+    /// [`EqClasses::merge`] of several chunks, in parallel: the local classes are split into
+    /// shards by key hash, each shard numbers its distinct keys in (chunk, local class) order,
+    /// and a class's global id is the rank of its first (chunk, local class) among all firsts.
+    fn merge_sharded(locals: &[Local]) -> Self {
+        let nshards = 4 * rayon::current_num_threads();
+        let shard_of = |key: &[(u32, u32)]| {
+            let h = FxBuildHasher.hash_one(key);
+            ((h.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 32) as usize) % nshards
+        };
+        // The local classes of each chunk in each shard, in order.
+        let buckets: Vec<Vec<Vec<u32>>> = locals
+            .par_iter()
+            .map(|l| {
+                let mut b = vec![Vec::new(); nshards];
+                for c in 0..l.len() {
+                    b[shard_of(l.key(c))].push(c as u32);
+                }
+                b
+            })
+            .collect();
+        // Each shard's distinct keys: the (chunk, local class) of the first, their reads, and
+        // the shard class of each bucket entry, per chunk.
+        struct Shard {
+            first: Vec<(u32, u32)>,
+            counts: Vec<u64>,
+            ids: Vec<Vec<u32>>,
+        }
+        let shards: Vec<Shard> = (0..nshards)
+            .into_par_iter()
+            .map(|s| {
+                let mut map: FxHashMap<&[(u32, u32)], u32> = FxHashMap::default();
+                let mut sh = Shard {
+                    first: Vec::new(),
+                    counts: Vec::new(),
+                    ids: Vec::with_capacity(locals.len()),
+                };
+                for (k, l) in locals.iter().enumerate() {
+                    let bucket = &buckets[k][s];
+                    let mut ids = Vec::with_capacity(bucket.len());
+                    for &c in bucket {
+                        let next = sh.first.len() as u32;
+                        let id = *map.entry(l.key(c as usize)).or_insert_with(|| {
+                            sh.first.push((k as u32, c));
+                            sh.counts.push(0);
+                            next
+                        });
+                        sh.counts[id as usize] += u64::from(l.counts[c as usize]);
+                        ids.push(id);
+                    }
+                    sh.ids.push(ids);
+                }
+                sh
+            })
+            .collect();
+        // Per chunk: each local class's (shard, shard class), and the local classes that
+        // are first occurrences, in order.
+        type ShardRefs = Vec<(u32, u32)>;
+        let (refs, firsts): (Vec<ShardRefs>, Vec<Vec<u32>>) = locals
+            .par_iter()
+            .enumerate()
+            .map(|(k, l)| {
+                let mut refs = vec![(0_u32, 0_u32); l.len()];
+                let mut is_first = vec![false; l.len()];
+                for (s, sh) in shards.iter().enumerate() {
+                    for (&c, &id) in buckets[k][s].iter().zip(&sh.ids[k]) {
+                        refs[c as usize] = (s as u32, id);
+                        is_first[c as usize] = sh.first[id as usize] == (k as u32, c);
+                    }
+                }
+                let firsts = (0..l.len() as u32)
+                    .filter(|&c| is_first[c as usize])
+                    .collect();
+                (refs, firsts)
+            })
+            .unzip();
+        drop(buckets);
+        // Chunk `k`'s first occurrences are classes `base[k]..base[k + 1]`.
+        let mut base = vec![0_usize; locals.len() + 1];
+        for k in 0..locals.len() {
+            base[k + 1] = base[k] + firsts[k].len();
+        }
+        let nclasses = base[locals.len()];
+        let mut offsets = Vec::with_capacity(nclasses + 1);
+        offsets.push(0_usize);
+        for (l, f) in locals.iter().zip(&firsts) {
+            for &c in f {
+                let c = c as usize;
+                offsets.push(offsets.last().unwrap() + (l.offsets[c + 1] - l.offsets[c]));
+            }
+        }
+        // Global id of each shard class, from the chunk that holds its first occurrence.
+        let global: Vec<Vec<u32>> = shards
+            .par_iter()
+            .map(|sh| {
+                let mut rank: Vec<u32> = Vec::with_capacity(sh.first.len());
+                for &(k, c) in &sh.first {
+                    let f = &firsts[k as usize];
+                    let i = f.binary_search(&c).expect("a first occurrence is listed");
+                    rank.push((base[k as usize] + i) as u32);
+                }
+                rank
+            })
+            .collect();
+        let nentries = *offsets.last().unwrap();
+        let mut targets = vec![0_u32; nentries];
+        let mut probs = vec![0_f32; nentries];
+        let mut counts = vec![0_f64; nclasses];
+        {
+            let mut parts = Vec::with_capacity(locals.len());
+            let (mut t_rest, mut p_rest, mut c_rest) = (
+                targets.as_mut_slice(),
+                probs.as_mut_slice(),
+                counts.as_mut_slice(),
+            );
+            for k in 0..locals.len() {
+                let len = offsets[base[k + 1]] - offsets[base[k]];
+                let (t, tr) = t_rest.split_at_mut(len);
+                let (p, pr) = p_rest.split_at_mut(len);
+                let (c, cr) = c_rest.split_at_mut(base[k + 1] - base[k]);
+                parts.push((t, p, c));
+                (t_rest, p_rest, c_rest) = (tr, pr, cr);
+            }
+            parts
+                .into_par_iter()
+                .enumerate()
+                .for_each(|(k, (ts, ps, cs))| {
+                    let l = &locals[k];
+                    let mut e = 0;
+                    for (&c, cnt) in firsts[k].iter().zip(cs.iter_mut()) {
+                        let key = l.key(c as usize);
+                        for &(t, p) in key {
+                            ts[e] = t;
+                            ps[e] = f32::from_bits(p);
+                            e += 1;
+                        }
+                        let (s, id) = refs[k][c as usize];
+                        *cnt = shards[s as usize].counts[id as usize] as f64;
+                    }
+                });
+        }
+        let n: usize = locals.iter().map(|l| l.read_class.len()).sum();
+        let mut read_class = vec![0_u32; n];
+        let mut parts: Vec<&mut [u32]> = Vec::with_capacity(locals.len());
+        let mut rest = read_class.as_mut_slice();
+        for l in locals {
+            let (a, b) = rest.split_at_mut(l.read_class.len());
+            parts.push(a);
+            rest = b;
+        }
+        parts
+            .into_par_iter()
+            .zip(locals.par_iter().zip(refs.par_iter()))
+            .for_each(|(out, (l, refs))| {
+                for (o, &c) in out.iter_mut().zip(&l.read_class) {
+                    let (s, id) = refs[c as usize];
+                    *o = global[s as usize][id as usize];
+                }
+            });
+        EqClasses {
+            targets,
+            probs,
+            offsets,
+            counts,
+            read_class,
+            t_off: Vec::new(),
+            t_class: Vec::new(),
+            t_prob: Vec::new(),
+        }
     }
 
     /// Fill `t_off`, `t_class` and `t_prob` by a counting sort of the entries on target.
