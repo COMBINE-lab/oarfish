@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
 
 use rayon::prelude::*;
 
+use crate::truncation::LogLik;
 use crate::util::constants;
 
 /// Rounds a component runs before the global criterion is checked.
@@ -882,9 +883,11 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
     /// each of the two is summed in the order a separate call would sum it, so both results
     /// are those of separate calls.
     fn loglik_pair(&self, n: Counts, base: &[f64], a: &[f64], b: &[f64]) -> (f64, f64) {
-        type Acc = (f64, f64, f64, f64);
-        let add = |x: Acc, y: Acc| (x.0 + y.0, x.1 + y.1, x.2 + y.2, x.3 + y.3);
-        let class_ll = |k: usize| -> Acc {
+        // Each sum of logarithms is kept as a `LogLik` product (one `ln` per block, not one per
+        // class), merged in block order.
+        type Acc = (LogLik, f64, LogLik, f64);
+        let add = |x: Acc, y: Acc| (x.0.merge(y.0), x.1 + y.1, x.2.merge(y.2), x.3 + y.3);
+        let class_ll = |mut acc: Acc, k: usize| -> Acc {
             let c = n.get(self.cls[k]);
             let r = self.off[k] as usize..self.off[k + 1] as usize;
             let (mut da, mut db) = (0.0_f64, 0.0_f64);
@@ -893,40 +896,36 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
                 da += a[l as usize] * w;
                 db += b[l as usize] * w;
             }
-            let (la, ra) = if c > 0.0 && da > constants::EM_DENOM_THRESH {
-                (c * da.ln(), c)
-            } else {
-                (0.0, 0.0)
-            };
-            let (lb, rb) = if c > 0.0 && db > constants::EM_DENOM_THRESH {
-                (c * db.ln(), c)
-            } else {
-                (0.0, 0.0)
-            };
-            (la, ra, lb, rb)
+            if c > 0.0 {
+                if da > constants::EM_DENOM_THRESH {
+                    acc.0.add_ln(c, da);
+                    acc.1 += c;
+                }
+                if db > constants::EM_DENOM_THRESH {
+                    acc.2.add_ln(c, db);
+                    acc.3 += c;
+                }
+            }
+            acc
         };
-        let zero = (0.0, 0.0, 0.0, 0.0);
+        let zero = (LogLik::default(), 0.0, LogLik::default(), 0.0);
         let (mut lla, mut ra, mut llb, mut rb) = if self.is_large() {
             let parts: Vec<Acc> = (0..self.blk.len() - 1)
                 .into_par_iter()
-                .map(|b| {
-                    (self.blk[b] as usize..self.blk[b + 1] as usize)
-                        .map(class_ll)
-                        .fold(zero, add)
-                })
+                .map(|b| (self.blk[b] as usize..self.blk[b + 1] as usize).fold(zero, class_ll))
                 .collect();
             parts.into_iter().fold(zero, add)
         } else {
-            (0..self.cls.len()).map(class_ll).fold(zero, add)
+            (0..self.cls.len()).fold(zero, class_ll)
         };
         for ((&s, &ta), &tb) in base.iter().zip(a).zip(b) {
             if s > 0.0 {
                 if ta > constants::EM_DENOM_THRESH {
-                    lla += s * ta.ln();
+                    lla.add_ln(s, ta);
                     ra += s;
                 }
                 if tb > constants::EM_DENOM_THRESH {
-                    llb += s * tb.ln();
+                    llb.add_ln(s, tb);
                     rb += s;
                 }
             }
@@ -936,7 +935,7 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
             ta += x;
             tb += y;
         }
-        (lla - ra * ta.ln(), llb - rb * tb.ln())
+        (lla.value() - ra * ta.ln(), llb.value() - rb * tb.ln())
     }
 }
 

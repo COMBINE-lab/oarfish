@@ -820,7 +820,7 @@ struct Stats {
 /// so a whole step takes one `ln` instead of one per read; `sum` holds the terms added as
 /// logarithms (weighted reads, or a likelihood too large or too small to multiply in).
 #[derive(Clone, Copy)]
-struct LogLik {
+pub(crate) struct LogLik {
     mant: f64,
     exp: i64,
     sum: f64,
@@ -851,7 +851,7 @@ impl LogLik {
 
     /// Adds `m * ln(x)`, for `x > 0`.
     #[inline]
-    fn add_ln(&mut self, m: f64, x: f64) {
+    pub(crate) fn add_ln(&mut self, m: f64, x: f64) {
         if m == 1.0 && x.is_normal() && x < Self::MUL_MAX {
             self.mul(x);
         } else {
@@ -859,14 +859,14 @@ impl LogLik {
         }
     }
 
-    fn merge(mut self, o: LogLik) -> LogLik {
+    pub(crate) fn merge(mut self, o: LogLik) -> LogLik {
         self.mul(o.mant);
         self.exp += o.exp;
         self.sum += o.sum;
         self
     }
 
-    fn value(&self) -> f64 {
+    pub(crate) fn value(&self) -> f64 {
         // ln 2 split as in fdlibm: `exp * LN2_HI` is exact for |exp| < 2^32.
         const LN2_HI: f64 = 6.931_471_803_691_238e-1;
         const LN2_LO: f64 = 1.908_214_929_270_587_7e-10;
