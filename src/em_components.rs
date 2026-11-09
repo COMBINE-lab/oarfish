@@ -32,6 +32,8 @@ const LARGE: usize = 1 << 16;
 const BLOCKS: usize = 64;
 // Block ids are stored as `u8`.
 const _: () = assert!(BLOCKS <= 256);
+/// Entry counts at or above this sort as one size in [`Plan::new_by_size`].
+const SIZE_CAP: usize = 255;
 
 /// Whether the plain EMs run on the component layout: yes unless `OARFISH_EM_COMPONENTS=0`.
 pub fn enabled() -> bool {
@@ -167,6 +169,31 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
         offsets: &[usize],
         ntx: usize,
         by_heaviest: bool,
+    ) -> Self {
+        Self::build(target, w, offsets, ntx, by_heaviest, false)
+    }
+
+    /// As [`Plan::new`], but each component's classes are first ordered by their entry count
+    /// (capped at [`SIZE_CAP`]), stably, so the order `new` would give holds among classes of one
+    /// size. Classes of equal size sit together, and the variable-length loops of a round over
+    /// them exit at predictable trip counts (for classes of reads, whose alignment counts vary).
+    pub fn new_by_size(
+        target: impl Fn(usize) -> u32 + Sync,
+        w: impl Fn(usize) -> W + Sync,
+        offsets: &[usize],
+        ntx: usize,
+        by_heaviest: bool,
+    ) -> Self {
+        Self::build(target, w, offsets, ntx, by_heaviest, true)
+    }
+
+    fn build(
+        target: impl Fn(usize) -> u32 + Sync,
+        w: impl Fn(usize) -> W + Sync,
+        offsets: &[usize],
+        ntx: usize,
+        by_heaviest: bool,
+        by_size: bool,
     ) -> Self {
         let ncls = offsets.len() - 1;
         let class = |c: usize| offsets[c]..offsets[c + 1];
@@ -339,8 +366,52 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
         }
         // Fill each component, a large one in parallel over blocks of whole classes.
         comps.par_iter_mut().enumerate().for_each(|(k, cm)| {
-            cm.cls
-                .extend(order[start[k]..start[k + 1]].iter().map(|&x| x as u32));
+            let part = &order[start[k]..start[k + 1]];
+            if by_size {
+                let len = |x: u64| {
+                    let c = x as u32 as usize;
+                    offsets[c + 1] - offsets[c]
+                };
+                // A stable counting sort by capped entry count, from `p` straight into `out`.
+                let sort = |p: &[u64], out: &mut [u32]| {
+                    let mut at = [0_usize; SIZE_CAP + 2];
+                    for &x in p {
+                        at[len(x).min(SIZE_CAP) + 1] += 1;
+                    }
+                    for s in 1..at.len() {
+                        at[s] += at[s - 1];
+                    }
+                    for &x in p {
+                        let s = len(x).min(SIZE_CAP);
+                        out[at[s]] = x as u32;
+                        at[s] += 1;
+                    }
+                };
+                cm.cls.resize(part.len(), 0);
+                if ninc_of[k] >= LARGE {
+                    // Sort within runs of about the incidences of one block, so each block keeps
+                    // the classes (and transcripts) the order above gives it.
+                    let per = ninc_of[k].div_ceil(BLOCKS);
+                    let mut segs = Vec::with_capacity(BLOCKS + 1);
+                    let (mut rest, mut out) = (part, &mut cm.cls[..]);
+                    let (mut run, mut c0, mut nseg) = (0_usize, 0_usize, 1_usize);
+                    for (c, &x) in part.iter().enumerate() {
+                        if c > 0 && run >= per * nseg {
+                            let (a, b) = rest.split_at(c - c0);
+                            let (o, ob) = out.split_at_mut(c - c0);
+                            segs.push((a, o));
+                            (rest, out, c0, nseg) = (b, ob, c, nseg + 1);
+                        }
+                        run += len(x);
+                    }
+                    segs.push((rest, out));
+                    segs.into_par_iter().for_each(|(p, o)| sort(p, o));
+                } else {
+                    sort(part, &mut cm.cls[..]);
+                }
+            } else {
+                cm.cls.extend(part.iter().map(|&x| x as u32));
+            }
             assert!(
                 ninc_of[k] < u32::MAX as usize,
                 "a component with 2^32 incidences"

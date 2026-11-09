@@ -2,11 +2,14 @@
 //! also reads the records of that block.
 //!
 //! One thread reads the raw BGZF frames. A pool of workers inflates them (and checks their
-//! CRC) in parallel; each worker then takes, in block order, the *carry* the previous block's
-//! worker handed over (the bytes of a record cut by the block end), walks the record chain of
-//! its own block to hand the next carry on, and only then calls `work` on every record that
-//! ends in its block, while the block is still in its cache. The calling thread receives the
-//! per-block outputs and calls `stitch` on them in block order.
+//! CRC) in parallel. The record chain runs in block order: the *carry* into a block (the bytes
+//! of a record cut by the previous block end) tells where its first record starts. A worker
+//! that finishes inflating a block whose carry is waiting walks the block's record chain to
+//! make the next carry, then calls `work` on every record that ends in its block, while the
+//! block is still in its cache. A worker whose carry has not arrived parks its block and takes
+//! the next job instead of waiting; the carry holder walks the parked blocks that follow its
+//! own and hands each back to its worker, which then reads its records. The calling thread
+//! receives the per-block outputs and calls `stitch` on them in block order.
 //!
 //! The records, their order and their fields are exactly what [`noodles_bam::io::Reader`]
 //! reads from the same stream: each record is read in place from the inflated block (a
@@ -17,8 +20,7 @@
 
 use std::fs::File;
 use std::io::{self, BufReader, Read};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::Mutex;
 
 use crossbeam::channel;
 
@@ -66,87 +68,165 @@ struct Carry {
     state: ChainState,
 }
 
-/// Hands the carry from block to block, in block order. Only one carry exists at a time (the
-/// carry into block `i + 1` is made by the worker that took the carry into block `i`), so one
-/// slot holds it; a waiting worker spins briefly on `turn` and then sleeps.
-struct Chain {
-    turn: AtomicU64,
-    slot: Mutex<Option<Carry>>,
-    cv: Condvar,
-    sleepers: AtomicUsize,
-    abort: AtomicBool,
+/// An inflated block whose carry had not arrived when its worker finished inflating it: the
+/// worker leaves it here and takes the next job, and whoever holds the carry walks it.
+struct Parked {
+    idx: u64,
+    /// the worker that inflated it, and reads its records once it is walked
+    owner: usize,
+    last: bool,
+    inflated: io::Result<usize>,
+    data: Vec<u8>,
+    /// the block's record chain from a guessed first record start, walked while the block
+    /// was in its worker's cache
+    spec: Spec,
 }
 
-/// How many times a worker polls `Chain::turn` before it sleeps (4096 and 65536 parse alike;
-/// 512 is slower).
-const SPINS: u32 = 4096;
+/// A record chain walked from a guessed start: `starts` holds the offsets the walk visits,
+/// ascending, the last being where it ends (with `stopped`: a block size of 0 there). Empty
+/// when no start was guessed. The chain from an offset is fixed by the bytes, so a walk from
+/// the true start that reaches any of `starts` ends where this one does.
+#[derive(Default)]
+struct Spec {
+    starts: Vec<u32>,
+    stopped: bool,
+}
+
+/// The fixed fields of a BAM record (after its block size) as far as they bound its length.
+const FIXED_FIELDS: usize = 32;
+
+/// Whether `d[o..]` plausibly starts a record: a block size large enough for the fields its
+/// fixed part gives, positions and reference ids of at least -1, and a NUL-terminated
+/// printable read name. Only picks where [`speculate`] starts; nothing depends on it being
+/// right.
+fn plausible_record(d: &[u8], o: usize) -> Option<usize> {
+    let r = d.get(o..)?;
+    if r.len() < 4 + FIXED_FIELDS {
+        return None;
+    }
+    let bs = block_size_at(r);
+    if !(FIXED_FIELDS..1 << 24).contains(&bs) {
+        return None;
+    }
+    let f = &r[4..];
+    let i32_at = |i: usize| i32::from_le_bytes(f[i..i + 4].try_into().unwrap());
+    if i32_at(0) < -1 || i32_at(4) < -1 || i32_at(20) < -1 || i32_at(24) < -1 {
+        return None;
+    }
+    let l_name = usize::from(f[8]);
+    let n_cigar = usize::from(u16::from_le_bytes([f[12], f[13]]));
+    let l_seq = u32::from_le_bytes(f[16..20].try_into().unwrap()) as usize;
+    if l_name == 0
+        || FIXED_FIELDS + l_name + 4 * n_cigar + l_seq.div_ceil(2) + l_seq > bs
+        || f.len() < FIXED_FIELDS + l_name
+    {
+        return None;
+    }
+    let name = &f[FIXED_FIELDS..FIXED_FIELDS + l_name];
+    if name[l_name - 1] != 0 || !name[..l_name - 1].iter().all(|b| (b'!'..=b'~').contains(b)) {
+        return None;
+    }
+    Some(4 + bs)
+}
+
+/// Guesses where the first record that starts in `d` starts (the first offset that plausibly
+/// starts a record followed by another, or by the block end), and walks the record chain
+/// from there into `spec`, as [`Worker::walk`] walks it.
+fn speculate(d: &[u8], spec: &mut Spec) {
+    spec.starts.clear();
+    spec.stopped = false;
+    let n = d.len();
+    let Some(mut end) = (0..n).find(|&o| match plausible_record(d, o) {
+        Some(len) => o + len + 4 + FIXED_FIELDS > n || plausible_record(d, o + len).is_some(),
+        None => false,
+    }) else {
+        return;
+    };
+    loop {
+        spec.starts.push(end as u32);
+        if n - end < 4 {
+            break;
+        }
+        let bs = block_size_at(&d[end..]);
+        if bs == 0 {
+            spec.stopped = true;
+            break;
+        }
+        if n - end - 4 < bs {
+            break;
+        }
+        end += 4 + bs;
+    }
+}
+
+/// What reading a walked block's records takes.
+enum Plan {
+    /// no records: an empty output, or the block's error
+    Empty(io::Result<()>),
+    /// the record cut by the previous block end (once complete), then `data[start..end]`
+    Read {
+        straddle: Option<Vec<u8>>,
+        start: usize,
+        end: usize,
+    },
+}
+
+/// Work handed to a worker by another.
+enum Task {
+    /// the carry holder walked this worker's parked block `idx`: read its records
+    Read {
+        idx: u64,
+        last: bool,
+        data: Vec<u8>,
+        plan: Plan,
+        spec: Spec,
+    },
+    /// the parse has stopped
+    Abort,
+}
+
+struct ChainCore {
+    /// the block the carry goes into next
+    next: u64,
+    /// the carry into `next`, while no worker holds it
+    carry: Option<Carry>,
+    /// parked blocks, at `idx % parked.len()` (fewer blocks than that are in flight)
+    parked: Vec<Option<Parked>>,
+    aborted: bool,
+}
+
+/// Hands the carry from block to block, in block order. Only one carry exists at a time. A
+/// worker that finishes inflating block `next` takes the carry and walks its block; one that
+/// finishes a later block parks it and goes on. The carry holder then walks the parked blocks
+/// that follow its own, in order, hands each one's records back to its worker (as a
+/// [`Task::Read`]), and leaves the carry at the first block not yet inflated. No worker waits
+/// for the carry.
+struct Chain {
+    core: Mutex<ChainCore>,
+    tasks: Vec<channel::Sender<Task>>,
+}
 
 impl Chain {
-    fn new() -> Self {
+    fn new(ring: usize, tasks: Vec<channel::Sender<Task>>) -> Self {
         Self {
-            turn: AtomicU64::new(0),
-            slot: Mutex::new(Some(Carry {
-                pending: Vec::new(),
-                state: ChainState::Live,
-            })),
-            cv: Condvar::new(),
-            sleepers: AtomicUsize::new(0),
-            abort: AtomicBool::new(false),
-        }
-    }
-
-    /// Waits for the carry into block `idx`; `None` once the pipeline is aborted.
-    fn take(&self, idx: u64) -> Option<Carry> {
-        let mut spins = 0_u32;
-        loop {
-            if self.turn.load(Ordering::Acquire) == idx {
-                break;
-            }
-            if self.abort.load(Ordering::Acquire) {
-                return None;
-            }
-            spins += 1;
-            if spins < SPINS {
-                std::hint::spin_loop();
-            } else {
-                let mut g = self.slot.lock().unwrap();
-                self.sleepers.fetch_add(1, Ordering::SeqCst);
-                while self.turn.load(Ordering::SeqCst) != idx && !self.abort.load(Ordering::SeqCst)
-                {
-                    g = self.cv.wait(g).unwrap();
-                }
-                self.sleepers.fetch_sub(1, Ordering::SeqCst);
-                if self.turn.load(Ordering::SeqCst) != idx {
-                    return None;
-                }
-                return Some(g.take().expect("the carry for this block"));
-            }
-        }
-        Some(
-            self.slot
-                .lock()
-                .unwrap()
-                .take()
-                .expect("the carry for this block"),
-        )
-    }
-
-    /// Hands `carry` on to block `idx`.
-    fn put(&self, idx: u64, carry: Carry) {
-        {
-            let mut g = self.slot.lock().unwrap();
-            *g = Some(carry);
-            self.turn.store(idx, Ordering::SeqCst);
-        }
-        if self.sleepers.load(Ordering::SeqCst) > 0 {
-            self.cv.notify_all();
+            core: Mutex::new(ChainCore {
+                next: 0,
+                carry: Some(Carry {
+                    pending: Vec::new(),
+                    state: ChainState::Live,
+                }),
+                parked: (0..ring).map(|_| None).collect(),
+                aborted: false,
+            }),
+            tasks,
         }
     }
 
     fn abort(&self) {
-        self.abort.store(true, Ordering::SeqCst);
-        let _g = self.slot.lock().unwrap();
-        self.cv.notify_all();
+        self.core.lock().unwrap().aborted = true;
+        for t in &self.tasks {
+            let _ = t.send(Task::Abort);
+        }
     }
 }
 
@@ -231,46 +311,127 @@ struct Worker {
     inflater: libdeflater::Decompressor,
     spare: Vec<u8>,
     first_skip: usize,
+    /// inflate buffers handed back from parked blocks
+    bufs: Vec<Vec<u8>>,
+    /// this worker's blocks that are parked or walked but not yet read
+    parked: usize,
+    /// chain guesses handed back from parked blocks
+    specs: Vec<Spec>,
 }
 
 impl Worker {
-    /// Takes block `idx` (inflated into `data[..n]`) through the record chain with the carry
-    /// into it, hands the carry on, then reads the block's records into `out`.
+    /// Takes block `idx` (inflated into `data`) through the record chain if the carry into it
+    /// has arrived, together with the parked blocks after it, and reads its records; parks it
+    /// otherwise. `false` once the pipeline is aborted.
     #[allow(clippy::too_many_arguments)]
-    fn process<O, W>(
+    fn on_inflated<O, W>(
+        &mut self,
+        me: usize,
+        idx: u64,
+        last: bool,
+        inflated: io::Result<usize>,
+        data: &mut Vec<u8>,
+        chain: &Chain,
+        work: &W,
+        done_tx: &channel::Sender<Done<O>>,
+        free_out_rx: &channel::Receiver<O>,
+    ) -> bool
+    where
+        O: BlockOutput,
+        W: Fn(&RawRecord<'_>, &mut O),
+    {
+        let mut spec: Option<Spec> = None;
+        let carry = loop {
+            let mut core = chain.core.lock().unwrap();
+            if core.aborted {
+                return false;
+            }
+            if core.next == idx {
+                break core.carry.take().expect("the carry for this block");
+            }
+            debug_assert!(core.next < idx);
+            let Some(sp) = spec.take() else {
+                // guess the block's chain while it is in this cache, then look again
+                drop(core);
+                let mut sp = self.specs.pop().unwrap_or_default();
+                if let Ok(n) = inflated
+                    && !last
+                {
+                    speculate(&data[..n], &mut sp);
+                }
+                spec = Some(sp);
+                continue;
+            };
+            let ring = core.parked.len() as u64;
+            let slot = &mut core.parked[(idx % ring) as usize];
+            debug_assert!(slot.is_none());
+            let buf = self.bufs.pop().unwrap_or_default();
+            *slot = Some(Parked {
+                idx,
+                owner: me,
+                last,
+                inflated,
+                data: std::mem::replace(data, buf),
+                spec: sp,
+            });
+            self.parked += 1;
+            return true;
+        };
+        if let Some(sp) = spec {
+            self.specs.push(sp);
+        }
+        let (mut carry, plan) = self.walk(idx, last, inflated, data, carry, None);
+        // the parked blocks after this one, while they follow on
+        let mut j = idx + 1;
+        loop {
+            let p = {
+                let mut core = chain.core.lock().unwrap();
+                let ring = core.parked.len() as u64;
+                let slot = &mut core.parked[(j % ring) as usize];
+                if slot.as_ref().is_some_and(|p| p.idx == j) {
+                    slot.take().unwrap()
+                } else {
+                    core.next = j;
+                    core.carry = Some(carry);
+                    break;
+                }
+            };
+            let (c, plan) = self.walk(j, p.last, p.inflated, &p.data, carry, Some(&p.spec));
+            carry = c;
+            let _ = chain.tasks[p.owner].send(Task::Read {
+                idx: j,
+                last: p.last,
+                data: p.data,
+                plan,
+                spec: p.spec,
+            });
+            j += 1;
+        }
+        let out = free_out_rx.try_recv().unwrap_or_default();
+        let _ = done_tx.send(self.read(idx, last, plan, data, out, work));
+        true
+    }
+
+    /// Walks block `idx` (inflated into `data[..n]`) through the record chain with the carry
+    /// into it: returns the carry into the next block, and what reading its records takes.
+    /// Once the walk reaches an offset of `spec`'s chain, it ends where that chain ends.
+    fn walk(
         &mut self,
         idx: u64,
         last: bool,
         inflated: io::Result<usize>,
         data: &[u8],
         mut carry: Carry,
-        mut out: O,
-        chain: &Chain,
-        work: &W,
-    ) -> Done<O>
-    where
-        O: BlockOutput,
-        W: Fn(&RawRecord<'_>, &mut O),
-    {
+        spec: Option<&Spec>,
+    ) -> (Carry, Plan) {
         if carry.state == ChainState::Failed {
-            chain.put(idx + 1, carry);
-            out.clear();
-            return Done {
-                idx,
-                out: Ok(out),
-                last,
-            };
+            return (carry, Plan::Empty(Ok(())));
         }
         let n = match inflated {
             Ok(n) => n,
             Err(e) => {
                 carry.state = ChainState::Failed;
-                chain.put(idx + 1, carry);
-                return Done {
-                    idx,
-                    out: Err(e),
-                    last,
-                };
+                return (carry, Plan::Empty(Err(e)));
             }
         };
         if last {
@@ -280,15 +441,9 @@ impl Worker {
                     "failed to fill whole buffer",
                 ))
             } else {
-                out.clear();
-                Ok(out)
+                Ok(())
             };
-            chain.put(idx + 1, carry);
-            return Done {
-                idx,
-                out: res,
-                last,
-            };
+            return (carry, Plan::Empty(res));
         }
         let d = &data[..n];
         let mut off = if idx == 0 { self.first_skip.min(n) } else { 0 };
@@ -321,7 +476,19 @@ impl Worker {
         let start = off;
         let mut end = off;
         if carry.state == ChainState::Live && carry.pending.is_empty() {
+            let starts = spec.map_or(&[][..], |s| &s.starts[..]);
+            let mut k = 0;
             loop {
+                while k < starts.len() && (starts[k] as usize) < end {
+                    k += 1;
+                }
+                if k < starts.len() && starts[k] as usize == end {
+                    end = *starts.last().unwrap() as usize;
+                    if spec.is_some_and(|s| s.stopped) {
+                        carry.state = ChainState::Stopped;
+                    }
+                    break;
+                }
                 if n - end < 4 {
                     break;
                 }
@@ -339,22 +506,56 @@ impl Worker {
                 carry.pending.extend_from_slice(&d[end..]);
             }
         }
-        chain.put(idx + 1, carry);
+        (
+            carry,
+            Plan::Read {
+                straddle,
+                start,
+                end,
+            },
+        )
+    }
 
-        // the records, in parallel with the other workers
+    /// Reads the records of walked block `idx` into `out`.
+    fn read<O, W>(
+        &mut self,
+        idx: u64,
+        last: bool,
+        plan: Plan,
+        data: &[u8],
+        mut out: O,
+        work: &W,
+    ) -> Done<O>
+    where
+        O: BlockOutput,
+        W: Fn(&RawRecord<'_>, &mut O),
+    {
         out.clear();
-        let mut res = Ok(());
-        if let Some(s) = straddle {
-            res = read_records(&s, &mut out, work);
-            self.spare = s;
-        }
-        if res.is_ok() {
-            res = read_records(&d[start..end], &mut out, work);
-        }
-        Done {
-            idx,
-            out: res.map(|_| out),
-            last: false,
+        match plan {
+            Plan::Empty(res) => Done {
+                idx,
+                out: res.map(|_| out),
+                last,
+            },
+            Plan::Read {
+                straddle,
+                start,
+                end,
+            } => {
+                let mut res = Ok(());
+                if let Some(s) = straddle {
+                    res = read_records(&s, &mut out, work);
+                    self.spare = s;
+                }
+                if res.is_ok() {
+                    res = read_records(&data[start..end], &mut out, work);
+                }
+                Done {
+                    idx,
+                    out: res.map(|_| out),
+                    last: false,
+                }
+            }
         }
     }
 }
@@ -649,7 +850,9 @@ where
     // blocks in flight (read, not yet stitched); bounds memory and the reorder ring
     let in_flight = 4 * workers + 8;
 
-    let chain = Chain::new();
+    let (task_txs, task_rxs): (Vec<_>, Vec<_>) =
+        (0..workers).map(|_| channel::unbounded::<Task>()).unzip();
+    let chain = Chain::new(in_flight, task_txs);
     let (job_tx, job_rx) = channel::bounded::<Job>(2 * workers);
     let (done_tx, done_rx) = channel::unbounded::<Done<O>>();
     let (credit_tx, credit_rx) = channel::bounded::<()>(in_flight);
@@ -681,7 +884,7 @@ where
             }
         });
 
-        for _ in 0..workers {
+        for (me, task_rx) in task_rxs.into_iter().enumerate() {
             let job_rx = job_rx.clone();
             let done_tx = done_tx.clone();
             let free_frame_tx = free_frame_tx.clone();
@@ -693,26 +896,67 @@ where
                     inflater: libdeflater::Decompressor::new(),
                     spare: Vec::new(),
                     first_skip,
+                    bufs: Vec::new(),
+                    parked: 0,
+                    specs: Vec::new(),
                 };
                 let mut data = Vec::<u8>::new();
-                while let Ok(Job { idx, frame }) = job_rx.recv() {
-                    // inflate, in parallel with the other workers
-                    let last = !matches!(frame, Frame::Data(_));
-                    let inflated = match frame {
-                        Frame::Data(buf) => {
-                            let r = inflate_frame(&buf, &mut w.inflater, &mut data);
-                            let _ = free_frame_tx.send(buf);
-                            r
+                let mut jobs_open = true;
+                loop {
+                    // reads handed back come first: their blocks hold up the stitcher
+                    let task = match task_rx.try_recv() {
+                        Ok(t) => Some(t),
+                        Err(_) if !jobs_open => {
+                            if w.parked == 0 {
+                                return;
+                            }
+                            task_rx.recv().ok()
                         }
-                        Frame::End => Ok(0),
-                        Frame::Error(e) => Err(e),
+                        Err(_) => channel::select! {
+                            recv(task_rx) -> t => t.ok(),
+                            recv(job_rx) -> job => {
+                                let Ok(Job { idx, frame }) = job else {
+                                    jobs_open = false;
+                                    continue;
+                                };
+                                // inflate, in parallel with the other workers
+                                let last = !matches!(frame, Frame::Data(_));
+                                let inflated = match frame {
+                                    Frame::Data(buf) => {
+                                        let r = inflate_frame(&buf, &mut w.inflater, &mut data);
+                                        let _ = free_frame_tx.send(buf);
+                                        r
+                                    }
+                                    Frame::End => Ok(0),
+                                    Frame::Error(e) => Err(e),
+                                };
+                                if !w.on_inflated(
+                                    me, idx, last, inflated, &mut data, chain, work, &done_tx,
+                                    &free_out_rx,
+                                ) {
+                                    return;
+                                }
+                                None
+                            }
+                        },
                     };
-                    let Some(carry) = chain.take(idx) else {
-                        return;
-                    };
-                    let out = free_out_rx.try_recv().unwrap_or_default();
-                    let done = w.process(idx, last, inflated, &data, carry, out, chain, work);
-                    let _ = done_tx.send(done);
+                    match task {
+                        Some(Task::Read {
+                            idx,
+                            last,
+                            data: buf,
+                            plan,
+                            spec,
+                        }) => {
+                            let out = free_out_rx.try_recv().unwrap_or_default();
+                            let _ = done_tx.send(w.read(idx, last, plan, &buf, out, work));
+                            w.bufs.push(buf);
+                            w.specs.push(spec);
+                            w.parked -= 1;
+                        }
+                        Some(Task::Abort) => return,
+                        None => {}
+                    }
                 }
             });
         }

@@ -1854,7 +1854,7 @@ fn frozen_on_components(
 ) -> Vec<f64> {
     let t0 = std::time::Instant::now();
     let e = Exps::new(par, f.max_len());
-    let plan = crate::em_components::Plan::new(
+    let plan = crate::em_components::Plan::new_by_size(
         |k| f.target(k),
         |k| {
             let g = f.geo(k);
@@ -1862,7 +1862,7 @@ fn frozen_on_components(
         },
         &f.off,
         em_info.txp_info.len(),
-        // `bulk` has ordered the reads by likeliest target.
+        // `bulk` has ordered the reads by likeliest target; that order holds within each size.
         false,
     );
     info!(

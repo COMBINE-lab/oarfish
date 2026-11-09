@@ -214,7 +214,7 @@ fn run(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
         None => vec![total_weight / ntx as f64; ntx],
     };
     if how == Impl::Csr && em_components::enabled() {
-        let plan = em_components::Plan::new(|k| f.target(k), |k| f.w(k), f.off, ntx, true);
+        let plan = em_components::Plan::new_by_size(|k| f.target(k), |k| f.w(k), f.off, ntx, true);
         info!(
             "per-read EM (components): {} reads, {} alignments, {} connected components, setup {:.2}s",
             f.nreads().to_formatted_string(&Locale::en),
@@ -314,7 +314,7 @@ pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f6
     pool.install(|| {
         let ntx = em_info.txp_info.len();
         let f = Flat::new(em_info);
-        let plan = em_components::Plan::new(|k| f.target(k), |k| f.w(k), f.off, ntx, true);
+        let plan = em_components::Plan::new_by_size(|k| f.target(k), |k| f.w(k), f.off, ntx, true);
         let total_weight = em_info.eq_map.num_aligned_reads() as f64;
         let init = match em_info.init_abundances {
             Some(ref v) => v.clone(),
