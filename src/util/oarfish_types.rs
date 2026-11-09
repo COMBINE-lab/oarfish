@@ -601,6 +601,11 @@ pub struct TranscriptInfo {
     pub coverage_bins: Vec<f64>,
     pub coverage_prob: Vec<f64>,
     pub lenf: f64,
+    /// The fully covered bins of the alignments added by [`add_unit_interval`]
+    /// (Self::add_unit_interval) and not yet folded into `coverage_bins`, as a difference
+    /// array of counts (`nbins + 1` entries, wrapping; empty while there are none):
+    /// [`settle_coverage`](Self::settle_coverage) folds them in.
+    full_bin_diff: Vec<u32>,
 }
 
 impl TranscriptInfo {
@@ -612,6 +617,7 @@ impl TranscriptInfo {
             coverage_bins: vec![0.0_f64; 10],
             coverage_prob: Vec::new(),
             lenf: 0_f64,
+            full_bin_diff: Vec::new(),
         }
     }
 
@@ -622,6 +628,7 @@ impl TranscriptInfo {
             coverage_bins: vec![0.0_f64; 10],
             coverage_prob: Vec::new(),
             lenf: len.get() as f64,
+            full_bin_diff: Vec::new(),
         }
     }
     pub fn with_len_and_bin_width(len: NonZeroUsize, bin_width: u32) -> Self {
@@ -631,6 +638,7 @@ impl TranscriptInfo {
             coverage_bins: vec![0.0_f64; ((len.get() as f64) / (bin_width as f64)).ceil() as usize],
             coverage_prob: Vec::new(),
             lenf: len.get() as f64,
+            full_bin_diff: Vec::new(),
         }
     }
 
@@ -638,6 +646,10 @@ impl TranscriptInfo {
     /// [`for_each_bin_overlap`]).
     #[inline(always)]
     pub fn get_normalized_counts_and_lengths(&self) -> (Vec<f32>, Vec<f32>) {
+        debug_assert!(
+            self.full_bin_diff.is_empty(),
+            "coverage read before settle_coverage"
+        );
         let n = self.coverage_bins.len();
         let w = (self.lenf / n.max(1) as f64) as f32;
         let cov_f32 = self.coverage_bins.iter().map(|f| *f as f32).collect();
@@ -646,7 +658,9 @@ impl TranscriptInfo {
 
     /// Adds an alignment spanning `[start, stop)` (zero-based, half-open) to the coverage
     /// profile: each of its evidence bins ([`for_each_evidence_bin`]) gains `weight` times the
-    /// fraction of the bin it covers.
+    /// fraction of the bin it covers. The parse uses [`add_unit_interval`](Self::add_unit_interval);
+    /// the tests check it against this.
+    #[cfg(test)]
     #[inline(always)]
     pub fn add_interval(&mut self, start: u32, stop: u32, weight: f64) {
         let (lenf, n) = (self.lenf, self.coverage_bins.len());
@@ -657,9 +671,105 @@ impl TranscriptInfo {
         self.total_weight += weight;
     }
 
+    /// `add_interval` with weight 1, the same evidence bins and the same
+    /// fractions, but the bins the alignment covers fully (fraction exactly 1) are only marked
+    /// in a difference array, in O(1), instead of walked one by one: `coverage_bins` holds just
+    /// the partly covered end bins until [`settle_coverage`](Self::settle_coverage) adds the
+    /// counts of the full ones. Each bin's total is the same sum regrouped (counts apart from
+    /// fractions), so it can differ from `add_interval`'s in the last bits.
+    #[inline(always)]
+    pub fn add_unit_interval(&mut self, start: u32, stop: u32) {
+        self.total_weight += 1.0_f64;
+        let (len, n) = (self.lenf, self.coverage_bins.len());
+        if n == 0 || len <= 0.0 {
+            return;
+        }
+        // the bin arithmetic of `for_each_bin_overlap`, step for step
+        let w = len / n as f64;
+        let (st, en) = (start as f64, stop as f64);
+        let (s, e) = (st.min(en).max(0.0), st.max(en).min(len));
+        if e <= s {
+            return;
+        }
+        let first = ((s / w).floor() as usize).min(n - 1);
+        let last = ((e / w).ceil() as usize).clamp(first + 1, n);
+        let bs = |b: usize| b as f64 * w;
+        let be = |b: usize| ((b + 1) as f64 * w).min(len);
+        // [lo, hi): the bins with s <= bs and be <= e (both bounds are monotone in b). Their
+        // overlap is exactly be - bs, so their fraction is exactly 1 (be > bs: w is at least
+        // 0.1 here, far above the rounding of b * w).
+        let mut lo = first;
+        while lo < last && bs(lo) < s {
+            lo += 1;
+        }
+        let mut hi = ((e / w).floor() as usize).clamp(lo, last);
+        while hi > lo && be(hi - 1) > e {
+            hi -= 1;
+        }
+        while hi < last && be(hi) <= e {
+            hi += 1;
+        }
+        // The few bins outside [lo, hi) take `for_each_evidence_bin`'s path: each overlapped
+        // one is held back until the next shows whether it was the last.
+        const FULL: f64 = 1.0 - 1e-9;
+        let frac = |b: usize| {
+            let ov = e.min(be(b)) - s.max(bs(b));
+            (ov > 0.0).then(|| ov / (be(b) - bs(b)))
+        };
+        let bins = &mut self.coverage_bins;
+        let (mut held, mut any_full): (Option<(usize, f64)>, bool) = (None, hi > lo);
+        for b in first..lo {
+            if let Some(f) = frac(b) {
+                if let Some((hb, hf)) = held.replace((b, f)) {
+                    bins[hb] += hf;
+                }
+                any_full |= f >= FULL;
+            }
+        }
+        if hi > lo {
+            if let Some((hb, hf)) = held.take() {
+                bins[hb] += hf;
+            }
+            if self.full_bin_diff.is_empty() {
+                self.full_bin_diff = vec![0_u32; n + 1];
+            }
+            self.full_bin_diff[lo] = self.full_bin_diff[lo].wrapping_add(1);
+            self.full_bin_diff[hi] = self.full_bin_diff[hi].wrapping_sub(1);
+        }
+        for b in hi..last {
+            if let Some(f) = frac(b) {
+                if let Some((hb, hf)) = held.replace((b, f)) {
+                    bins[hb] += hf;
+                }
+                any_full |= f >= FULL;
+            }
+        }
+        if let Some((b, f)) = held
+            && !(f < FULL && any_full)
+        {
+            bins[b] += f;
+        }
+    }
+
+    /// Folds the full-bin counts held by [`add_unit_interval`](Self::add_unit_interval) into
+    /// `coverage_bins` (one prefix pass). Readers of the coverage profile call this first; a
+    /// second call does nothing.
+    pub fn settle_coverage(&mut self) {
+        if self.full_bin_diff.is_empty() {
+            return;
+        }
+        let mut run = 0_u32;
+        for (c, d) in self.coverage_bins.iter_mut().zip(&self.full_bin_diff) {
+            run = run.wrapping_add(*d);
+            *c += run as f64;
+        }
+        self.full_bin_diff = Vec::new();
+    }
+
     #[allow(dead_code)]
     pub fn clear_coverage_dist(&mut self) {
         self.coverage_bins.fill(0.0_f64);
+        self.full_bin_diff = Vec::new();
         self.total_weight = 0.0_f64;
     }
 }
@@ -973,7 +1083,7 @@ impl<'h> InMemoryAlignmentStore<'h> {
             if self.filter_opts.model_coverage {
                 for a in alns.iter() {
                     let tid = a.ref_id as usize;
-                    txps[tid].add_interval(a.start, a.end, 1.0_f64);
+                    txps[tid].add_unit_interval(a.start, a.end);
                 }
             }
             self.alignments.extend_from_slice(alns);

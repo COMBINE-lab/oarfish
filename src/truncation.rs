@@ -812,12 +812,72 @@ struct Stats {
     k3: EStats,
     k5: EStats,
     /// Log-likelihood of the reads at the step's input (abundances unnormalized).
-    ll: f64,
+    ll: LogLik,
+}
+
+/// A sum of logarithms kept as a product: `ln(mant) + exp * ln 2 + sum`, with `mant` in
+/// `[1, 2)`. Each read multiplies its likelihood in and moves the binary exponent out (exact),
+/// so a whole step takes one `ln` instead of one per read; `sum` holds the terms added as
+/// logarithms (weighted reads, or a likelihood too large or too small to multiply in).
+#[derive(Clone, Copy)]
+struct LogLik {
+    mant: f64,
+    exp: i64,
+    sum: f64,
+}
+
+impl Default for LogLik {
+    fn default() -> Self {
+        LogLik {
+            mant: 1.0,
+            exp: 0,
+            sum: 0.0,
+        }
+    }
+}
+
+impl LogLik {
+    /// Below this, `mant * x` (with `mant < 2`) cannot overflow.
+    const MUL_MAX: f64 = 1e300;
+
+    /// Multiplies in `x`, a positive normal number below [`Self::MUL_MAX`].
+    #[inline]
+    fn mul(&mut self, x: f64) {
+        let y = self.mant * x;
+        let b = y.to_bits();
+        self.exp += ((b >> 52) & 0x7ff) as i64 - 1023;
+        self.mant = f64::from_bits((b & !(0x7ff << 52)) | (1023 << 52));
+    }
+
+    /// Adds `m * ln(x)`, for `x > 0`.
+    #[inline]
+    fn add_ln(&mut self, m: f64, x: f64) {
+        if m == 1.0 && x.is_normal() && x < Self::MUL_MAX {
+            self.mul(x);
+        } else {
+            self.sum += m * x.ln();
+        }
+    }
+
+    fn merge(mut self, o: LogLik) -> LogLik {
+        self.mul(o.mant);
+        self.exp += o.exp;
+        self.sum += o.sum;
+        self
+    }
+
+    fn value(&self) -> f64 {
+        // ln 2 split as in fdlibm: `exp * LN2_HI` is exact for |exp| < 2^32.
+        const LN2_HI: f64 = 6.931_471_803_691_238e-1;
+        const LN2_LO: f64 = 1.908_214_929_270_587_7e-10;
+        let e = self.exp as f64;
+        e * LN2_HI + (self.mant.ln() + e * LN2_LO) + self.sum
+    }
 }
 
 impl Stats {
     fn merge(mut self, o: Stats) -> Stats {
-        self.ll += o.ll;
+        self.ll = self.ll.merge(o.ll);
         self.n += o.n;
         self.n3 += o.n3;
         self.n5 += o.n5;
@@ -829,6 +889,112 @@ impl Stats {
         self.k3 = self.k3.merge(o.k3);
         self.k5 = self.k5.merge(o.k5);
         self
+    }
+
+    /// The histogram vectors, in a fixed order (the order [`Stats::from_vecs`] takes).
+    fn vecs(&self) -> [&Vec<f64>; 12] {
+        [
+            &self.l3.stop,
+            &self.l3.cens,
+            &self.l5.stop,
+            &self.l5.cens,
+            &self.lu.stop,
+            &self.lu.cens,
+            &self.k3.abs.stop,
+            &self.k3.abs.cens,
+            &self.k3.rel,
+            &self.k5.abs.stop,
+            &self.k5.abs.cens,
+            &self.k5.rel,
+        ]
+    }
+
+    /// The left fold of `parts` by [`Stats::merge`], with the histograms summed in parallel:
+    /// each bin adds the parts' values in part order, as the fold does (a part too short for
+    /// a bin adds nothing there, and the fold's zero-filled bins are `+0.0`), so the result is
+    /// bit-identical to the fold.
+    fn merge_all(parts: Vec<Stats>) -> Stats {
+        let Some(first) = parts.first() else {
+            return Stats::default();
+        };
+        // `ll` is a `LogLik`: merged in part order, as the fold's `Stats::merge` does.
+        let mut ll = first.ll;
+        let mut sc = [
+            first.n,
+            first.n3,
+            first.n5,
+            first.nf,
+            first.nu,
+            first.k3.n_abs,
+            first.k3.n_rel,
+            first.k5.n_abs,
+            first.k5.n_rel,
+        ];
+        for o in &parts[1..] {
+            ll = ll.merge(o.ll);
+            let x = [
+                o.n, o.n3, o.n5, o.nf, o.nu, o.k3.n_abs, o.k3.n_rel, o.k5.n_abs, o.k5.n_rel,
+            ];
+            sc.iter_mut().zip(x).for_each(|(a, b)| *a += b);
+        }
+        let views: Vec<[&Vec<f64>; 12]> = parts.iter().map(Stats::vecs).collect();
+        // Allocated on the calling thread (see `crate::em_components` on mimalloc's heaps).
+        let mut outs: Vec<Vec<f64>> = (0..12)
+            .map(|j| vec![0.0; views.iter().map(|v| v[j].len()).max().unwrap_or(0)])
+            .collect();
+        const CHUNK: usize = 512;
+        outs.par_iter_mut()
+            .enumerate()
+            .flat_map(|(j, o)| {
+                o.par_chunks_mut(CHUNK)
+                    .enumerate()
+                    .map(move |(c, ch)| (j, c * CHUNK, ch))
+            })
+            .for_each(|(j, b0, ch)| {
+                for v in &views {
+                    let src = v[j];
+                    let hi = src.len().min(b0 + ch.len());
+                    if hi > b0 {
+                        ch.iter_mut().zip(&src[b0..hi]).for_each(|(a, b)| *a += b);
+                    }
+                }
+            });
+        drop(views);
+        drop(parts);
+        let mut it = outs.into_iter();
+        let mut next = || it.next().unwrap();
+        let ls = |next: &mut dyn FnMut() -> Vec<f64>| LStats {
+            stop: next(),
+            cens: next(),
+        };
+        let (l3, l5, lu) = (ls(&mut next), ls(&mut next), ls(&mut next));
+        let k3abs = ls(&mut next);
+        let k3rel = next();
+        let k5abs = ls(&mut next);
+        let k5rel = next();
+        Stats {
+            ll,
+            n: sc[0],
+            n3: sc[1],
+            n5: sc[2],
+            nf: sc[3],
+            nu: sc[4],
+            l3,
+            l5,
+            lu,
+            k3: EStats {
+                abs: k3abs,
+                rel: k3rel,
+                n_abs: sc[5],
+                n_rel: sc[6],
+            },
+            k5: EStats {
+                abs: k5abs,
+                rel: k5rel,
+                n_abs: sc[7],
+                n_rel: sc[8],
+            },
+        }
     }
 
     fn add(&mut self, g: &Geo, t: &Terms, post: f64) {
@@ -897,7 +1063,20 @@ fn fold_blocks<T: Send, S>(
     f: impl Fn(&mut T, &mut S, usize) + Sync + Send,
     merge: impl Fn(T, T) -> T,
 ) -> T {
-    let parts: Vec<T> = (0..n.div_ceil(FOLD_BLOCK))
+    fold_block_parts(n, &init, scratch, f)
+        .into_iter()
+        .reduce(merge)
+        .unwrap_or_else(init)
+}
+
+/// The per-block results of [`fold_blocks`], in block order, before they are merged.
+fn fold_block_parts<T: Send, S>(
+    n: usize,
+    init: impl Fn() -> T + Sync + Send,
+    scratch: impl Fn() -> S + Sync + Send,
+    f: impl Fn(&mut T, &mut S, usize) + Sync + Send,
+) -> Vec<T> {
+    (0..n.div_ceil(FOLD_BLOCK))
         .into_par_iter()
         .map_init(scratch, |s, b| {
             let mut acc = init();
@@ -906,8 +1085,7 @@ fn fold_blocks<T: Send, S>(
             }
             acc
         })
-        .collect();
-    parts.into_iter().reduce(merge).unwrap_or_else(init)
+        .collect()
 }
 
 /// One EM round: distribute each read over its alignments, accumulating abundances into `curr`
@@ -1245,7 +1423,7 @@ fn step_with(
             scratch.push((g, t, w));
         }
         if denom > constants::EM_DENOM_THRESH {
-            st.ll += m * denom.ln();
+            st.ll.add_ln(m, denom);
             for (k, (g, t, w)) in (lo..hi).zip(scratch.iter()) {
                 let post = m * w / denom;
                 emit(k, g.t as usize, post);
@@ -1289,21 +1467,16 @@ fn step_with(
             // only its own alignments' slots), and the sufficient statistics.
             let nreads = f.off.len() - 1;
             let post_ptr = post.as_mut_ptr() as usize;
-            let st = fold_blocks(
-                nreads,
-                Stats::default,
-                Vec::new,
-                |st, scratch, r| {
-                    for k in f.off[r]..f.off[r + 1] {
-                        // SAFETY: slot k belongs to read r alone.
-                        unsafe { *(post_ptr as *mut f64).add(k) = 0.0 };
-                    }
-                    read(r, st, scratch, &mut |k, _, p| unsafe {
-                        *(post_ptr as *mut f64).add(k) = p
-                    });
-                },
-                Stats::merge,
-            );
+            let parts = fold_block_parts(nreads, Stats::default, Vec::new, |st, scratch, r| {
+                for k in f.off[r]..f.off[r + 1] {
+                    // SAFETY: slot k belongs to read r alone.
+                    unsafe { *(post_ptr as *mut f64).add(k) = 0.0 };
+                }
+                read(r, st, scratch, &mut |k, _, p| unsafe {
+                    *(post_ptr as *mut f64).add(k) = p
+                });
+            });
+            let st = Stats::merge_all(parts);
             // Pass 2, over transcripts: sum their alignments' posteriors.
             let post = &*post;
             curr.par_iter().enumerate().for_each(|(t, c)| {
@@ -1825,8 +1998,9 @@ fn run_from(
                     None => &*exps.insert(Exps::new(&par, max_len)),
                 };
                 let st = step_with(&mut lay, f, &par, src, &curr, mult, e);
-                ll_gain = st.ll - last_ll;
-                last_ll = st.ll;
+                let ll = st.ll.value();
+                ll_gain = ll - last_ll;
+                last_ll = ll;
                 let next = st.params(&par);
                 still = if moved(&next, &par) < FREEZE_TOL
                     || (0.0..freeze_ll_gain).contains(&ll_gain)
