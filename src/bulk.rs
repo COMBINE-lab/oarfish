@@ -5,6 +5,7 @@ use crate::eq_classes::{self, EqClasses};
 use crate::kde_utils;
 use crate::prog_opts::Args;
 use crate::util::constants::EMPTY_READ_NAME;
+use crate::util::digest_utils::DeferredDigest;
 use crate::util::oarfish_types::AlnInfo;
 use crate::util::oarfish_types::DiscardTable;
 use crate::util::oarfish_types::{
@@ -89,7 +90,7 @@ pub(crate) fn perform_inference_and_write_output(
     name_vec: Option<SwapVec<String>>,
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
-    seqcol_digest: NamedDigestVec,
+    seqcol_digest: DeferredDigest<'_>,
     aln_time: std::time::Duration,
     args: &Args,
 ) -> anyhow::Result<()> {
@@ -203,6 +204,7 @@ pub(crate) fn perform_inference_and_write_output(
     // Without per-read model terms, reads with the same (target, probability) multiset are
     // interchangeable: run the EM over equivalence classes.
     let eqc = (!per_read_terms && !args.per_read_em).then(|| {
+        // On the global pool, which main sizes to -j.
         let eqc = EqClasses::from_store(emi.eq_map, emi.txp_info.len());
         info!(
             "{} reads in {} equivalence classes",
@@ -263,6 +265,7 @@ pub(crate) fn perform_inference_and_write_output(
 
     // prepare the JSON object we'll write
     // to meta_info.json
+    let seqcol_digest = seqcol_digest.resolve()?;
     let json_info = get_json_info(args, &emi, &seqcol_digest, aln_time);
 
     // write the output
@@ -328,14 +331,14 @@ pub(crate) fn perform_inference_and_write_output(
     Ok(())
 }
 
-pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
+pub fn quantify_bulk_alignments_from_bam(
     header: &noodles_sam::Header,
     filter_opts: AlignmentFilters,
-    reader: &mut bam::io::Reader<R>,
+    reader: bam::io::Reader<noodles_bgzf::io::MultithreadedReader<std::fs::File>>,
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
     args: &Args,
-    seqcol_digest: NamedDigestVec,
+    seqcol_digest: DeferredDigest<'_>,
 ) -> anyhow::Result<()> {
     let mut name_vec = if filter_opts.write_assignment_probs {
         Some(SwapVec::<String>::with_config(SwapVecConfig {
@@ -350,11 +353,24 @@ pub fn quantify_bulk_alignments_from_bam<R: BufRead>(
     // in our in-memory stor
     let mut store = InMemoryAlignmentStore::new(filter_opts, header);
     let read_aln_start = std::time::SystemTime::now();
+    // The records are read by our own BGZF pipeline (`util::bgzf_records`), from where the
+    // header ended: stop the header reader's decoder and seek its file to the block there.
+    let (block_start, first_block_skip): (u64, u16) = reader.get_ref().virtual_position().into();
+    let mut file = reader.into_inner().finish()?;
+    {
+        use std::io::Seek;
+        file.seek(std::io::SeekFrom::Start(block_start))?;
+    }
+    let input = alignment_parser::BamRecordStream {
+        file,
+        first_block_skip: usize::from(first_block_skip),
+        workers: args.threads.max(1),
+    };
     alignment_parser::parse_alignments(
         &mut store,
         &mut name_vec,
         header,
-        reader,
+        input,
         txps,
         args.sort_check_num,
         args.quiet,
@@ -435,7 +451,7 @@ pub fn quantify_genome_alignments_from_bam<R: BufRead>(
         name_vec,
         txps,
         txps_name,
-        seqcol_digest,
+        seqcol_digest.into(),
         read_aln_time,
         args,
     )
@@ -812,7 +828,7 @@ pub fn quantify_genome_raw_reads(
         name_vec,
         txps,
         txps_name,
-        seqcol_digest,
+        seqcol_digest.into(),
         aln_time,
         args,
     )
@@ -1166,7 +1182,7 @@ pub fn quantify_bulk_alignments_raw_reads(
         name_vec,
         txps,
         txps_name,
-        seqcol_digest,
+        seqcol_digest.into(),
         aln_time,
         args,
     )

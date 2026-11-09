@@ -15,8 +15,11 @@
 //! holds partway through a tile, every component replays the tile from its start up to that
 //! round. The rounds are therefore those of the plain loop, up to summation order.
 
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+
 use rayon::prelude::*;
 
+use crate::truncation::LogLik;
 use crate::util::constants;
 
 /// Rounds a component runs before the global criterion is checked.
@@ -28,6 +31,10 @@ const LARGE: usize = 1 << 16;
 /// its own buffer; the buffers are summed in block order, so the result does not depend on the
 /// number of threads.
 const BLOCKS: usize = 64;
+// Block ids are stored as `u8`.
+const _: () = assert!(BLOCKS <= 256);
+/// Entry counts at or above this sort as one size in [`Plan::new_by_size`].
+const SIZE_CAP: usize = 255;
 
 /// Whether the plain EMs run on the component layout: yes unless `OARFISH_EM_COMPONENTS=0`.
 pub fn enabled() -> bool {
@@ -57,7 +64,12 @@ impl Counts<'_> {
 
 /// One component: transcripts `tx` (global ids; the local id is the index), and classes
 /// `off[k]..off[k + 1]` over `lab` (local ids) and `w` (weights), with class ids `cls[k]`.
-/// Large components' classes are grouped into blocks `blk[b]..blk[b + 1]`.
+/// Large components' classes are grouped into blocks `blk[b]..blk[b + 1]`; block `b` touches
+/// the labels `touch[touch_off[b]..touch_off[b + 1]]` (ascending), and label `l` is touched by
+/// the blocks `by[by_off[l]..by_off[l + 1]]` (ascending). A plan built by size also records the
+/// runs of classes of one entry count: block `b` (the whole component, for a small one) is the
+/// runs `runs[run_blk[b]..run_blk[b + 1]]`, each (entry count, first class, end class); without
+/// them (`runs` empty) the classes are taken one at a time.
 struct Comp<W> {
     tx: Vec<u32>,
     off: Vec<u32>,
@@ -65,6 +77,12 @@ struct Comp<W> {
     w: Vec<W>,
     cls: Vec<u32>,
     blk: Vec<u32>,
+    touch_off: Vec<usize>,
+    touch: Vec<u32>,
+    by_off: Vec<u32>,
+    by: Vec<u8>,
+    runs: Vec<(u32, u32, u32)>,
+    run_blk: Vec<u32>,
 }
 
 impl<W> Comp<W> {
@@ -93,6 +111,58 @@ fn find(p: &mut [u32], mut x: u32) -> u32 {
     x
 }
 
+/// The root of `x` in the shared forest `p`, halving the path on the way. A parent only ever
+/// moves to a smaller id that is an ancestor, so the forest stays acyclic under any interleaving.
+fn find_shared(p: &[AtomicU32], mut x: u32) -> u32 {
+    loop {
+        let px = p[x as usize].load(Relaxed);
+        if px == x {
+            return x;
+        }
+        let gp = p[px as usize].load(Relaxed);
+        if gp != px {
+            let _ = p[x as usize].compare_exchange_weak(px, gp, Relaxed, Relaxed);
+        }
+        x = gp;
+    }
+}
+
+/// Joins the trees of `a` and `b` in the shared forest `p`, always linking the larger root under
+/// the smaller, so every root is its tree's smallest id whatever the order of the joins. Returns
+/// a member of the joined tree.
+fn union_shared(p: &[AtomicU32], a: u32, b: u32) -> u32 {
+    let (mut a, mut b) = (a, b);
+    loop {
+        a = find_shared(p, a);
+        b = find_shared(p, b);
+        if a == b {
+            return a;
+        }
+        let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+        // Fails only if `hi` stopped being a root meanwhile; then retry from the new roots.
+        if p[hi as usize]
+            .compare_exchange(hi, lo, Relaxed, Relaxed)
+            .is_ok()
+        {
+            return lo;
+        }
+        (a, b) = (lo, hi);
+    }
+}
+
+/// A buffer that parallel tasks write at disjoint positions.
+struct Disjoint<T>(*mut T);
+// SAFETY: used only for writes to positions no two tasks share.
+unsafe impl<T: Send> Sync for Disjoint<T> {}
+impl<T> Disjoint<T> {
+    /// # Safety
+    /// `i` is in bounds and no other task writes it.
+    #[inline(always)]
+    unsafe fn write(&self, i: usize, x: T) {
+        unsafe { self.0.add(i).write(x) }
+    }
+}
+
 impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
     /// Classes `c` with entries `offsets[c]..offsets[c + 1]`, entry `k` having target
     /// `target(k)` and weight `w(k)`. With `by_heaviest`, each component's classes are ordered
@@ -106,24 +176,57 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
         ntx: usize,
         by_heaviest: bool,
     ) -> Self {
+        Self::build(target, w, offsets, ntx, by_heaviest, false)
+    }
+
+    /// As [`Plan::new`], but each component's classes are first ordered by their entry count
+    /// (capped at [`SIZE_CAP`]), stably, so the order `new` would give holds among classes of one
+    /// size. Classes of equal size sit together, and the variable-length loops of a round over
+    /// them exit at predictable trip counts (for classes of reads, whose alignment counts vary).
+    pub fn new_by_size(
+        target: impl Fn(usize) -> u32 + Sync,
+        w: impl Fn(usize) -> W + Sync,
+        offsets: &[usize],
+        ntx: usize,
+        by_heaviest: bool,
+    ) -> Self {
+        Self::build(target, w, offsets, ntx, by_heaviest, true)
+    }
+
+    fn build(
+        target: impl Fn(usize) -> u32 + Sync,
+        w: impl Fn(usize) -> W + Sync,
+        offsets: &[usize],
+        ntx: usize,
+        by_heaviest: bool,
+        by_size: bool,
+    ) -> Self {
         let ncls = offsets.len() - 1;
         let class = |c: usize| offsets[c]..offsets[c + 1];
         let multi = |c: usize| offsets[c + 1] - offsets[c] >= 2;
-        let mut p: Vec<u32> = (0..ntx as u32).collect();
-        let mut in_multi = vec![false; ntx];
-        for c in (0..ncls).filter(|&c| multi(c)) {
-            let mut a = find(&mut p, target(offsets[c]));
-            for k in class(c) {
-                let t = target(k);
-                in_multi[t as usize] = true;
-                let b = find(&mut p, t);
-                if a != b {
-                    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
-                    p[hi as usize] = lo;
-                    a = lo;
-                }
-            }
-        }
+        // The class-transcript graph's components, joined concurrently; each root is its
+        // component's smallest transcript, so the result is that of a serial pass.
+        let (mut p, in_multi) = {
+            let p: Vec<AtomicU32> = (0..ntx as u32).map(AtomicU32::new).collect();
+            let in_multi: Vec<AtomicBool> = (0..ntx).map(|_| AtomicBool::new(false)).collect();
+            (0..ncls)
+                .into_par_iter()
+                .with_min_len(4096)
+                .filter(|&c| multi(c))
+                .for_each(|c| {
+                    let mut a = target(offsets[c]);
+                    for k in class(c) {
+                        let t = target(k);
+                        if !in_multi[t as usize].load(Relaxed) {
+                            in_multi[t as usize].store(true, Relaxed);
+                        }
+                        a = union_shared(&p, a, t);
+                    }
+                });
+            let p: Vec<u32> = p.into_iter().map(AtomicU32::into_inner).collect();
+            let in_multi: Vec<bool> = in_multi.into_iter().map(AtomicBool::into_inner).collect();
+            (p, in_multi)
+        };
         // Components of the transcripts that multi-target classes reference, numbered by their
         // smallest transcript; local ids ascend with global ids.
         let mut comp_of_root = vec![u32::MAX; ntx];
@@ -145,18 +248,58 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
             ntx_of[k as usize] += 1;
         }
         drop((p, comp_of_root, in_multi));
-        // Size every component exactly before filling it.
+        // Count each component's classes (and incidences) per chunk of classes, and each chunk's
+        // single-target classes; the counts' running sums, in component then chunk order, place
+        // each chunk's classes after those of the chunks before it, so every component keeps
+        // class order. Every buffer that outlives this is allocated on the calling thread, as
+        // the serial passes did (an allocator with per-thread heaps reuses that thread's freed
+        // memory, not the workers').
         let ncomp = ntx_of.len();
+        let comp = |c: usize| comp_of[target(offsets[c]) as usize] as usize;
+        let width = ncomp.max(1);
+        let nchunk = ncls
+            .div_ceil(1 << 16)
+            .min(4 * rayon::current_num_threads())
+            .min((1 << 21) / width)
+            .max(1);
+        let per = ncls.div_ceil(nchunk).max(1);
+        let chunk = |j: usize| (j * per).min(ncls)..((j + 1) * per).min(ncls);
+        let mut at = vec![0_usize; nchunk * width];
+        let mut inc = vec![0_usize; nchunk * width];
+        let mut sat = vec![0_usize; nchunk];
+        at.par_chunks_mut(width)
+            .zip(inc.par_chunks_mut(width))
+            .zip(sat.par_iter_mut())
+            .enumerate()
+            .for_each(|(j, ((n, i), s))| {
+                for c in chunk(j) {
+                    let len = offsets[c + 1] - offsets[c];
+                    if len >= 2 {
+                        let k = comp(c);
+                        n[k] += 1;
+                        i[k] += len;
+                    } else if len == 1 {
+                        *s += 1;
+                    }
+                }
+            });
+        let mut start = vec![0_usize; ncomp + 1];
         let (mut ncls_of, mut ninc_of) = (vec![0_usize; ncomp], vec![0_usize; ncomp]);
-        let mut nsingle = 0;
-        for c in 0..ncls {
-            if multi(c) {
-                let k = comp_of[target(offsets[c]) as usize] as usize;
-                ncls_of[k] += 1;
-                ninc_of[k] += offsets[c + 1] - offsets[c];
-            } else if offsets[c + 1] > offsets[c] {
-                nsingle += 1;
+        for k in 0..ncomp {
+            let mut run = start[k];
+            for j in 0..nchunk {
+                let n = at[j * width + k];
+                at[j * width + k] = run;
+                run += n;
+                ninc_of[k] += inc[j * width + k];
             }
+            ncls_of[k] = run - start[k];
+            start[k + 1] = run;
+        }
+        drop(inc);
+        let mut nsingle = 0;
+        for s in sat.iter_mut() {
+            (*s, nsingle) = (nsingle, nsingle + *s);
         }
         let mut comps: Vec<Comp<W>> = (0..ncomp)
             .map(|k| Comp {
@@ -170,6 +313,12 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
                 w: Vec::with_capacity(ninc_of[k]),
                 cls: Vec::with_capacity(ncls_of[k]),
                 blk: Vec::new(),
+                touch_off: Vec::new(),
+                touch: Vec::new(),
+                by_off: Vec::new(),
+                by: Vec::new(),
+                runs: Vec::new(),
+                run_blk: Vec::new(),
             })
             .collect();
         for t in 0..ntx {
@@ -179,24 +328,33 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
         }
         // Each component's classes, in class order or by their heaviest target (then by class
         // id), packed as (heaviest target's local id) << 32 | class id.
-        let mut start = vec![0_usize; ncomp + 1];
-        for k in 0..ncomp {
-            start[k + 1] = start[k] + ncls_of[k];
-        }
         let mut order = vec![0_u64; start[ncomp]];
-        let mut singles = Vec::with_capacity(nsingle);
+        let mut singles = vec![(0_u32, 0_u32); nsingle];
         {
-            let mut at = start[..ncomp].to_vec();
-            for c in 0..ncls {
-                if multi(c) {
-                    let k = comp_of[target(offsets[c]) as usize] as usize;
-                    order[at[k]] = c as u64;
-                    at[k] += 1;
-                } else if offsets[c + 1] > offsets[c] {
-                    singles.push((target(offsets[c]), c as u32));
-                }
-            }
+            let out = Disjoint(order.as_mut_ptr());
+            let one = Disjoint(singles.as_mut_ptr());
+            at.par_chunks_mut(width)
+                .zip(sat.par_iter_mut())
+                .enumerate()
+                .for_each(|(j, (at, s))| {
+                    for c in chunk(j) {
+                        let len = offsets[c + 1] - offsets[c];
+                        if len >= 2 {
+                            let k = comp(c);
+                            // SAFETY: chunk `j`'s classes of component `k` own positions
+                            // `at[k]..` up to the next chunk's start, all below `start[ncomp]`.
+                            unsafe { out.write(at[k], c as u64) };
+                            at[k] += 1;
+                        } else if len == 1 {
+                            // SAFETY: as above, chunk `j`'s single-target classes own
+                            // positions `*s..` up to the next chunk's, all below `nsingle`.
+                            unsafe { one.write(*s, (target(offsets[c]), c as u32)) };
+                            *s += 1;
+                        }
+                    }
+                });
         }
+        drop((at, sat));
         if by_heaviest {
             order.par_iter_mut().with_min_len(4096).for_each(|x| {
                 let c = *x as usize;
@@ -216,8 +374,52 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
         }
         // Fill each component, a large one in parallel over blocks of whole classes.
         comps.par_iter_mut().enumerate().for_each(|(k, cm)| {
-            cm.cls
-                .extend(order[start[k]..start[k + 1]].iter().map(|&x| x as u32));
+            let part = &order[start[k]..start[k + 1]];
+            if by_size {
+                let len = |x: u64| {
+                    let c = x as u32 as usize;
+                    offsets[c + 1] - offsets[c]
+                };
+                // A stable counting sort by capped entry count, from `p` straight into `out`.
+                let sort = |p: &[u64], out: &mut [u32]| {
+                    let mut at = [0_usize; SIZE_CAP + 2];
+                    for &x in p {
+                        at[len(x).min(SIZE_CAP) + 1] += 1;
+                    }
+                    for s in 1..at.len() {
+                        at[s] += at[s - 1];
+                    }
+                    for &x in p {
+                        let s = len(x).min(SIZE_CAP);
+                        out[at[s]] = x as u32;
+                        at[s] += 1;
+                    }
+                };
+                cm.cls.resize(part.len(), 0);
+                if ninc_of[k] >= LARGE {
+                    // Sort within runs of about the incidences of one block, so each block keeps
+                    // the classes (and transcripts) the order above gives it.
+                    let per = ninc_of[k].div_ceil(BLOCKS);
+                    let mut segs = Vec::with_capacity(BLOCKS + 1);
+                    let (mut rest, mut out) = (part, &mut cm.cls[..]);
+                    let (mut run, mut c0, mut nseg) = (0_usize, 0_usize, 1_usize);
+                    for (c, &x) in part.iter().enumerate() {
+                        if c > 0 && run >= per * nseg {
+                            let (a, b) = rest.split_at(c - c0);
+                            let (o, ob) = out.split_at_mut(c - c0);
+                            segs.push((a, o));
+                            (rest, out, c0, nseg) = (b, ob, c, nseg + 1);
+                        }
+                        run += len(x);
+                    }
+                    segs.push((rest, out));
+                    segs.into_par_iter().for_each(|(p, o)| sort(p, o));
+                } else {
+                    sort(part, &mut cm.cls[..]);
+                }
+            } else {
+                cm.cls.extend(part.iter().map(|&x| x as u32));
+            }
             assert!(
                 ninc_of[k] < u32::MAX as usize,
                 "a component with 2^32 incidences"
@@ -268,6 +470,71 @@ impl<W: Copy + Default + Into<f64> + Send + Sync> Plan<W> {
                 }
             }
             cm.blk.push(cm.cls.len() as u32);
+            // The labels each block touches, and for each label the blocks that touch it.
+            let nblk = cm.blk.len() - 1;
+            let m = cm.tx.len();
+            let lists: Vec<Vec<u32>> = (0..nblk)
+                .into_par_iter()
+                .map(|b| {
+                    let r = cm.off[cm.blk[b] as usize] as usize
+                        ..cm.off[cm.blk[b + 1] as usize] as usize;
+                    let mut seen = vec![false; m];
+                    for &l in &cm.lab[r] {
+                        seen[l as usize] = true;
+                    }
+                    (0..m as u32).filter(|&l| seen[l as usize]).collect()
+                })
+                .collect();
+            cm.touch_off = Vec::with_capacity(nblk + 1);
+            cm.touch_off.push(0);
+            let mut by_off = vec![0_u32; m + 1];
+            for v in &lists {
+                cm.touch_off.push(cm.touch_off.last().unwrap() + v.len());
+                for &l in v {
+                    by_off[l as usize + 1] += 1;
+                }
+            }
+            for l in 0..m {
+                by_off[l + 1] += by_off[l];
+            }
+            let mut at = by_off[..m].to_vec();
+            cm.by = vec![0_u8; by_off[m] as usize];
+            for (b, v) in lists.iter().enumerate() {
+                for &l in v {
+                    cm.by[at[l as usize] as usize] = b as u8;
+                    at[l as usize] += 1;
+                }
+            }
+            cm.by_off = by_off;
+            cm.touch = lists.concat();
+        }
+        if by_size {
+            // Each block's maximal runs of classes with one entry count.
+            comps.par_iter_mut().for_each(|cm| {
+                let blk: &[u32] = if cm.is_large() {
+                    &cm.blk
+                } else {
+                    &[0, cm.cls.len() as u32]
+                };
+                let (mut runs, mut run_blk) = (Vec::new(), Vec::with_capacity(blk.len()));
+                run_blk.push(0);
+                for b in 0..blk.len() - 1 {
+                    let (k0, k1) = (blk[b] as usize, blk[b + 1] as usize);
+                    let mut a = k0;
+                    while a < k1 {
+                        let size = cm.off[a + 1] - cm.off[a];
+                        let mut e = a + 1;
+                        while e < k1 && cm.off[e + 1] - cm.off[e] == size {
+                            e += 1;
+                        }
+                        runs.push((size, a as u32, e as u32));
+                        a = e;
+                    }
+                    run_blk.push(runs.len() as u32);
+                }
+                cm.runs = runs;
+                cm.run_blk = run_blk;
+            });
         }
         Plan {
             comps,
@@ -311,18 +578,97 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
         }
     }
 
+    /// [`Comp::push`] over the classes `k0..k1`, all of `N` entries: the same sums in the same
+    /// order, with the entry loops unrolled.
+    #[inline(always)]
+    fn push_n<const N: usize>(
+        &self,
+        k0: usize,
+        k1: usize,
+        n: impl Fn(usize) -> f64,
+        prev: &[f64],
+        acc: &mut [f64],
+    ) {
+        let r = self.off[k0] as usize..self.off[k1] as usize;
+        let (lab, w) = (&self.lab[r.clone()], &self.w[r]);
+        for (k, (l, w)) in (k0..k1).zip(lab.as_chunks::<N>().0.iter().zip(w.as_chunks::<N>().0)) {
+            let nk = n(k);
+            if nk == 0.0 {
+                continue;
+            }
+            // SAFETY: as in `push`. The sum is `push`'s left fold: its -0.0 start adds nothing.
+            let mut d = unsafe { *prev.get_unchecked(l[0] as usize) } * w[0].into();
+            for j in 1..N {
+                d += unsafe { *prev.get_unchecked(l[j] as usize) } * w[j].into();
+            }
+            if d > constants::EM_DENOM_THRESH {
+                let s = nk / d;
+                for j in 0..N {
+                    unsafe { *acc.get_unchecked_mut(l[j] as usize) += w[j].into() * s };
+                }
+            }
+        }
+    }
+
+    /// Adds the round of block `b`'s classes `k0..k1` (the whole component, `b` 0, for a small
+    /// one) to `acc`, a run of classes of 2 to 32 entries at a time when the plan has runs.
+    #[inline(always)]
+    fn push_block(
+        &self,
+        b: usize,
+        k0: usize,
+        k1: usize,
+        n: impl Fn(usize) -> f64 + Copy,
+        prev: &[f64],
+        acc: &mut [f64],
+    ) {
+        if self.runs.is_empty() {
+            for k in k0..k1 {
+                self.push(k, n(k), prev, acc);
+            }
+            return;
+        }
+        let runs = &self.runs[self.run_blk[b] as usize..self.run_blk[b + 1] as usize];
+        for &(size, a, e) in runs {
+            let (a, e) = (a as usize, e as usize);
+            macro_rules! unrolled {
+                ($($s:literal)*) => {
+                    match size {
+                        $($s => self.push_n::<$s>(a, e, n, prev, acc),)*
+                        _ => {
+                            for k in a..e {
+                                self.push(k, n(k), prev, acc);
+                            }
+                        }
+                    }
+                };
+            }
+            unrolled!(
+                2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32
+            );
+        }
+    }
+
     /// One EM round: `out[l] = base[l] + prev[l] * sum over l's classes of w * n / denom`.
     /// Returns the round's convergence statistic (largest relative increase over transcripts
     /// above [`constants::MIN_READ_THRESH`]). `acc` is scratch: one buffer of the component's
     /// size per block (one for a small component).
+    #[cfg(test)]
     fn step(&self, n: Counts, base: &[f64], prev: &[f64], out: &mut [f64], acc: &mut [f64]) -> f64 {
-        self.step_by(n, base, prev, out, acc, rel_increase)
+        self.step_by(self.count_of(n), base, prev, out, acc, rel_increase)
     }
 
-    /// [`Comp::step`], with the convergence statistic the largest `stat(prev, out)`.
+    /// The read count of each of this component's classes, in component order.
+    #[inline(always)]
+    fn count_of<'a>(&'a self, n: Counts<'a>) -> impl Fn(usize) -> f64 + Sync + Copy + 'a {
+        move |k| n.get(self.cls[k])
+    }
+
+    /// One EM round as `Comp::step` takes it, with the convergence statistic the largest
+    /// `stat(prev, out)`, and `n(k)` the read count of the component's class `k` (local index).
     fn step_by(
         &self,
-        n: Counts,
+        n: impl Fn(usize) -> f64 + Sync + Copy,
         base: &[f64],
         prev: &[f64],
         out: &mut [f64],
@@ -332,9 +678,7 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
         let m = self.tx.len();
         if !self.is_large() {
             acc.fill(0.0);
-            for k in 0..self.cls.len() {
-                self.push(k, n.get(self.cls[k]), prev, acc);
-            }
+            self.push_block(0, 0, self.cls.len(), n, prev, acc);
             let mut rd = 0.0_f64;
             for l in 0..m {
                 out[l] = base[l] + prev[l] * acc[l];
@@ -342,18 +686,35 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
             }
             return rd;
         }
+        // Each block zeroes and fills only the labels it touches, and each label sums only the
+        // blocks that touch it, in block order: the skipped addends are the +0.0 of untouched
+        // entries, so the sums are those over every block.
         acc.par_chunks_mut(m).enumerate().for_each(|(b, a)| {
-            a.fill(0.0);
-            for k in self.blk[b] as usize..self.blk[b + 1] as usize {
-                self.push(k, n.get(self.cls[k]), prev, a);
+            // SAFETY: the labels are below `m`, the length of `a`.
+            for &l in &self.touch[self.touch_off[b]..self.touch_off[b + 1]] {
+                unsafe { *a.get_unchecked_mut(l as usize) = 0.0 };
             }
+            self.push_block(
+                b,
+                self.blk[b] as usize,
+                self.blk[b + 1] as usize,
+                n,
+                prev,
+                a,
+            );
         });
         let acc = &*acc;
         out.par_iter_mut()
             .with_min_len(256)
             .enumerate()
             .map(|(l, o)| {
-                let s: f64 = acc.chunks(m).map(|a| a[l]).sum();
+                let bs = &self.by[self.by_off[l] as usize..self.by_off[l + 1] as usize];
+                // SAFETY: each block id is below the block count, and `acc` holds that many
+                // buffers of length `m`.
+                let s: f64 = bs
+                    .iter()
+                    .map(|&b| unsafe { *acc.get_unchecked(b as usize * m + l) })
+                    .sum();
                 *o = base[l] + prev[l] * s;
                 stat(prev[l], *o)
             })
@@ -381,10 +742,12 @@ fn rel_increase(prev: f64, curr: f64) -> f64 {
     }
 }
 
-/// A component's state: its single-target constant, abundances, scratch, and the convergence
-/// statistic of each round of the current tile.
+/// A component's state: its single-target constant, its classes' read counts gathered into
+/// component order (empty when every class is one read), abundances, scratch, and the
+/// convergence statistic of each round of the current tile.
 struct State {
     base: Vec<f64>,
+    cnt: Vec<f64>,
     prev: Vec<f64>,
     curr: Vec<f64>,
     acc: Vec<f64>,
@@ -412,6 +775,10 @@ pub fn run<W: Copy + Into<f64> + Send + Sync>(
         .iter()
         .map(|cm| State {
             base: cm.tx.iter().map(|&t| single[t as usize]).collect(),
+            cnt: match n {
+                Counts::Unit => Vec::new(),
+                _ => cm.cls.iter().map(|&c| n.get(c)).collect(),
+            },
             prev: cm.tx.iter().map(|&t| init[t as usize]).collect(),
             curr: vec![0.0; cm.tx.len()],
             acc: vec![0.0; cm.tx.len() * cm.blk.len().saturating_sub(1).max(1)],
@@ -447,8 +814,10 @@ pub fn run<W: Copy + Into<f64> + Send + Sync>(
         jobs.par_iter_mut().with_max_len(1).for_each(|(k, s)| {
             let cm = &plan.comps[*k];
             s.rd.clear();
+            let (unit, cnt) = (matches!(n, Counts::Unit), &s.cnt[..]);
+            let nk = move |k: usize| if unit { 1.0 } else { cnt[k] };
             for _ in 0..steps {
-                let r = cm.step(n, &s.base, &s.prev, &mut s.curr, &mut s.acc);
+                let r = cm.step_by(nk, &s.base, &s.prev, &mut s.curr, &mut s.acc, rel_increase);
                 s.rd.push(r);
                 std::mem::swap(&mut s.prev, &mut s.curr);
             }
@@ -505,46 +874,68 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
     /// The component's log-likelihood at abundances `theta`, up to a constant: over its
     /// classes (read counts `n`) and its single-target reads `base`, with `theta` normalized to
     /// proportions, as the truncation EM's `loglik_static` computes it over all reads.
+    #[cfg(test)]
     fn loglik(&self, n: Counts, base: &[f64], theta: &[f64]) -> f64 {
-        let class_ll = |k: usize| -> (f64, f64) {
+        self.loglik_pair(n, base, theta, theta).0
+    }
+
+    /// [`Comp::loglik`] at two abundance vectors `a` and `b` in one pass over the classes:
+    /// each of the two is summed in the order a separate call would sum it, so both results
+    /// are those of separate calls.
+    fn loglik_pair(&self, n: Counts, base: &[f64], a: &[f64], b: &[f64]) -> (f64, f64) {
+        // Each sum of logarithms is kept as a `LogLik` product (one `ln` per block, not one per
+        // class), merged in block order.
+        type Acc = (LogLik, f64, LogLik, f64);
+        let add = |x: Acc, y: Acc| (x.0.merge(y.0), x.1 + y.1, x.2.merge(y.2), x.3 + y.3);
+        let class_ll = |mut acc: Acc, k: usize| -> Acc {
             let c = n.get(self.cls[k]);
             let r = self.off[k] as usize..self.off[k + 1] as usize;
-            let d: f64 = self.lab[r.clone()]
-                .iter()
-                .zip(&self.w[r])
-                .map(|(&l, &w)| theta[l as usize] * w.into())
-                .sum();
-            if c > 0.0 && d > constants::EM_DENOM_THRESH {
-                (c * d.ln(), c)
-            } else {
-                (0.0, 0.0)
+            let (mut da, mut db) = (0.0_f64, 0.0_f64);
+            for (&l, &w) in self.lab[r.clone()].iter().zip(&self.w[r]) {
+                let w: f64 = w.into();
+                da += a[l as usize] * w;
+                db += b[l as usize] * w;
             }
+            if c > 0.0 {
+                if da > constants::EM_DENOM_THRESH {
+                    acc.0.add_ln(c, da);
+                    acc.1 += c;
+                }
+                if db > constants::EM_DENOM_THRESH {
+                    acc.2.add_ln(c, db);
+                    acc.3 += c;
+                }
+            }
+            acc
         };
-        let (mut ll, mut reads) = if self.is_large() {
-            let parts: Vec<(f64, f64)> = (0..self.blk.len() - 1)
+        let zero = (LogLik::default(), 0.0, LogLik::default(), 0.0);
+        let (mut lla, mut ra, mut llb, mut rb) = if self.is_large() {
+            let parts: Vec<Acc> = (0..self.blk.len() - 1)
                 .into_par_iter()
-                .map(|b| {
-                    (self.blk[b] as usize..self.blk[b + 1] as usize)
-                        .map(class_ll)
-                        .fold((0.0, 0.0), |a, x| (a.0 + x.0, a.1 + x.1))
-                })
+                .map(|b| (self.blk[b] as usize..self.blk[b + 1] as usize).fold(zero, class_ll))
                 .collect();
-            parts
-                .into_iter()
-                .fold((0.0, 0.0), |a, x| (a.0 + x.0, a.1 + x.1))
+            parts.into_iter().fold(zero, add)
         } else {
-            (0..self.cls.len())
-                .map(class_ll)
-                .fold((0.0, 0.0), |a, x| (a.0 + x.0, a.1 + x.1))
+            (0..self.cls.len()).fold(zero, class_ll)
         };
-        for (&s, &t) in base.iter().zip(theta) {
-            if s > 0.0 && t > constants::EM_DENOM_THRESH {
-                ll += s * t.ln();
-                reads += s;
+        for ((&s, &ta), &tb) in base.iter().zip(a).zip(b) {
+            if s > 0.0 {
+                if ta > constants::EM_DENOM_THRESH {
+                    lla.add_ln(s, ta);
+                    ra += s;
+                }
+                if tb > constants::EM_DENOM_THRESH {
+                    llb.add_ln(s, tb);
+                    rb += s;
+                }
             }
         }
-        let total: f64 = theta.iter().sum();
-        ll - reads * total.ln()
+        let (mut ta, mut tb) = (0.0_f64, 0.0_f64);
+        for (&x, &y) in a.iter().zip(b) {
+            ta += x;
+            tb += y;
+        }
+        (lla.value() - ra * ta.ln(), llb.value() - rb * tb.ln())
     }
 }
 
@@ -588,8 +979,9 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
     /// Leaves the result in `s.prev` and returns the last EM step's statistic.
     fn squarem_cycle(&self, n: Counts, s: &mut SqState) -> f64 {
         s.t0.copy_from_slice(&s.prev);
-        self.step_by(n, &s.base, &s.t0, &mut s.t1, &mut s.acc, rel_change);
-        let rd2 = self.step_by(n, &s.base, &s.t1, &mut s.t2, &mut s.acc, rel_change);
+        let nk = self.count_of(n);
+        self.step_by(nk, &s.base, &s.t0, &mut s.t1, &mut s.acc, rel_change);
+        let rd2 = self.step_by(nk, &s.base, &s.t1, &mut s.t2, &mut s.acc, rel_change);
         let (mut rr, mut vv) = (0.0_f64, 0.0_f64);
         for i in 0..s.t0.len() {
             let (a, b, c) = (s.t0[i], s.t1[i], s.t2[i]);
@@ -616,11 +1008,8 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
             let (r, v) = (b - a, c - 2.0 * b + a);
             s.prev[i] = (a + 2.0 * st * r + st * st * v).max(0.0);
         }
-        let rd3 = self.step_by(n, &s.base, &s.prev, &mut s.curr, &mut s.acc, rel_change);
-        let (l3, l2) = (
-            self.loglik(n, &s.base, &s.curr),
-            self.loglik(n, &s.base, &s.t2),
-        );
+        let rd3 = self.step_by(nk, &s.base, &s.prev, &mut s.curr, &mut s.acc, rel_change);
+        let (l3, l2) = self.loglik_pair(n, &s.base, &s.curr, &s.t2);
         if l3.is_finite() && l3 >= l2 {
             s.sq.acc += 1;
             if hit {
@@ -720,7 +1109,14 @@ pub fn run_squarem<W: Copy + Into<f64> + Send + Sync>(
                     cm.squarem_cycle(n, s)
                 } else {
                     niter += 1;
-                    let r = cm.step_by(n, &s.base, &s.prev, &mut s.curr, &mut s.acc, rel_change);
+                    let r = cm.step_by(
+                        cm.count_of(n),
+                        &s.base,
+                        &s.prev,
+                        &mut s.curr,
+                        &mut s.acc,
+                        rel_change,
+                    );
                     std::mem::swap(&mut s.prev, &mut s.curr);
                     r
                 };
@@ -779,7 +1175,14 @@ pub fn run_squarem<W: Copy + Into<f64> + Send + Sync>(
                     *x = 0.0;
                 }
             }
-            cm.step_by(n, &s.base, &s.prev, &mut s.curr, &mut s.acc, rel_change);
+            cm.step_by(
+                cm.count_of(n),
+                &s.base,
+                &s.prev,
+                &mut s.curr,
+                &mut s.acc,
+                rel_change,
+            );
         });
     for (cm, s) in plan.comps.iter().zip(&st) {
         for (&t, &x) in cm.tx.iter().zip(&s.curr) {
@@ -790,4 +1193,515 @@ pub fn run_squarem<W: Copy + Into<f64> + Send + Sync>(
         out[t as usize] = single[t as usize];
     }
     (out, report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::em_tests::{
+        Classes, Read, RefEm, Rng, assert_bits_eq, assert_close, check_invariants, mixed_reads, on,
+        ref_em,
+    };
+
+    /// Classes in CSR form: class `c` is entries `off[c]..off[c + 1]` of `t` and `w`.
+    struct Csr {
+        off: Vec<usize>,
+        t: Vec<u32>,
+        w: Vec<f64>,
+    }
+
+    fn csr(reads: &[Read]) -> Csr {
+        let mut c = Csr {
+            off: vec![0],
+            t: vec![],
+            w: vec![],
+        };
+        for r in reads {
+            for &(t, p) in r {
+                c.t.push(t);
+                c.w.push(p as f64);
+            }
+            c.off.push(c.t.len());
+        }
+        c
+    }
+
+    fn plan_of(c: &Csr, ntx: usize, by_heaviest: bool) -> Plan<f64> {
+        Plan::new(|k| c.t[k], |k| c.w[k], &c.off, ntx, by_heaviest)
+    }
+
+    /// Each component's transcripts and its classes (class id, then (global target, weight
+    /// bits) entries), and the single-target classes.
+    type View = (
+        Vec<(Vec<u32>, Vec<(u32, Vec<(u32, u64)>)>)>,
+        Vec<(u32, u32)>,
+    );
+
+    fn view(p: &Plan<f64>) -> View {
+        let comps = p
+            .comps
+            .iter()
+            .map(|cm| {
+                let cls = (0..cm.cls.len())
+                    .map(|k| {
+                        let r = cm.off[k] as usize..cm.off[k + 1] as usize;
+                        let e = r
+                            .map(|i| (cm.tx[cm.lab[i] as usize], cm.w[i].to_bits()))
+                            .collect();
+                        (cm.cls[k], e)
+                    })
+                    .collect();
+                (cm.tx.clone(), cls)
+            })
+            .collect();
+        (comps, p.singles.clone())
+    }
+
+    /// Reads over 96 transcripts in overlapping windows of 8 (one in ten reaching into another
+    /// window, so windows chain into larger components), with repeated targets, single-target
+    /// reads on transcripts 100..104 only, and nothing on the rest of 96..120; weights drawn
+    /// from a continuum, so a class's heaviest target is unique.
+    fn chained_reads(seed: u64, n: usize) -> Vec<Read> {
+        let mut rng = Rng::new(seed);
+        let mut reads: Vec<Read> = (0..n)
+            .map(|_| {
+                let g = rng.below(12) * 8;
+                let k = 1 + rng.below(3);
+                let mut r: Read = (0..k)
+                    .map(|_| {
+                        (
+                            (g + rng.below(8)) as u32,
+                            0.05 + rng.below(1 << 20) as f32 / (1 << 20) as f32,
+                        )
+                    })
+                    .collect();
+                if rng.below(10) == 0 {
+                    r.push((rng.below(96) as u32, 0.3));
+                }
+                r
+            })
+            .collect();
+        reads.extend((100..104).flat_map(|t| std::iter::repeat_n(vec![(t, 0.7)], 3)));
+        rng.shuffle(&mut reads);
+        reads
+    }
+
+    /// Transcript labels after merging every class's targets (a plain fixed-point flood fill).
+    fn flood(c: &Csr, ntx: usize) -> Vec<usize> {
+        let mut lab: Vec<usize> = (0..ntx).collect();
+        loop {
+            let mut changed = false;
+            for w in c.off.windows(2).filter(|w| w[1] - w[0] >= 2) {
+                let m = c.t[w[0]..w[1]]
+                    .iter()
+                    .map(|&t| lab[t as usize])
+                    .min()
+                    .unwrap();
+                for &t in &c.t[w[0]..w[1]] {
+                    if lab[t as usize] != m {
+                        lab[t as usize] = m;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                return lab;
+            }
+        }
+    }
+
+    /// The layout partitions the multi-target classes by connected components of the
+    /// class-transcript graph: every such class sits whole, in order, in the one component that
+    /// holds its targets; single-target classes are kept apart; empty classes and transcripts no
+    /// multi-target class touches are in no component. The layout is the same on any number of
+    /// threads.
+    #[test]
+    fn plan_partitions_classes_by_connected_component() {
+        let mut reads = chained_reads(11, 600);
+        let ntx = 120;
+        let mut c = csr(&reads);
+        // Empty classes at a few positions.
+        for at in [0, 17, 300, 600] {
+            c.off.insert(at, c.off[at]);
+            reads.insert(at, vec![]);
+        }
+        let lab = flood(&c, ntx);
+        for by_heaviest in [false, true] {
+            let plan = plan_of(&c, ntx, by_heaviest);
+            let (comps, singles) = view(&plan);
+            assert_eq!(comps.len(), plan.n_components());
+            let mut comp_of = vec![usize::MAX; ntx];
+            let mut placed = vec![0; reads.len()];
+            for (k, (tx, cls)) in comps.iter().enumerate() {
+                assert!(tx.windows(2).all(|w| w[0] < w[1]), "local ids ascend");
+                for &t in tx {
+                    assert_eq!(comp_of[t as usize], usize::MAX, "t{t} in two components");
+                    comp_of[t as usize] = k;
+                }
+                for (cid, e) in cls {
+                    placed[*cid as usize] += 1;
+                    let want: Vec<(u32, u64)> = reads[*cid as usize]
+                        .iter()
+                        .map(|&(t, p)| (t, (p as f64).to_bits()))
+                        .collect();
+                    assert_eq!(e, &want, "class {cid}");
+                    assert!(e.iter().all(|&(t, _)| tx.contains(&t)));
+                }
+            }
+            for (cid, r) in reads.iter().enumerate() {
+                assert_eq!(placed[cid], usize::from(r.len() >= 2), "class {cid}");
+            }
+            let want_singles: Vec<(u32, u32)> = reads
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.len() == 1)
+                .map(|(cid, r)| (r[0].0, cid as u32))
+                .collect();
+            assert_eq!(singles, want_singles);
+            let in_multi: Vec<bool> = (0..ntx)
+                .map(|t| {
+                    reads
+                        .iter()
+                        .any(|r| r.len() >= 2 && r.iter().any(|x| x.0 == t as u32))
+                })
+                .collect();
+            for t in 0..ntx {
+                assert_eq!(comp_of[t] != usize::MAX, in_multi[t], "t{t}");
+                for u in 0..ntx {
+                    if in_multi[t] && in_multi[u] {
+                        assert_eq!(comp_of[t] == comp_of[u], lab[t] == lab[u], "t{t} t{u}");
+                    }
+                }
+            }
+            for threads in [1, 4, 16] {
+                assert_eq!(
+                    on(threads, || view(&plan_of(&c, ntx, by_heaviest))),
+                    (comps.clone(), singles.clone())
+                );
+            }
+        }
+    }
+
+    /// With `by_heaviest`, a component's classes are ordered by their heaviest target, then by
+    /// class id; without it they keep class order.
+    #[test]
+    fn plan_orders_classes_by_heaviest_target() {
+        let reads = chained_reads(12, 800);
+        let c = csr(&reads);
+        for by_heaviest in [false, true] {
+            let (comps, _) = view(&plan_of(&c, 120, by_heaviest));
+            for (tx, cls) in &comps {
+                let key: Vec<(usize, u32)> = cls
+                    .iter()
+                    .map(|(cid, e)| {
+                        let (t, _) = e
+                            .iter()
+                            .max_by(|a, b| f64::from_bits(a.1).total_cmp(&f64::from_bits(b.1)))
+                            .unwrap();
+                        let local = tx.binary_search(t).unwrap();
+                        (if by_heaviest { local } else { 0 }, *cid)
+                    })
+                    .collect();
+                assert!(
+                    key.windows(2).all(|w| w[0] < w[1]),
+                    "{by_heaviest}: {key:?}"
+                );
+            }
+        }
+    }
+
+    /// `run` takes exactly the reference loop's rounds, wherever the stop falls relative to the
+    /// tiles: with an infinite threshold it stops at the first round past `min_iter`, with a zero
+    /// threshold at `max_iter`.
+    #[test]
+    fn run_takes_the_reference_rounds_across_tiles() {
+        let reads = chained_reads(13, 500);
+        let ntx = 120;
+        let c = csr(&reads);
+        let plan = plan_of(&c, ntx, true);
+        let cl = Classes::of_reads(&reads, ntx);
+        let init = cl.uniform();
+        let mut cases: Vec<RefEm> = [0, 1, 2, 62, 63, 64, 65, 127, 128, 200]
+            .map(|m| RefEm::new(1000, f64::INFINITY, m))
+            .to_vec();
+        cases.extend([0, 1, 2, 63, 64, 65, 129].map(|m| RefEm::new(m, 0.0, 1)));
+        for o in cases {
+            let (want, _) = ref_em(&cl, &init, o);
+            let got = run(&plan, Counts::Unit, &init, o.max_iter, o.thresh, o.min_iter);
+            let what = format!(
+                "max_iter {} thresh {} min_iter {}",
+                o.max_iter, o.thresh, o.min_iter
+            );
+            assert_close(&got, &want, 1e-11, &what);
+        }
+    }
+
+    /// A class with no reads changes nothing: the run with some counts at zero is the run
+    /// without those classes, and transcripts only they touch get 0.
+    #[test]
+    fn zero_count_classes_are_ignored() {
+        let reads = chained_reads(14, 400);
+        let ntx = 120;
+        let mut rng = Rng::new(15);
+        let counts: Vec<f64> = (0..reads.len())
+            .map(|_| [0.0, 1.0, 2.5, 7.0][rng.below(4)])
+            .collect();
+        let kept: Vec<Read> = reads
+            .iter()
+            .zip(&counts)
+            .filter(|(_, n)| **n > 0.0)
+            .map(|(r, _)| r.clone())
+            .collect();
+        let kept_n: Vec<f64> = counts.iter().copied().filter(|&n| n > 0.0).collect();
+        let cl = Classes::with_counts(&kept, &kept_n, ntx);
+        let init = cl.uniform();
+        let (want, _) = ref_em(&cl, &init, RefEm::new(2000, 1e-10, 1));
+        let plan = plan_of(&csr(&reads), ntx, false);
+        let got = run(&plan, Counts::Of(&counts), &init, 2000, 1e-10, 1);
+        assert_close(&got, &want, 1e-7, "zero counts");
+        let total: f64 = kept_n.iter().sum();
+        assert!((got.iter().sum::<f64>() - total).abs() < 1e-9 * total);
+    }
+
+    /// With `plain_first` at or past `max_iter`, `run_squarem` is the plain loop with the
+    /// truncation EM's statistic (relative change in either direction), from iteration
+    /// `niter0`, and reports that loop's iteration count and no SQUAREM cycles.
+    #[test]
+    fn run_squarem_without_cycles_is_the_plain_loop() {
+        let reads = mixed_reads(16);
+        let ntx = crate::em_tests::MIXED_NTX;
+        let plan = plan_of(&csr(&reads), ntx, true);
+        let cl = Classes::of_reads(&reads, ntx);
+        let init = cl.uniform();
+        let mut cases = vec![];
+        for niter0 in [0, 1, 2, 5, 70] {
+            cases.push((niter0, 1000, f64::INFINITY, 1e-11));
+            cases.push((niter0, 3000, 1e-9, 1e-7));
+        }
+        for max_iter in [0, 1, 2, 64, 65, 130] {
+            cases.push((0, max_iter, 0.0, 1e-11));
+        }
+        for (niter0, max_iter, thresh, rtol) in cases {
+            let o = RefEm {
+                max_iter,
+                thresh,
+                min_iter: 1,
+                niter0,
+                abs: true,
+            };
+            let (want, wn) = ref_em(&cl, &init, o);
+            let (got, rep) = run_squarem(
+                &plan,
+                Counts::Unit,
+                &init,
+                niter0,
+                max_iter,
+                thresh,
+                max_iter,
+            );
+            let what = format!("niter0 {niter0} max_iter {max_iter} thresh {thresh}");
+            assert_close(&got, &want, rtol, &what);
+            if rtol < 1e-9 {
+                assert_eq!(rep.niter, wn, "{what}");
+            }
+            assert_eq!((rep.acc, rep.rej, rep.plain), (0, 0, 0), "{what}");
+        }
+    }
+
+    /// Nested, nearly indistinguishable transcripts (plain EM's slow case), next to the mixed
+    /// fixture's components.
+    fn slow_reads() -> (Vec<Read>, usize) {
+        let mut reads = mixed_reads(17);
+        let b = crate::em_tests::MIXED_NTX as u32;
+        for i in 0..60 {
+            reads.push(vec![(b, 1.0), (b + 1, 1.0), (b + 2, 0.9)]);
+            if i % 3 == 0 {
+                reads.push(vec![(b, 1.0)]);
+            }
+            if i % 5 == 0 {
+                reads.push(vec![(b + 3, 1.0), (b + 2, 0.5)]);
+            }
+        }
+        (reads, b as usize + 4)
+    }
+
+    /// SQUAREM per component reaches the plain EM's fixed point, extrapolating where plain EM
+    /// is slow, from the start or after plain steps, and keeps the invariants.
+    #[test]
+    fn run_squarem_reaches_the_fixed_point() {
+        let (reads, ntx) = slow_reads();
+        let plan = plan_of(&csr(&reads), ntx, true);
+        let cl = Classes::of_reads(&reads, ntx);
+        let init = cl.uniform();
+        let mut o = RefEm::new(200_000, 1e-14, 1);
+        o.abs = true;
+        let (fixed, _) = ref_em(&cl, &init, o);
+        for plain_first in [0, 10] {
+            let (got, rep) = run_squarem(&plan, Counts::Unit, &init, 0, 20_000, 1e-10, plain_first);
+            assert_close(&got, &fixed, 1e-5, &format!("plain_first {plain_first}"));
+            check_invariants(&got, &reads, None, ntx, "run_squarem");
+            assert!(rep.acc > 0, "never extrapolated");
+            assert!(rep.niter < 20_000, "did not converge");
+        }
+        // Multiplicities are repeated reads.
+        let mult = Rng::new(18).resample(reads.len());
+        let dup: Vec<Read> = reads
+            .iter()
+            .zip(&mult)
+            .flat_map(|(r, &m)| std::iter::repeat_n(r.clone(), m as usize))
+            .collect();
+        let dc = Classes::of_reads(&dup, ntx);
+        let (fixed, _) = ref_em(&dc, &init, o);
+        let (got, _) = run_squarem(&plan, Counts::OfU32(&mult), &init, 0, 20_000, 1e-10, 0);
+        assert_close(&got, &fixed, 1e-5, "multiplicities");
+        check_invariants(&got, &reads, Some(&mult), ntx, "run_squarem OfU32");
+    }
+
+    /// The single-target reads of component `k`'s transcripts, by local id.
+    fn base_of(plan: &Plan<f64>, k: usize, n: Counts) -> Vec<f64> {
+        let cm = &plan.comps[k];
+        let mut base = vec![0.0; cm.tx.len()];
+        for &(t, c) in &plan.singles {
+            if let Ok(l) = cm.tx.binary_search(&t) {
+                base[l] += n.get(c);
+            }
+        }
+        base
+    }
+
+    /// Checks component `k`'s log-likelihood against the dense formula over its classes and
+    /// single-target reads (up to the constant the latter's weights add), its invariance to scaling, and that an EM round does not lower it.
+    fn check_loglik(plan: &Plan<f64>, k: usize, reads: &[Read], counts: &[f64], theta: &[f64]) {
+        let cm = &plan.comps[k];
+        let n = Counts::Of(counts);
+        let base = base_of(plan, k, n);
+        let local: Vec<f64> = cm.tx.iter().map(|&t| theta[t as usize]).collect();
+        let mut masked = vec![0.0; theta.len()];
+        for &t in &cm.tx {
+            masked[t as usize] = theta[t as usize];
+        }
+        let touching: Vec<usize> = (0..reads.len())
+            .filter(|&r| reads[r].iter().any(|x| cm.tx.binary_search(&x.0).is_ok()))
+            .collect();
+        let sub = Classes::with_counts(
+            &touching
+                .iter()
+                .map(|&r| reads[r].clone())
+                .collect::<Vec<_>>(),
+            &touching.iter().map(|&r| counts[r]).collect::<Vec<_>>(),
+            theta.len(),
+        );
+        let ll = cm.loglik(n, &base, &local);
+        // The single-target reads enter as `n ln theta`: their weights are a constant.
+        let consts: f64 = touching
+            .iter()
+            .filter(|&&r| reads[r].len() == 1 && counts[r] > 0.0)
+            .map(|&r| counts[r] * (reads[r][0].1 as f64).ln())
+            .sum();
+        let want = sub.loglik(&masked) - consts;
+        assert!(
+            (ll - want).abs() <= 1e-10 * want.abs().max(1.0),
+            "{ll} vs {want}"
+        );
+        let scaled: Vec<f64> = local.iter().map(|x| 2.5 * x).collect();
+        let ls = cm.loglik(n, &base, &scaled);
+        assert!((ls - ll).abs() <= 1e-10 * ll.abs().max(1.0), "{ls} vs {ll}");
+        let mut next = vec![0.0; local.len()];
+        let mut acc = vec![0.0; local.len() * cm.blk.len().saturating_sub(1).max(1)];
+        cm.step(n, &base, &local, &mut next, &mut acc);
+        let ln = cm.loglik(n, &base, &next);
+        assert!(
+            ln >= ll - 1e-9 * ll.abs(),
+            "EM round lowered the likelihood: {ll} -> {ln}"
+        );
+    }
+
+    #[test]
+    fn loglik_matches_the_dense_formula() {
+        let (reads, ntx) = slow_reads();
+        let mut rng = Rng::new(19);
+        let counts: Vec<f64> = (0..reads.len()).map(|_| rng.below(4) as f64).collect();
+        let plan = plan_of(&csr(&reads), ntx, true);
+        let theta: Vec<f64> = (0..ntx).map(|_| 0.5 + rng.below(100) as f64).collect();
+        for k in 0..plan.n_components() {
+            check_loglik(&plan, k, &reads, &counts, &theta);
+        }
+    }
+
+    #[test]
+    fn convergence_statistics() {
+        let tiny = constants::MIN_READ_THRESH / 2.0;
+        assert_eq!(rel_change(tiny, 5.0), 0.0);
+        assert_eq!(rel_increase(tiny, 5.0), 0.0);
+        assert_eq!(rel_change(2.0, 1.0), 0.5);
+        assert_eq!(rel_increase(2.0, 1.0), -0.5);
+        assert_eq!(rel_change(1.0, 3.0), 2.0);
+        assert_eq!(rel_increase(1.0, 3.0), 2.0);
+        assert_eq!(Counts::Unit.get(7), 1.0);
+        assert_eq!(Counts::Of(&[0.5, 2.0]).get(1), 2.0);
+        assert_eq!(Counts::OfU32(&[3, 4]).get(0), 3.0);
+    }
+
+    /// A component of at least [`LARGE`] incidences is split into at most [`BLOCKS`] blocks of
+    /// whole classes and stepped in parallel; the layout, `run` and `run_squarem` give the same
+    /// bits on 1, 4 and 16 threads, `run` takes the reference rounds, and the blocked
+    /// log-likelihood matches the dense formula.
+    #[test]
+    fn large_component_is_blocked_and_independent_of_threads() {
+        let mut rng = Rng::new(20);
+        // 40,000 reads over 200 transcripts: one component of about 90,000 incidences, next to
+        // the mixed fixture's small ones (moved to transcripts 200..264).
+        let mut reads = crate::em_tests::grouped_reads(&mut rng, 40_000, 1, 200, false);
+        reads.extend(
+            mixed_reads(21)
+                .into_iter()
+                .map(|r| r.into_iter().map(|(t, p)| (t + 200, p)).collect::<Read>()),
+        );
+        rng.shuffle(&mut reads);
+        let ntx = 200 + crate::em_tests::MIXED_NTX;
+        let c = csr(&reads);
+        let plan = on(1, || plan_of(&c, ntx, true));
+        assert!(plan.has_large());
+        for cm in plan.comps.iter().filter(|cm| cm.is_large()) {
+            let b = &cm.blk;
+            assert!(
+                b.len() >= 3 && b.len() - 1 <= BLOCKS,
+                "{} blocks",
+                b.len() - 1
+            );
+            assert_eq!((b[0], *b.last().unwrap()), (0, cm.cls.len() as u32));
+            assert!(b.windows(2).all(|w| w[0] < w[1]));
+        }
+        let v = view(&plan);
+        for threads in [4, 16] {
+            assert!(
+                on(threads, || view(&plan_of(&c, ntx, true))) == v,
+                "layout on {threads} threads"
+            );
+        }
+        let cl = Classes::of_reads(&reads, ntx);
+        let init = cl.uniform();
+        let runs: Vec<Vec<f64>> = [1, 4, 16]
+            .map(|t| on(t, || run(&plan, Counts::Unit, &init, 40, 0.0, 1)))
+            .to_vec();
+        let (want, _) = ref_em(&cl, &init, RefEm::new(40, 0.0, 1));
+        assert_close(&runs[0], &want, 1e-10, "large run");
+        let sq: Vec<Vec<f64>> = [1, 4, 16]
+            .map(|t| {
+                on(t, || {
+                    run_squarem(&plan, Counts::Unit, &init, 0, 30, 0.0, 0).0
+                })
+            })
+            .to_vec();
+        for i in 1..3 {
+            assert_bits_eq(&runs[i], &runs[0], "run");
+            assert_bits_eq(&sq[i], &sq[0], "run_squarem");
+        }
+        check_invariants(&sq[0], &reads, None, ntx, "large run_squarem");
+        let k = (0..plan.n_components())
+            .find(|&k| plan.comps[k].is_large())
+            .unwrap();
+        let theta: Vec<f64> = (0..ntx).map(|_| 0.5 + rng.below(100) as f64).collect();
+        check_loglik(&plan, k, &reads, &vec![1.0; reads.len()], &theta);
+    }
 }

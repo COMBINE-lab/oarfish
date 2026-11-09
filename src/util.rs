@@ -1,5 +1,6 @@
 pub mod aligner;
 pub mod aux_counts;
+pub mod bgzf_records;
 pub mod binomial_probability;
 pub mod constants;
 pub mod count_function;

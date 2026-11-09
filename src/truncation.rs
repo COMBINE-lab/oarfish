@@ -265,22 +265,26 @@ impl GapLaw {
 
     /// Per-nt density `dens[d]` and distribution function `cdf[x] = P(gap <= x)` for gaps up
     /// to `max_len`.
+    #[cfg(test)]
     fn tables(&self, max_len: u32) -> (Vec<f64>, Vec<f64>) {
-        let dens: Vec<f64> = (0..=max_len)
-            .map(|d| {
-                let b = Self::bin(d);
-                self.h.get(b).map_or(0.0, |p| p / Self::width(b))
-            })
-            .collect();
-        let mut acc = 0.0;
-        let cdf = dens
-            .iter()
-            .map(|x| {
-                acc += x;
-                acc
-            })
-            .collect();
+        let n = max_len as usize + 1;
+        let (mut dens, mut cdf) = (vec![0.0; n], vec![0.0; n]);
+        self.fill_tables(&mut dens, &mut cdf);
         (dens, cdf)
+    }
+
+    /// [`GapLaw::tables`] into `dens` and `cdf` (of one length, `max_len + 1`): the density in
+    /// parallel, then the running sum in one serial pass.
+    fn fill_tables(&self, dens: &mut [f64], cdf: &mut [f64]) {
+        fill_par(dens, |d| {
+            let b = Self::bin(d as u32);
+            self.h.get(b).map_or(0.0, |p| p / Self::width(b))
+        });
+        let mut acc = 0.0;
+        for (c, x) in cdf.iter_mut().zip(dens.iter()) {
+            acc += x;
+            *c = acc;
+        }
     }
 
     /// Mass at gap 0, in 1-15, 16-255 and 256 or more.
@@ -511,26 +515,38 @@ impl LenLaw {
     }
 
     /// Per-nt density `dens[x]` and survival `surv[x] = P(length >= x)` for `x` up to `max_len`.
+    #[cfg(test)]
     fn tables(&self, max_len: u32) -> (Vec<f64>, Vec<f64>) {
+        let n = max_len as usize + 1;
+        let (mut dens, mut surv) = (vec![0.0; n], vec![0.0; n]);
+        self.fill_tables(&mut dens, &mut surv);
+        (dens, surv)
+    }
+
+    /// [`LenLaw::tables`] into `dens` and `surv` (of one length, `max_len + 1`), in parallel.
+    fn fill_tables(&self, dens: &mut [f64], surv: &mut [f64]) {
         let nb = self.h.len();
         let mut tail = vec![0.0; nb + 1];
         for b in (0..nb).rev() {
             tail[b] = tail[b + 1] + self.h[b];
         }
-        let dens = (0..=max_len)
-            .map(|x| self.h.get(Self::bin(x as f64)).map_or(0.0, |p| p / Self::W))
-            .collect();
-        let surv = (0..=max_len)
-            .map(|x| {
-                let b = Self::bin(x as f64);
-                if b >= nb {
-                    return 0.0;
-                }
-                let within = (x as f64 - b as f64 * Self::W) / Self::W;
-                (tail[b + 1] + self.h[b] * (1.0 - within)).max(0.0)
-            })
-            .collect();
-        (dens, surv)
+        rayon::join(
+            || {
+                fill_par(dens, |x| {
+                    self.h.get(Self::bin(x as f64)).map_or(0.0, |p| p / Self::W)
+                })
+            },
+            || {
+                fill_par(surv, |x| {
+                    let b = Self::bin(x as f64);
+                    if b >= nb {
+                        return 0.0;
+                    }
+                    let within = (x as f64 - b as f64 * Self::W) / Self::W;
+                    (tail[b + 1] + self.h[b] * (1.0 - within)).max(0.0)
+                })
+            },
+        );
     }
 
     /// Total-variation distance between two laws.
@@ -712,12 +728,29 @@ struct Exps {
 
 impl Exps {
     fn new(par: &Params, max_len: u32) -> Self {
-        let (d3, s3) = par.len3.tables(max_len);
-        let (d5, s5) = par.len5.tables(max_len);
-        let (du, su) = par.lenu.tables(max_len);
-        let (g3d, g3c) = par.k3.abs.tables(max_len);
-        let (g5d, g5c) = par.k5.abs.tables(max_len);
-        Exps {
+        let n = max_len as usize + 1;
+        let v = || vec![0.0; n];
+        let mut e = Exps {
+            d3: v(),
+            s3: v(),
+            d5: v(),
+            s5: v(),
+            du: v(),
+            su: v(),
+            g3d: v(),
+            g3c: v(),
+            g5d: v(),
+            g5c: v(),
+        };
+        e.fill(par);
+        e
+    }
+
+    /// Recompute every table for `par`, in place (the lengths stay those `new` gave). The ten
+    /// tables are filled in parallel; each element is the same expression as a serial fill,
+    /// and each running sum keeps its serial order, so the result is identical.
+    fn fill(&mut self, par: &Params) {
+        let Exps {
             d3,
             s3,
             d5,
@@ -728,8 +761,38 @@ impl Exps {
             g3c,
             g5d,
             g5c,
-        }
+        } = self;
+        rayon::join(
+            || {
+                rayon::join(
+                    || par.len3.fill_tables(d3, s3),
+                    || par.len5.fill_tables(d5, s5),
+                )
+            },
+            || {
+                rayon::join(
+                    || par.lenu.fill_tables(du, su),
+                    || {
+                        rayon::join(
+                            || par.k3.abs.fill_tables(g3d, g3c),
+                            || par.k5.abs.fill_tables(g5d, g5c),
+                        )
+                    },
+                )
+            },
+        );
     }
+}
+
+/// `out[i] = f(i)` for every `i`, over chunks on the rayon pool.
+fn fill_par(out: &mut [f64], f: impl Fn(usize) -> f64 + Sync) {
+    const CHUNK: usize = 4096;
+    out.par_chunks_mut(CHUNK).enumerate().for_each(|(c, o)| {
+        let x0 = c * CHUNK;
+        for (i, y) in o.iter_mut().enumerate() {
+            *y = f(x0 + i);
+        }
+    });
 }
 
 /// Expected sufficient statistics for the M-step, accumulated per thread.
@@ -749,12 +812,72 @@ struct Stats {
     k3: EStats,
     k5: EStats,
     /// Log-likelihood of the reads at the step's input (abundances unnormalized).
-    ll: f64,
+    ll: LogLik,
+}
+
+/// A sum of logarithms kept as a product: `ln(mant) + exp * ln 2 + sum`, with `mant` in
+/// `[1, 2)`. Each read multiplies its likelihood in and moves the binary exponent out (exact),
+/// so a whole step takes one `ln` instead of one per read; `sum` holds the terms added as
+/// logarithms (weighted reads, or a likelihood too large or too small to multiply in).
+#[derive(Clone, Copy)]
+pub(crate) struct LogLik {
+    mant: f64,
+    exp: i64,
+    sum: f64,
+}
+
+impl Default for LogLik {
+    fn default() -> Self {
+        LogLik {
+            mant: 1.0,
+            exp: 0,
+            sum: 0.0,
+        }
+    }
+}
+
+impl LogLik {
+    /// Below this, `mant * x` (with `mant < 2`) cannot overflow.
+    const MUL_MAX: f64 = 1e300;
+
+    /// Multiplies in `x`, a positive normal number below [`Self::MUL_MAX`].
+    #[inline]
+    fn mul(&mut self, x: f64) {
+        let y = self.mant * x;
+        let b = y.to_bits();
+        self.exp += ((b >> 52) & 0x7ff) as i64 - 1023;
+        self.mant = f64::from_bits((b & !(0x7ff << 52)) | (1023 << 52));
+    }
+
+    /// Adds `m * ln(x)`, for `x > 0`.
+    #[inline]
+    pub(crate) fn add_ln(&mut self, m: f64, x: f64) {
+        if m == 1.0 && x.is_normal() && x < Self::MUL_MAX {
+            self.mul(x);
+        } else {
+            self.sum += m * x.ln();
+        }
+    }
+
+    pub(crate) fn merge(mut self, o: LogLik) -> LogLik {
+        self.mul(o.mant);
+        self.exp += o.exp;
+        self.sum += o.sum;
+        self
+    }
+
+    pub(crate) fn value(&self) -> f64 {
+        // ln 2 split as in fdlibm: `exp * LN2_HI` is exact for |exp| < 2^32.
+        const LN2_HI: f64 = 6.931_471_803_691_238e-1;
+        const LN2_LO: f64 = 1.908_214_929_270_587_7e-10;
+        let e = self.exp as f64;
+        e * LN2_HI + (self.mant.ln() + e * LN2_LO) + self.sum
+    }
 }
 
 impl Stats {
     fn merge(mut self, o: Stats) -> Stats {
-        self.ll += o.ll;
+        self.ll = self.ll.merge(o.ll);
         self.n += o.n;
         self.n3 += o.n3;
         self.n5 += o.n5;
@@ -766,6 +889,112 @@ impl Stats {
         self.k3 = self.k3.merge(o.k3);
         self.k5 = self.k5.merge(o.k5);
         self
+    }
+
+    /// The histogram vectors, in a fixed order (the order [`Stats::from_vecs`] takes).
+    fn vecs(&self) -> [&Vec<f64>; 12] {
+        [
+            &self.l3.stop,
+            &self.l3.cens,
+            &self.l5.stop,
+            &self.l5.cens,
+            &self.lu.stop,
+            &self.lu.cens,
+            &self.k3.abs.stop,
+            &self.k3.abs.cens,
+            &self.k3.rel,
+            &self.k5.abs.stop,
+            &self.k5.abs.cens,
+            &self.k5.rel,
+        ]
+    }
+
+    /// The left fold of `parts` by [`Stats::merge`], with the histograms summed in parallel:
+    /// each bin adds the parts' values in part order, as the fold does (a part too short for
+    /// a bin adds nothing there, and the fold's zero-filled bins are `+0.0`), so the result is
+    /// bit-identical to the fold.
+    fn merge_all(parts: Vec<Stats>) -> Stats {
+        let Some(first) = parts.first() else {
+            return Stats::default();
+        };
+        // `ll` is a `LogLik`: merged in part order, as the fold's `Stats::merge` does.
+        let mut ll = first.ll;
+        let mut sc = [
+            first.n,
+            first.n3,
+            first.n5,
+            first.nf,
+            first.nu,
+            first.k3.n_abs,
+            first.k3.n_rel,
+            first.k5.n_abs,
+            first.k5.n_rel,
+        ];
+        for o in &parts[1..] {
+            ll = ll.merge(o.ll);
+            let x = [
+                o.n, o.n3, o.n5, o.nf, o.nu, o.k3.n_abs, o.k3.n_rel, o.k5.n_abs, o.k5.n_rel,
+            ];
+            sc.iter_mut().zip(x).for_each(|(a, b)| *a += b);
+        }
+        let views: Vec<[&Vec<f64>; 12]> = parts.iter().map(Stats::vecs).collect();
+        // Allocated on the calling thread (see `crate::em_components` on mimalloc's heaps).
+        let mut outs: Vec<Vec<f64>> = (0..12)
+            .map(|j| vec![0.0; views.iter().map(|v| v[j].len()).max().unwrap_or(0)])
+            .collect();
+        const CHUNK: usize = 512;
+        outs.par_iter_mut()
+            .enumerate()
+            .flat_map(|(j, o)| {
+                o.par_chunks_mut(CHUNK)
+                    .enumerate()
+                    .map(move |(c, ch)| (j, c * CHUNK, ch))
+            })
+            .for_each(|(j, b0, ch)| {
+                for v in &views {
+                    let src = v[j];
+                    let hi = src.len().min(b0 + ch.len());
+                    if hi > b0 {
+                        ch.iter_mut().zip(&src[b0..hi]).for_each(|(a, b)| *a += b);
+                    }
+                }
+            });
+        drop(views);
+        drop(parts);
+        let mut it = outs.into_iter();
+        let mut next = || it.next().unwrap();
+        let ls = |next: &mut dyn FnMut() -> Vec<f64>| LStats {
+            stop: next(),
+            cens: next(),
+        };
+        let (l3, l5, lu) = (ls(&mut next), ls(&mut next), ls(&mut next));
+        let k3abs = ls(&mut next);
+        let k3rel = next();
+        let k5abs = ls(&mut next);
+        let k5rel = next();
+        Stats {
+            ll,
+            n: sc[0],
+            n3: sc[1],
+            n5: sc[2],
+            nf: sc[3],
+            nu: sc[4],
+            l3,
+            l5,
+            lu,
+            k3: EStats {
+                abs: k3abs,
+                rel: k3rel,
+                n_abs: sc[5],
+                n_rel: sc[6],
+            },
+            k5: EStats {
+                abs: k5abs,
+                rel: k5rel,
+                n_abs: sc[7],
+                n_rel: sc[8],
+            },
+        }
     }
 
     fn add(&mut self, g: &Geo, t: &Terms, post: f64) {
@@ -834,7 +1063,20 @@ fn fold_blocks<T: Send, S>(
     f: impl Fn(&mut T, &mut S, usize) + Sync + Send,
     merge: impl Fn(T, T) -> T,
 ) -> T {
-    let parts: Vec<T> = (0..n.div_ceil(FOLD_BLOCK))
+    fold_block_parts(n, &init, scratch, f)
+        .into_iter()
+        .reduce(merge)
+        .unwrap_or_else(init)
+}
+
+/// The per-block results of [`fold_blocks`], in block order, before they are merged.
+fn fold_block_parts<T: Send, S>(
+    n: usize,
+    init: impl Fn() -> T + Sync + Send,
+    scratch: impl Fn() -> S + Sync + Send,
+    f: impl Fn(&mut T, &mut S, usize) + Sync + Send,
+) -> Vec<T> {
+    (0..n.div_ceil(FOLD_BLOCK))
         .into_par_iter()
         .map_init(scratch, |s, b| {
             let mut acc = init();
@@ -843,8 +1085,7 @@ fn fold_blocks<T: Send, S>(
             }
             acc
         })
-        .collect();
-    parts.into_iter().reduce(merge).unwrap_or_else(init)
+        .collect()
 }
 
 /// One EM round: distribute each read over its alignments, accumulating abundances into `curr`
@@ -1182,7 +1423,7 @@ fn step_with(
             scratch.push((g, t, w));
         }
         if denom > constants::EM_DENOM_THRESH {
-            st.ll += m * denom.ln();
+            st.ll.add_ln(m, denom);
             for (k, (g, t, w)) in (lo..hi).zip(scratch.iter()) {
                 let post = m * w / denom;
                 emit(k, g.t as usize, post);
@@ -1226,21 +1467,16 @@ fn step_with(
             // only its own alignments' slots), and the sufficient statistics.
             let nreads = f.off.len() - 1;
             let post_ptr = post.as_mut_ptr() as usize;
-            let st = fold_blocks(
-                nreads,
-                Stats::default,
-                Vec::new,
-                |st, scratch, r| {
-                    for k in f.off[r]..f.off[r + 1] {
-                        // SAFETY: slot k belongs to read r alone.
-                        unsafe { *(post_ptr as *mut f64).add(k) = 0.0 };
-                    }
-                    read(r, st, scratch, &mut |k, _, p| unsafe {
-                        *(post_ptr as *mut f64).add(k) = p
-                    });
-                },
-                Stats::merge,
-            );
+            let parts = fold_block_parts(nreads, Stats::default, Vec::new, |st, scratch, r| {
+                for k in f.off[r]..f.off[r + 1] {
+                    // SAFETY: slot k belongs to read r alone.
+                    unsafe { *(post_ptr as *mut f64).add(k) = 0.0 };
+                }
+                read(r, st, scratch, &mut |k, _, p| unsafe {
+                    *(post_ptr as *mut f64).add(k) = p
+                });
+            });
+            let st = Stats::merge_all(parts);
             // Pass 2, over transcripts: sum their alignments' posteriors.
             let post = &*post;
             curr.par_iter().enumerate().for_each(|(t, c)| {
@@ -1618,7 +1854,7 @@ fn frozen_on_components(
 ) -> Vec<f64> {
     let t0 = std::time::Instant::now();
     let e = Exps::new(par, f.max_len());
-    let plan = crate::em_components::Plan::new(
+    let plan = crate::em_components::Plan::new_by_size(
         |k| f.target(k),
         |k| {
             let g = f.geo(k);
@@ -1626,7 +1862,7 @@ fn frozen_on_components(
         },
         &f.off,
         em_info.txp_info.len(),
-        // `bulk` has ordered the reads by likeliest target.
+        // `bulk` has ordered the reads by likeliest target; that order holds within each size.
         false,
     );
     info!(
@@ -1727,6 +1963,9 @@ fn run_from(
         Vec::new()
     };
     let mut sq = Squarem::new(tinfo.len());
+    // The fit's per-nt tables, refilled in place each iteration (allocated here, on the
+    // calling thread, once).
+    let mut exps: Option<Exps> = None;
     while niter < em_info.max_iter {
         if let Some(p) = &mut pres {
             refresh_presence(
@@ -1751,10 +1990,17 @@ fn run_from(
             }
             Some(ws) => step_static(&mut lay, ws, src, &curr, mult),
             None => {
-                let e = Exps::new(&par, max_len);
-                let st = step_with(&mut lay, f, &par, src, &curr, mult, &e);
-                ll_gain = st.ll - last_ll;
-                last_ll = st.ll;
+                let e = match &mut exps {
+                    Some(e) => {
+                        e.fill(&par);
+                        &*e
+                    }
+                    None => &*exps.insert(Exps::new(&par, max_len)),
+                };
+                let st = step_with(&mut lay, f, &par, src, &curr, mult, e);
+                let ll = st.ll.value();
+                ll_gain = ll - last_ll;
+                last_ll = ll;
                 let next = st.params(&par);
                 still = if moved(&next, &par) < FREEZE_TOL
                     || (0.0..freeze_ll_gain).contains(&ll_gain)
@@ -2171,5 +2417,338 @@ mod tests {
         for (x, y) in plain.iter().zip(&fast) {
             assert!((x - y).abs() < 1e-3 * x.max(1.0), "{plain:?} {fast:?}");
         }
+    }
+
+    use crate::em_tests::{
+        Classes, PROBS, Read, RefEm, Rng, assert_close, check_invariants, em_info, ref_em,
+        store_of_alns,
+    };
+    use crate::util::oarfish_types::InMemoryAlignmentStore;
+
+    /// A positioned read: (target, probability, start, end) alignments.
+    type PRead = Vec<(u32, f32, u32, u32)>;
+
+    /// Transcript lengths of [`positional_reads`]: four groups of nested isoforms (2,000,
+    /// 1,500 and 1,000 nt), then a lone transcript and two that no read touches.
+    const LENS: [usize; 15] = [
+        2000, 1500, 1000, 2000, 1500, 1000, 2000, 1500, 1000, 2000, 1500, 1000, 1200, 800, 900,
+    ];
+
+    /// 600 reads on one to three isoforms of a group each, at random spans, plus 7 reads on the
+    /// lone transcript 12.
+    fn positional_reads(seed: u64) -> Vec<PRead> {
+        let mut rng = Rng::new(seed);
+        let mut reads: Vec<PRead> = (0..600)
+            .map(|_| {
+                let g = rng.below(4) * 3;
+                let k = 1 + rng.below(3);
+                let mut r: PRead = (0..k)
+                    .map(|_| {
+                        let t = g + rng.below(3);
+                        let len = LENS[t];
+                        let s = rng.below(len - 200);
+                        let e = (s + 100 + rng.below(len - s - 99)).min(len);
+                        (t as u32, PROBS[rng.below(PROBS.len())], s as u32, e as u32)
+                    })
+                    .collect();
+                r.sort_by_key(|x| x.0);
+                r.dedup_by_key(|x| x.0);
+                r
+            })
+            .collect();
+        reads.extend((0..7).map(|i| vec![(12, 1.0, 10 * i, 1200)]));
+        rng.shuffle(&mut reads);
+        reads
+    }
+
+    fn unpositioned(reads: &[PRead]) -> Vec<Read> {
+        reads
+            .iter()
+            .map(|r| r.iter().map(|x| (x.0, x.1)).collect())
+            .collect()
+    }
+
+    fn pstore<'h>(
+        h: &'h noodles_sam::Header,
+        reads: &[PRead],
+        txps: &mut [TranscriptInfo],
+    ) -> InMemoryAlignmentStore<'h> {
+        let alns: Vec<Vec<(AlnInfo, f32)>> = reads
+            .iter()
+            .map(|r| {
+                r.iter()
+                    .map(|&(t, p, s, e)| {
+                        (
+                            AlnInfo {
+                                ref_id: t,
+                                start: s,
+                                end: e,
+                                strand: bio_types::strand::Strand::Forward,
+                            },
+                            p,
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        store_of_alns(h, &alns, txps, false)
+    }
+
+    /// The frozen weights of `f` under `par` as reference-EM classes, read `r` counted
+    /// `mult[r]` times.
+    fn fixed_classes(f: &Flat, par: &Params, mult: Option<&[u32]>, ntx: usize) -> Classes {
+        let fx = Fixed::new(f, par);
+        Classes {
+            ntx,
+            cls: (0..fx.nreads())
+                .map(|r| {
+                    let e = (fx.off[r]..fx.off[r + 1])
+                        .map(|k| (fx.t[k], fx.w[k]))
+                        .collect();
+                    (e, fx.mult(mult, r))
+                })
+                .collect(),
+        }
+    }
+
+    /// The frozen phase on the component layout: with no SQUAREM cycles it is the plain loop
+    /// over the frozen weights (relative change in either direction, from iteration `niter`),
+    /// with or without multiplicities; with SQUAREM, from the start or after plain steps, it
+    /// reaches that loop's fixed point.
+    #[test]
+    fn frozen_phase_on_components_is_the_frozen_em() {
+        let reads = positional_reads(50);
+        let ntx = LENS.len();
+        let h = noodles_sam::Header::default();
+        let mut txps = crate::em_tests::tinfo(&LENS);
+        let store = pstore(&h, &reads, &mut txps);
+        let mult = Rng::new(51).resample(reads.len());
+        let probe = em_info(&store, &txps, 1, 0.0);
+        let f = Flat::new(&probe);
+        let mut par = Params::initial(f.max_len());
+        par.p3 = 0.55;
+        par.pu = 0.05;
+        for m in [None, Some(&mult[..])] {
+            let cl = fixed_classes(&f, &par, m, ntx);
+            let init = vec![reads.len() as f64 / ntx as f64; ntx];
+            for (niter0, max_iter, thresh, rtol) in [
+                (0, 1000, f64::INFINITY, 1e-11),
+                (3, 1000, f64::INFINITY, 1e-11),
+                (0, 90, 0.0, 1e-11),
+                (0, 5000, 1e-10, 1e-7),
+            ] {
+                let emi = em_info(&store, &txps, max_iter, thresh);
+                let o = RefEm {
+                    max_iter,
+                    thresh,
+                    min_iter: 1,
+                    niter0,
+                    abs: true,
+                };
+                let (want, _) = ref_em(&cl, &init, o);
+                let got =
+                    frozen_on_components(&emi, &f, &par, &init, m, niter0, max_iter, u32::MAX);
+                assert_close(&got, &want, rtol, &format!("{niter0} {max_iter} {thresh}"));
+            }
+            let mut o = RefEm::new(200_000, 1e-14, 1);
+            o.abs = true;
+            let (fixed, _) = ref_em(&cl, &init, o);
+            let emi = em_info(&store, &txps, 20_000, 1e-10);
+            for plain_first in [0, PLAIN_FIRST] {
+                let got = frozen_on_components(&emi, &f, &par, &init, m, 0, 20_000, plain_first);
+                assert_close(&got, &fixed, 1e-5, &format!("SQUAREM {plain_first}"));
+                check_invariants(&got, &unpositioned(&reads), m, ntx, "frozen SQUAREM");
+            }
+        }
+    }
+
+    /// The truncation EM (parameters estimated, then frozen on the component layout) assigns
+    /// every read, gives unambiguous transcripts their reads and untouched ones 0, on any
+    /// number of threads, with or without a presence model; so do its bootstrap replicates.
+    #[test]
+    fn truncation_em_keeps_the_invariants() {
+        let reads = positional_reads(52);
+        let plain = unpositioned(&reads);
+        let ntx = LENS.len();
+        let h = noodles_sam::Header::default();
+        let mut txps = crate::em_tests::tinfo(&LENS);
+        let store = pstore(&h, &reads, &mut txps);
+        let emi = em_info(&store, &txps, 1000, 1e-8);
+        let one = em(&emi, None, 1);
+        check_invariants(&one, &plain, None, ntx, "em 1");
+        let four = em(&emi, None, 4);
+        assert_close(&four, &one, 1e-6, "em 4 threads");
+        let pres = crate::presence::PresenceOpts {
+            kind: crate::presence::PresenceKind::SpikeSlab,
+            rho: 0.05,
+            warmup: 5,
+            period: 5,
+        };
+        check_invariants(&em(&emi, Some(pres), 2), &plain, None, ntx, "presence");
+        for p in [None, Some(pres)] {
+            for b in bootstrap(&emi, p, 2, 2) {
+                assert!(b.iter().all(|&x| x.is_finite() && x >= 0.0));
+                let sum: f64 = b.iter().sum();
+                assert!((sum - reads.len() as f64).abs() < 1e-9 * reads.len() as f64);
+                assert_eq!((b[13], b[14]), (0.0, 0.0));
+                assert!((b[12] - b[12].round()).abs() < 1e-9);
+            }
+        }
+    }
+
+    /// Fitting on a sample of the reads: with every multiplicity one (a bootstrap replicate
+    /// that drew each read once) the fit is the point estimate's; and `Sample::of` leaves small
+    /// inputs unsampled.
+    #[test]
+    fn fit_on_a_sample() {
+        let reads = positional_reads(53);
+        let plain = unpositioned(&reads);
+        let ntx = LENS.len();
+        let h = noodles_sam::Header::default();
+        let mut txps = crate::em_tests::tinfo(&LENS);
+        let store = pstore(&h, &reads, &mut txps);
+        let emi = em_info(&store, &txps, 1000, 1e-8);
+        let f = Flat::new(&emi);
+        let expect_sample =
+            sample_reads() > 0 && reads.len() > sample_reads() && Layout::can_freeze_default();
+        assert_eq!(Sample::of(&f).is_some(), expect_sample);
+        let s = Sample {
+            f: f.every(3),
+            k: 3,
+        };
+        assert_eq!(s.f.off.len() - 1, reads.len().div_ceil(3));
+        let (a, pa) = super::fit(&emi, &f, Some(&s), None, None);
+        let ones = vec![1_u32; reads.len()];
+        let (b, pb) = super::fit(&emi, &f, Some(&s), Some(&ones), None);
+        check_invariants(&a, &plain, None, ntx, "sampled fit");
+        assert_close(&b, &a, 1e-9, "all-ones multiplicities");
+        assert!(moved(&pa, &pb) < 1e-9, "{pa:?} {pb:?}");
+        let (c, _) = super::fit(&emi, &f, None, None, None);
+        check_invariants(&c, &plain, None, ntx, "full fit");
+    }
+
+    /// End-gap bins are `{0}`, `{1}`, `[2, 3]`, `[4, 7]`, ...: `width` counts a bin's gaps, the
+    /// initial law sums to one, and the tables are the per-gap density and its running sum.
+    #[test]
+    fn gap_law_bins_and_tables() {
+        assert_eq!(
+            (0..9).map(GapLaw::bin).collect::<Vec<_>>(),
+            vec![0, 1, 2, 2, 3, 3, 3, 3, 4]
+        );
+        let mut count = [0.0; 13];
+        for d in 0..(1 << 12) {
+            count[GapLaw::bin(d)] += 1.0;
+        }
+        for (b, &c) in count.iter().enumerate() {
+            assert_eq!(GapLaw::width(b), c, "bin {b}");
+        }
+        let max_len = (1 << 12) - 1;
+        let g = GapLaw::initial(max_len);
+        assert!((g.h.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        let (dens, cdf) = g.tables(max_len);
+        assert_eq!(dens.len(), max_len as usize + 1);
+        let mut acc = 0.0;
+        for d in 0..=max_len as usize {
+            let b = GapLaw::bin(d as u32);
+            assert!((dens[d] - g.h[b] / GapLaw::width(b)).abs() < 1e-15);
+            acc += dens[d];
+            assert!((cdf[d] - acc).abs() < 1e-12);
+        }
+        assert!((cdf[max_len as usize] - 1.0).abs() < 1e-9);
+    }
+
+    /// Read-length bins are `W` nt wide (`bin_nt` agrees with `bin`); the exponential law sums
+    /// to one with about its mean, and the tables are the per-nt density and the survival
+    /// `P(length >= x)`, falling from one.
+    #[test]
+    fn len_law_bins_and_tables() {
+        for x in 0..20_000 {
+            assert_eq!(LenLaw::bin_nt(x), LenLaw::bin(x as f64), "{x}");
+        }
+        let max_len = 20_000;
+        let l = LenLaw::exponential(1000.0, max_len);
+        assert!((l.h.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!((l.mean() - 1000.0).abs() < 50.0, "{}", l.mean());
+        let (dens, surv) = l.tables(max_len);
+        assert!((surv[0] - 1.0).abs() < 1e-12);
+        assert!(surv.windows(2).all(|w| w[1] <= w[0] + 1e-15));
+        for x in 0..=max_len as usize {
+            let b = LenLaw::bin(x as f64);
+            assert!((dens[x] - l.h[b] / LenLaw::W).abs() < 1e-15);
+            if x % LenLaw::W as usize == 0 {
+                let tail: f64 = l.h[b..].iter().sum();
+                assert!((surv[x] - tail).abs() < 1e-12, "{x}");
+            }
+        }
+    }
+
+    /// The censored-histogram steps return distributions: with nothing censored the length law
+    /// is the observed histogram (up to its small floor); with censoring it still sums to one.
+    /// The end kernel is a distribution over the gaps a transcript allows.
+    #[test]
+    fn law_updates_are_distributions() {
+        let old = LenLaw::exponential(800.0, 5000);
+        let mut st = LStats::default();
+        for (b, w) in [(0, 2.0), (3, 5.0), (10, 3.0)] {
+            LStats::add(&mut st.stop, b, w);
+        }
+        let new = st.law(&old);
+        assert!((new.h.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        for (b, &x) in new.h.iter().enumerate() {
+            let want = match b {
+                0 => 0.2,
+                3 => 0.5,
+                10 => 0.3,
+                _ => 0.0,
+            };
+            assert!((x - want).abs() < 1e-7, "bin {b}: {x}");
+        }
+        for (b, w) in [(2, 4.0), (40, 1.0)] {
+            LStats::add(&mut st.cens, b, w);
+        }
+        let new = st.law(&old);
+        assert!((new.h.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!(new.h.iter().all(|&x| x > 0.0));
+        let g = GapLaw::law(&st, &GapLaw::initial(5000));
+        assert!((g.h.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+        assert!(g.h.iter().all(|&x| x > 0.0));
+        let mut k = EndLaw::initial(5000);
+        k.rho = 0.3;
+        k.rel = (0..RB).map(|b| (b + 1) as f64).collect();
+        let z: f64 = k.rel.iter().sum();
+        k.rel.iter_mut().for_each(|x| *x /= z);
+        let (dens, cdf) = k.abs.tables(5000);
+        for len in [200, 1000, 3000] {
+            let tot: f64 = (0..len)
+                .map(|d| {
+                    let (a, r) = k.parts(d, len, &dens, &cdf);
+                    a + r
+                })
+                .sum();
+            assert!((tot - 1.0).abs() < 1e-9, "len {len}: {tot}");
+        }
+    }
+
+    /// The distances the freezing test uses are zero between a law and itself, symmetric, and
+    /// at most one.
+    #[test]
+    fn law_distances() {
+        let (a, b) = (
+            LenLaw::exponential(500.0, 4000),
+            LenLaw::exponential(2000.0, 4000),
+        );
+        assert_eq!(a.moved(&a), 0.0);
+        assert!(a.moved(&b) > 0.0 && a.moved(&b) <= 1.0);
+        assert_eq!(a.moved(&b), b.moved(&a));
+        let (g, mut k) = (GapLaw::initial(4000), EndLaw::initial(4000));
+        assert_eq!(g.moved(&g), 0.0);
+        let k0 = k.clone();
+        k.rho = 0.8;
+        assert!((k.moved(&k0) - 0.3).abs() < 1e-12);
+        let p = Params::initial(4000);
+        let mut q = p.clone();
+        assert_eq!(moved(&p, &q), 0.0);
+        q.len3 = b.clone();
+        assert!((moved(&p, &q) - p.p3 * p.len3.moved(&b)).abs() < 1e-15);
     }
 }

@@ -214,7 +214,7 @@ fn run(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
         None => vec![total_weight / ntx as f64; ntx],
     };
     if how == Impl::Csr && em_components::enabled() {
-        let plan = em_components::Plan::new(|k| f.target(k), |k| f.w(k), f.off, ntx, true);
+        let plan = em_components::Plan::new_by_size(|k| f.target(k), |k| f.w(k), f.off, ntx, true);
         info!(
             "per-read EM (components): {} reads, {} alignments, {} connected components, setup {:.2}s",
             f.nreads().to_formatted_string(&Locale::en),
@@ -314,7 +314,7 @@ pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f6
     pool.install(|| {
         let ntx = em_info.txp_info.len();
         let f = Flat::new(em_info);
-        let plan = em_components::Plan::new(|k| f.target(k), |k| f.w(k), f.off, ntx, true);
+        let plan = em_components::Plan::new_by_size(|k| f.target(k), |k| f.w(k), f.off, ntx, true);
         let total_weight = em_info.eq_map.num_aligned_reads() as f64;
         let init = match em_info.init_abundances {
             Some(ref v) => v.clone(),
@@ -403,4 +403,222 @@ fn step_csr(f: &Flat, tr: &Transpose, inv: &mut [f64], prev: &[f64], curr: &mut 
         }
         *c = prev[t] * s;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::em_tests::{
+        Classes, MIXED_NTX, Read, RefEm, Rng, assert_close, check_invariants, em_info, mixed_reads,
+        on, ref_em, store_of, tinfo,
+    };
+
+    /// A store of the mixed fixture with the coverage model on: every alignment also carries
+    /// a coverage probability, so its EM weight is score probability times coverage
+    /// probability. Returns the reads with those weights folded in, for the reference.
+    fn coverage_store<'h>(
+        h: &'h noodles_sam::Header,
+        txps: &mut [TranscriptInfo],
+        seed: u64,
+    ) -> (
+        crate::util::oarfish_types::InMemoryAlignmentStore<'h>,
+        Vec<Read>,
+    ) {
+        let reads = mixed_reads(seed);
+        let mut store = store_of(h, &reads, txps);
+        store.filter_opts.model_coverage = true;
+        let mut rng = Rng::new(seed + 1);
+        store.coverage_probabilities = (0..store.total_len())
+            .map(|_| 0.2 + rng.below(800) as f64 / 1000.0)
+            .collect();
+        let mut k = 0;
+        let weighted: Vec<Read> = reads
+            .iter()
+            .map(|r| {
+                r.iter()
+                    .map(|&(t, p)| {
+                        let w = p as f64 * store.coverage_probabilities[k];
+                        k += 1;
+                        (t, w as f32)
+                    })
+                    .collect()
+            })
+            .collect();
+        (store, weighted)
+    }
+
+    /// The reference classes of a store's reads under their exact f64 weights.
+    fn ref_classes(f: &Flat, ntx: usize) -> Classes {
+        Classes {
+            ntx,
+            cls: (0..f.nreads())
+                .map(|r| {
+                    let e = (f.off[r]..f.off[r + 1])
+                        .map(|k| (f.target(k), f.w(k)))
+                        .collect();
+                    (e, 1.0)
+                })
+                .collect(),
+        }
+    }
+
+    /// `read_order` is a permutation of the reads sorted by key, ties by read id.
+    #[test]
+    fn read_order_sorts_by_key_then_read() {
+        let mut rng = Rng::new(40);
+        let keys: Vec<u32> = (0..5000).map(|_| rng.below(37) as u32).collect();
+        let order = read_order(keys.len(), |r| keys[r]);
+        let mut seen = vec![false; keys.len()];
+        for &r in &order {
+            assert!(!std::mem::replace(&mut seen[r as usize], true));
+        }
+        assert!(seen.iter().all(|&s| s));
+        assert!(
+            order
+                .windows(2)
+                .all(|w| (keys[w[0] as usize], w[0]) < (keys[w[1] as usize], w[1]))
+        );
+        assert!(read_order(0, |_| 0).is_empty());
+    }
+
+    /// Chunks cover the reads in order, each but the last holding at least its share of the
+    /// alignments; the transpose lists each transcript's alignments in read order.
+    #[test]
+    fn chunks_and_transpose_cover_the_alignments() {
+        let h = noodles_sam::Header::default();
+        let ntx = MIXED_NTX;
+        let mut txps = tinfo(&vec![1000; ntx]);
+        let (store, _) = coverage_store(&h, &mut txps, 41);
+        let empty = store_of(&h, &[], &mut txps);
+        for st in [&store, &empty] {
+            let emi = em_info(st, &txps, 10, 1e-6);
+            let f = Flat::new(&emi);
+            for (threads, per) in [(1, 1), (1, 2), (3, 2), (8, 2), (64, 4)] {
+                let ch = chunks(&f, threads, per);
+                let share = f.n().div_ceil(threads * per).max(1);
+                let mut next = 0;
+                for (i, &(a, b)) in ch.iter().enumerate() {
+                    assert_eq!(a, next);
+                    assert!(b > a);
+                    if i + 1 < ch.len() {
+                        assert!(f.off[b] - f.off[a] >= share);
+                    }
+                    next = b;
+                }
+                assert_eq!(next, f.nreads());
+            }
+            let tr = Transpose::new(&f, ntx);
+            for t in 0..ntx {
+                let want: Vec<(u32, u64)> = (0..f.nreads())
+                    .flat_map(|r| {
+                        (f.off[r]..f.off[r + 1])
+                            .filter(|&k| f.target(k) == t as u32)
+                            .map(move |k| (r as u32, k))
+                    })
+                    .map(|(r, k)| (r, f.w(k).to_bits()))
+                    .collect();
+                let got: Vec<(u32, u64)> = (tr.off[t]..tr.off[t + 1])
+                    .map(|i| (tr.read[i], tr.w[i].to_bits()))
+                    .collect();
+                assert_eq!(got, want, "t{t}");
+            }
+        }
+    }
+
+    /// An alignment's weight is its score probability, times its coverage probability when the
+    /// coverage model is on; `Flat::w` gives the same bits.
+    #[test]
+    fn alignment_weights() {
+        let h = noodles_sam::Header::default();
+        let mut txps = tinfo(&vec![1000; MIXED_NTX]);
+        let (mut store, _) = coverage_store(&h, &mut txps, 42);
+        for cov in [true, false] {
+            store.filter_opts.model_coverage = cov;
+            let emi = em_info(&store, &txps, 10, 1e-6);
+            let f = Flat::new(&emi);
+            for r in 0..store.len() {
+                let (alns, probs, cps) = store.read(r);
+                for (j, (a, (&p, &cp))) in alns.iter().zip(probs.iter().zip(cps)).enumerate() {
+                    let w = aln_weight(a, p, cp, cov, None, &txps);
+                    assert_eq!(w, if cov { p as f64 * cp } else { p as f64 });
+                    assert_eq!(w.to_bits(), f.w(store.boundaries()[r] + j).to_bits());
+                }
+            }
+        }
+    }
+
+    /// The thread-local and transposed rounds are the reference round, on any number of
+    /// threads; the transposed layout's loop (which `OARFISH_EM_COMPONENTS=0` selects) driven
+    /// for a fixed number of rounds is the reference's.
+    #[test]
+    fn local_and_csr_rounds_are_the_reference_round() {
+        let h = noodles_sam::Header::default();
+        let ntx = MIXED_NTX;
+        let mut txps = tinfo(&vec![1000; ntx]);
+        let (store, _) = coverage_store(&h, &mut txps, 43);
+        let emi = em_info(&store, &txps, 10, 1e-6);
+        let f = Flat::new(&emi);
+        let cl = ref_classes(&f, ntx);
+        let mut rng = Rng::new(44);
+        let prev: Vec<f64> = (0..ntx).map(|_| rng.below(30) as f64 * 0.5).collect();
+        let want = cl.step(&prev);
+        let tr = Transpose::new(&f, ntx);
+        for threads in [1, 4, 16] {
+            on(threads, || {
+                let ch = chunks(&f, threads, 2);
+                let mut bufs: Vec<Vec<f64>> = (0..ch.len()).map(|_| vec![0.0; ntx]).collect();
+                let mut curr = vec![f64::NAN; ntx];
+                step_local(&f, &ch, &mut bufs, &prev, &mut curr);
+                assert_close(&curr, &want, 1e-12, &format!("local {threads}"));
+                let mut inv = vec![0.0; f.nreads()];
+                let mut curr = vec![f64::NAN; ntx];
+                step_csr(&f, &tr, &mut inv, &prev, &mut curr);
+                assert_close(&curr, &want, 1e-12, &format!("csr {threads}"));
+            });
+        }
+        // 80 rounds, the pruning and the last round, as `run` runs them with thresh 0.
+        let init = cl.uniform();
+        let (want, _) = ref_em(&cl, &init, RefEm::new(80, 0.0, 1));
+        let mut inv = vec![0.0; f.nreads()];
+        let (mut prev, mut curr) = (init.clone(), vec![0.0; ntx]);
+        for _ in 0..80 {
+            step_csr(&f, &tr, &mut inv, &prev, &mut curr);
+            std::mem::swap(&mut prev, &mut curr);
+        }
+        prev.iter_mut()
+            .filter(|x| **x < constants::MIN_READ_THRESH)
+            .for_each(|x| *x = 0.0);
+        step_csr(&f, &tr, &mut inv, &prev, &mut curr);
+        assert_close(&curr, &want, 1e-10, "csr loop");
+    }
+
+    /// With the coverage model's weights, every per-read EM (and the score-only EMs, which
+    /// apply the same weights) reaches the reference estimates.
+    #[test]
+    fn coverage_weighted_ems_reach_the_reference() {
+        let h = noodles_sam::Header::default();
+        let ntx = MIXED_NTX;
+        let mut txps = tinfo(&vec![1000; ntx]);
+        let (store, weighted) = coverage_store(&h, &mut txps, 45);
+        let emi = em_info(&store, &txps, 3000, 1e-10);
+        let cl = ref_classes(&Flat::new(&emi), ntx);
+        let want = |m| ref_em(&cl, &cl.uniform(), RefEm::new(3000, 1e-10, m)).0;
+        let (w1, w50) = (want(1), want(50));
+        check_invariants(&w1, &weighted, None, ntx, "reference");
+        for (name, got, w) in [
+            ("Local", em(&emi, 3, Impl::Local), &w1),
+            ("Csr 1", em(&emi, 1, Impl::Csr), &w1),
+            ("Csr 16", em(&emi, 16, Impl::Csr), &w1),
+            ("em_par", crate::em::em_par(&emi, 4), &w1),
+            ("em", crate::em::em(&emi, 1), &w50),
+        ] {
+            assert_close(&got, w, 1e-7, name);
+            check_invariants(&got, &weighted, None, ntx, name);
+        }
+        for b in bootstrap(&emi, 2, 4) {
+            let sum: f64 = b.iter().sum();
+            assert!((sum - store.len() as f64).abs() < 1e-9 * store.len() as f64);
+            assert!(b.iter().all(|&x| x >= 0.0) && b[62] == 0.0 && b[63] == 0.0);
+        }
+    }
 }
