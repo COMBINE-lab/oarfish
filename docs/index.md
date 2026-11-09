@@ -204,10 +204,13 @@ $ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa --index-o
 $ oarfish -j 16 --reads sample2_reads.fq.gz --index transcripts.oar --seq-tech ont-cdna -o sample2 --filter-group no-filters --model-coverage
 ```
 
-To map with [spearfish](#spearfish) instead of rammap:
+To map with [spearfish](#spearfish) instead of rammap (the index is saved and reused the same way, as a spearfish `.sfi`):
 
 ```bash
 $ oarfish -j 16 --reads sample1_reads.fq.gz --annotated transcripts.fa --seq-tech ont-cdna --mapper spearfish -o sample1
+# or: write the index once, then reuse it
+$ oarfish --only-index --mapper spearfish --annotated transcripts.fa --index-out transcripts.sfi --seq-tech ont-cdna
+$ oarfish -j 16 --reads sample2_reads.fq.gz --index transcripts.sfi --seq-tech ont-cdna --mapper spearfish -o sample2
 ```
 
 ### Genome read-projection example (reads → genome → transcripts)
@@ -307,7 +310,7 @@ The `--seq-tech` value selects the mapping preset:
 
 ### spearfish
 
-With `--mapper spearfish`, read mode maps with [spearfish](https://github.com/COMBINE-lab/spearfish) instead of rammap, in process: a long-read transcriptome mapper that reports, for each read, every compatible transcript with its score difference from the best. It builds its index from `--annotated`/`--novel` in a few seconds, or opens one written by `spearfish index` (`--index transcripts.sfi`; spearfish is installed separately, e.g. `conda install -c bioconda spearfish` or `cargo install spearfish-cli`). It supports transcriptome read mode only (not the genome modes), and `--only-index`/`--index-out` are for rammap: write a spearfish index with `spearfish index` instead.
+With `--mapper spearfish`, read mode maps with [spearfish](https://github.com/COMBINE-lab/spearfish) instead of rammap, in process: a long-read transcriptome mapper that reports, for each read, every compatible transcript with its score difference from the best. It builds its index from `--annotated`/`--novel` in a few seconds; `--index-out transcripts.sfi` also writes it to a file (with `--only-index`, without quantifying), and `--index transcripts.sfi` opens a saved one instead of building it, memory-mapped. Reusing a saved index skips reading the FASTA and building, and lowers peak memory (by about 2 GB for a human transcriptome). oarfish records the reference's digests in the index it writes, so quantifying from it records the same reference signature as building in process. An index written by `spearfish index` (spearfish installed separately, e.g. `conda install -c bioconda spearfish` or `cargo install spearfish-cli`) also works, but has no such digests, so oarfish records a name/length digest instead. It supports transcriptome read mode only (not the genome modes).
 
 Its preset follows `--seq-tech`:
 
