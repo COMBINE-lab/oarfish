@@ -22,6 +22,11 @@ impl CountInfo {
 
 /// Alignments per chunk below which [`get_aux_counts`] adds no further chunk.
 const MIN_CHUNK_ALIGNMENTS: usize = 1 << 18;
+/// Alignments per transcript a chunk must count before [`get_aux_counts`] gives it its own
+/// per-transcript counts (8 bytes per transcript): this keeps those buffers to at most 4 bytes
+/// per alignment, so a large transcriptome with few alignments is counted in fewer chunks
+/// instead of holding many mostly-zero arrays.
+const MIN_ALIGNMENTS_PER_TRANSCRIPT: usize = 2;
 
 /// Total and unique alignment counts per transcript. The reads are counted in chunks in
 /// parallel on the current rayon pool (one per thread, fewer for a small store), and each
@@ -39,6 +44,7 @@ pub fn get_aux_counts(
     let alns = &store.alignments;
     let nchunks = rayon::current_num_threads()
         .min(alns.len() / MIN_CHUNK_ALIGNMENTS)
+        .min(alns.len() / (MIN_ALIGNMENTS_PER_TRANSCRIPT * m).max(1))
         .min(n)
         .max(1);
 

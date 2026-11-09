@@ -226,26 +226,113 @@ impl<'scope> DeferredDigest<'scope> {
 pub(crate) fn digest_from_header(
     header: &noodles_sam::header::Header,
 ) -> anyhow::Result<seqcol_rs::DigestResult> {
-    let seqcol_digest = {
-        info!("calculating seqcol digest");
-        let mut sc = seqcol_rs::SeqCol::from_sam_header(
-            header
-                .reference_sequences()
-                .iter()
-                .map(|(k, v)| (k.as_slice(), v.length().into())),
-        );
-        let d = sc
-            .digest(seqcol_rs::DigestConfig {
-                level: seqcol_rs::DigestLevel::Level1,
-                additional_attr: vec![seqcol_rs::KnownAttr::SortedNameLengthPairs],
-            })
-            .context(
-                "failed to compute the seqcol digest for the information from the alignment header",
-            )?;
-        info!("done calculating seqcol digest");
-        d
+    info!("calculating seqcol digest");
+    let d = level1_digest_from_names_lengths(
+        header
+            .reference_sequences()
+            .iter()
+            .map(|(k, v)| (k.as_slice(), usize::from(v.length()))),
+    )
+    .context("failed to compute the seqcol digest for the information from the alignment header")?;
+    info!("done calculating seqcol digest");
+    Ok(d)
+}
+
+/// Feeds what is written into a hash.
+struct HashWriter<'a, D>(&'a mut D);
+
+impl<D: sha2::Digest> Write for HashWriter<'_, D> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.update(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// seqcol's `sha512t24u` of everything hashed into `h`: the first 24 bytes of the SHA-512,
+/// base64url-encoded (32 characters).
+fn sha512t24u(h: sha2::Sha512) -> [u8; 32] {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let d = h.finalize();
+    let mut out = [0u8; 32];
+    let n = base64::prelude::BASE64_URL_SAFE
+        .encode_slice(&d[..24], &mut out)
+        .expect("24 bytes encode to 32 base64 characters");
+    debug_assert_eq!(n, 32);
+    out
+}
+
+/// The Level1 seqcol digest of a SAM/BAM header's reference names and lengths with the
+/// `sorted_name_length_pairs` attribute: the same [`seqcol_rs::DigestResult`] as
+/// `SeqCol::from_sam_header(..).digest(Level1, [SortedNameLengthPairs])`, computed in one
+/// streaming pass. The canonical JSON of the `names` and `lengths` arrays is hashed as it is
+/// written instead of being built as `serde_json` values and strings, and each name/length
+/// pair keeps only its 32-byte digest, so the memory is 32 bytes per sequence (seqcol builds
+/// several copies of every name, about 0.35 KB per sequence).
+fn level1_digest_from_names_lengths<'a, I>(it: I) -> anyhow::Result<seqcol_rs::DigestResult>
+where
+    I: IntoIterator<Item = (&'a [u8], usize)>,
+{
+    use sha2::Digest as _;
+    let it = it.into_iter();
+    let mut sha256_names = sha2::Sha256::new();
+    let mut names = sha2::Sha512::new();
+    let mut lengths = sha2::Sha512::new();
+    let mut pairs: Vec<[u8; 32]> = Vec::with_capacity(it.size_hint().0);
+    names.update(b"[");
+    lengths.update(b"[");
+    for (i, (n, l)) in it.enumerate() {
+        sha256_names.update(n);
+        // seqcol requires UTF-8 names (`from_sam_header` unwraps the conversion).
+        let name = std::str::from_utf8(n).unwrap();
+        if i > 0 {
+            names.update(b",");
+            lengths.update(b",");
+        }
+        serde_json::to_writer(HashWriter(&mut names), name)?;
+        write!(HashWriter(&mut lengths), "{}", l as u64)?;
+        // The canonical JSON of {"name": n, "length": l} (keys sorted).
+        let mut pair = sha2::Sha512::new();
+        write!(HashWriter(&mut pair), "{{\"length\":{},\"name\":", l as u64)?;
+        serde_json::to_writer(HashWriter(&mut pair), name)?;
+        pair.update(b"}");
+        pairs.push(sha512t24u(pair));
+    }
+    names.update(b"]");
+    lengths.update(b"]");
+    // The pair digests, sorted as strings, as a JSON array of strings (base64url characters
+    // need no escaping).
+    pairs.sort_unstable();
+    let mut snlp = sha2::Sha512::new();
+    snlp.update(b"[");
+    for (i, d) in pairs.iter().enumerate() {
+        if i > 0 {
+            snlp.update(b",");
+        }
+        snlp.update(b"\"");
+        snlp.update(d);
+        snlp.update(b"\"");
+    }
+    snlp.update(b"]");
+    drop(pairs);
+
+    let as_value = |d: [u8; 32]| {
+        serde_json::Value::String(
+            String::from_utf8(d.to_vec()).expect("base64url digests are ASCII"),
+        )
     };
-    Ok(seqcol_digest)
+    let mut res = serde_json::json!({});
+    res["names"] = as_value(sha512t24u(names));
+    res["lengths"] = as_value(sha512t24u(lengths));
+    res["sorted_name_length_pairs"] = as_value(sha512t24u(snlp));
+    Ok(seqcol_rs::DigestResult {
+        sq_digest: seqcol_rs::DigestLevelResult::Level1(seqcol_rs::Level1Digest { digests: res }),
+        sha256_names: Some(hex::encode(sha256_names.finalize())),
+        sha256_seqs: None,
+    })
 }
 
 /// Computes a full Level1 SeqCol `DigestResult` from a loaded rammap aligner by
