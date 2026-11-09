@@ -547,7 +547,7 @@ fn main() -> anyhow::Result<()> {
         bulk::quantify_bulk_alignments_from_bam(
             &header,
             filter_opts,
-            &mut reader.unwrap(),
+            reader.unwrap(),
             &mut txps,
             &txps_name,
             &args,

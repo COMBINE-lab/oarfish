@@ -302,11 +302,11 @@ pub fn parse_alignments_for_barcode<R: io::BufRead>(
     Ok(records_for_barcode)
 }
 
-pub fn parse_alignments<R: io::BufRead>(
+pub fn parse_alignments(
     store: &mut InMemoryAlignmentStore,
     name_vec: &mut Option<SwapVec<String>>,
     _header: &Header,
-    reader: &mut bam::io::Reader<R>,
+    input: BamRecordStream,
     txps: &mut [TranscriptInfo],
     check_order_thresh: usize,
     quiet: bool,
@@ -342,19 +342,17 @@ pub fn parse_alignments<R: io::BufRead>(
     // by their source read. **Note**: this requires that we have a
     // name-sorted input bam file (currently, aligned against the transcriptome).
     //
-    // Records are read undecoded (`bam::Record`, whose fields are read from its bytes on
-    // demand) into one reused buffer, so a record costs no allocation and no decoding of
-    // fields the filters never look at.
-    //
-    // The work is pipelined: this thread reads the records, takes from each the few fields
-    // the filters and the store use (a `ParsedAln`, each read once), and groups them by read
-    // into batches of `PARSE_BATCH_READS` reads; a second thread filters the batches' reads
-    // and adds them to the store, in input order (see `add_read_batch`), so the store, the
-    // coverage profiles, the discard counts and the read names come out exactly as a serial
-    // pass builds them. Only the compact fields cross threads, never the records, so the
-    // record buffer stays hot in this thread's cache. (Filtering each batch in parallel on
-    // the rayon pool instead was slower: its workers slowed this thread, which bounds the
-    // parse.)
+    // The work is pipelined (see `util::bgzf_records`): the workers that inflate the BGZF
+    // blocks also read each block's records (undecoded `bam::Record`s, whose fields are read
+    // from their bytes on demand) and take from each the few fields the filters and the store
+    // use (a `ParsedAln`, each read once), grouping a block's consecutive records of one read
+    // name into runs. This thread joins the blocks' runs in input order into reads (a read cut
+    // by a block end is joined here), checks the collation, and groups the reads into batches
+    // of `PARSE_BATCH_READS` reads; a second thread filters the batches' reads and adds them
+    // to the store, in input order (see `add_read_batch`), so the store, the coverage
+    // profiles, the discard counts and the read names come out exactly as a serial pass
+    // builds them. Only the compact fields cross threads, never the records. (Filtering each
+    // batch in parallel on the rayon pool instead was slower than one adder thread.)
     let header = store.aln_header;
     let tail_evidence = store.filter_opts.tail_neutral.is_some();
     let keep_names = name_vec.is_some();
@@ -371,73 +369,74 @@ pub fn parse_alignments<R: io::BufRead>(
             }
         });
 
-        let read_result = (|| -> anyhow::Result<()> {
-            let mut n_records = 0_u64;
-            let mut record = bam::Record::default();
-            let mut batch = ReadBatch::default();
-            // where the current read's alignments start in `batch.alns`
-            let mut read_start = 0_usize;
+        let mut n_records = 0_u64;
+        let mut next_tick = 0_u64;
+        let mut batch = ReadBatch::default();
+        // where the current read's alignments start in `batch.alns`
+        let mut read_start = 0_usize;
 
-            loop {
-                if reader.read_record(&mut record)? == 0 {
-                    break;
-                }
-                n_records += 1;
-                if n_records.is_multiple_of(4096) {
+        let read_result = crate::util::bgzf_records::for_each_block(
+            input.file,
+            input.first_block_skip,
+            input.workers,
+            |record: &bam::Record, out: &mut BlockReads| out.push(record, header, tail_evidence),
+            |out: &mut BlockReads| -> anyhow::Result<bool> {
+                n_records += out.n_records;
+                num_unmapped += out.n_unmapped;
+                if n_records >= next_tick {
                     pb.set_position(n_records);
+                    next_tick = n_records + 65536;
                 }
-
-                // unmapped reads don't contribute to quantification
-                // but we track them.
-                if record.flags().is_unmapped() {
-                    num_unmapped += 1;
-                    continue;
-                }
-                let Some(rname) = record.name() else {
-                    continue;
-                };
-                // if this is an alignment for the same read, then
-                // push it onto our temporary vector.
-                if prev_read.as_slice() != <_ as AsRef<[u8]>>::as_ref(rname) {
-                    // otherwise, close the previous read's group (a read none of whose
-                    // records has a reference adds nothing, as `add_group` would).
-                    if batch.alns.len() > read_start {
-                        batch.close_read(keep_names, &prev_read);
-                        if batch.len() == PARSE_BATCH_READS {
-                            let next = recycle_rx.try_recv().unwrap_or_default();
-                            if batch_tx.send(std::mem::replace(&mut batch, next)).is_err() {
-                                // the adder has gone (it panicked); joining it reports why
-                                return Ok(());
+                let mut name_start = 0;
+                let mut alns_start = 0;
+                for run in &out.runs {
+                    let rname = &out.names[name_start..run.name_end];
+                    name_start = run.name_end;
+                    // if this is an alignment for the same read, then
+                    // push it onto our temporary vector.
+                    if prev_read.as_slice() != rname {
+                        // otherwise, close the previous read's group (a read none of whose
+                        // records has a reference adds nothing, as `add_group` would).
+                        if batch.alns.len() > read_start {
+                            batch.close_read(keep_names, &prev_read);
+                            if batch.len() == PARSE_BATCH_READS {
+                                let next = recycle_rx.try_recv().unwrap_or_default();
+                                if batch_tx.send(std::mem::replace(&mut batch, next)).is_err() {
+                                    // the adder has gone (it panicked); joining it reports why
+                                    return Ok(false);
+                                }
                             }
+                            read_start = batch.alns.len();
                         }
-                        read_start = batch.alns.len();
-                    }
-                    // the new "prev_read" name is the current read name
-                    // so it becomes the first on the new alignment range
-                    // vector.
-                    prev_read.clear();
-                    prev_read.extend_from_slice(rname.as_ref());
-                    if rg_num < check_order_thresh {
-                        if !read_name_map.insert(prev_read.clone()) {
-                            error!(
-                                "It appears that the input BAM file is not name-collated. oarfish is not designed to process coordinate sorted BAM files."
-                            );
-                            anyhow::bail!(
-                                "You appear to have provided a coordinate-sorted BAM, but oarfish does not support processing these.\n\
+                        // the new "prev_read" name is the current read name
+                        // so it becomes the first on the new alignment range
+                        // vector.
+                        prev_read.clear();
+                        prev_read.extend_from_slice(rname);
+                        if rg_num < check_order_thresh {
+                            if !read_name_map.insert(prev_read.clone()) {
+                                error!(
+                                    "It appears that the input BAM file is not name-collated. oarfish is not designed to process coordinate sorted BAM files."
+                                );
+                                anyhow::bail!(
+                                    "You appear to have provided a coordinate-sorted BAM, but oarfish does not support processing these.\n\
                                         You should provide a BAM file collated by record name (which is the \"natural\" minimap2 order).\n\
                                         Alignment records for the same read {} were observed twice in a non-contiguous block.",
-                                String::from_utf8_lossy(&prev_read)
-                            );
+                                    String::from_utf8_lossy(&prev_read)
+                                );
+                            }
+                            rg_num += 1;
                         }
-                        rg_num += 1;
                     }
-                }
-                if record.reference_sequence_id().is_some() {
                     batch
                         .alns
-                        .push(ParsedAln::new(&record, header, tail_evidence));
+                        .extend_from_slice(&out.alns[alns_start..run.alns_end]);
+                    alns_start = run.alns_end;
                 }
-            }
+                Ok(true)
+            },
+        );
+        let read_result = read_result.map(|()| {
             pb.set_position(n_records);
             // if we end with a non-empty alignment range vector, then
             // add that group.
@@ -447,8 +446,7 @@ pub fn parse_alignments<R: io::BufRead>(
             if batch.len() > 0 {
                 let _ = batch_tx.send(batch);
             }
-            Ok(())
-        })();
+        });
         // closing the channel lets the adder finish the queued batches and stop
         drop(batch_tx);
         if let Err(panic) = adder.join() {
@@ -465,6 +463,85 @@ pub fn parse_alignments<R: io::BufRead>(
     );
 
     Ok(())
+}
+
+/// The BAM record stream [`parse_alignments`] reads: a BGZF file positioned at the start of
+/// the block holding the first record, how many inflated bytes of that block precede it (the
+/// end of the header), and how many workers inflate and read the blocks.
+pub struct BamRecordStream {
+    pub file: std::fs::File,
+    pub first_block_skip: usize,
+    pub workers: usize,
+}
+
+/// The records of one BGZF block, as a worker of [`parse_alignments`] reads them: the fields
+/// of each record with a reference (`alns`), grouped into runs of consecutive records of one
+/// read name, with the names of the runs.
+#[derive(Default)]
+struct BlockReads {
+    n_records: u64,
+    n_unmapped: u64,
+    alns: Vec<ParsedAln>,
+    runs: Vec<NameRun>,
+    names: Vec<u8>,
+    /// where the last run's name starts in `names`
+    last_name_start: usize,
+}
+
+/// Consecutive records of one read name in a block: the name is `names[..name_end]` after
+/// the previous run's name, the alignments `alns[..alns_end]` after the previous run's.
+#[derive(Clone, Copy)]
+struct NameRun {
+    name_end: usize,
+    alns_end: usize,
+}
+
+impl BlockReads {
+    /// Takes one record, as the serial parse loop did: unmapped records are counted and
+    /// skipped, records without a name skipped, and a record joins its read's alignments only
+    /// when it has a reference.
+    #[inline]
+    fn push(&mut self, record: &bam::Record, header: &Header, tail_evidence: bool) {
+        self.n_records += 1;
+        // unmapped reads don't contribute to quantification
+        // but we track them.
+        if record.flags().is_unmapped() {
+            self.n_unmapped += 1;
+            return;
+        }
+        let Some(rname) = record.name() else {
+            return;
+        };
+        let rname: &[u8] = rname.as_ref();
+        let same = self
+            .runs
+            .last()
+            .is_some_and(|r| &self.names[self.last_name_start..r.name_end] == rname);
+        if !same {
+            self.last_name_start = self.names.len();
+            self.names.extend_from_slice(rname);
+            self.runs.push(NameRun {
+                name_end: self.names.len(),
+                alns_end: self.alns.len(),
+            });
+        }
+        if record.reference_sequence_id().is_some() {
+            self.alns
+                .push(ParsedAln::new(record, header, tail_evidence));
+            self.runs.last_mut().unwrap().alns_end = self.alns.len();
+        }
+    }
+}
+
+impl crate::util::bgzf_records::BlockOutput for BlockReads {
+    fn clear(&mut self) {
+        self.n_records = 0;
+        self.n_unmapped = 0;
+        self.alns.clear();
+        self.runs.clear();
+        self.names.clear();
+        self.last_name_start = 0;
+    }
 }
 
 /// How many reads [`parse_alignments`] groups into one batch for the adder.
