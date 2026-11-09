@@ -265,22 +265,26 @@ impl GapLaw {
 
     /// Per-nt density `dens[d]` and distribution function `cdf[x] = P(gap <= x)` for gaps up
     /// to `max_len`.
+    #[cfg(test)]
     fn tables(&self, max_len: u32) -> (Vec<f64>, Vec<f64>) {
-        let dens: Vec<f64> = (0..=max_len)
-            .map(|d| {
-                let b = Self::bin(d);
-                self.h.get(b).map_or(0.0, |p| p / Self::width(b))
-            })
-            .collect();
-        let mut acc = 0.0;
-        let cdf = dens
-            .iter()
-            .map(|x| {
-                acc += x;
-                acc
-            })
-            .collect();
+        let n = max_len as usize + 1;
+        let (mut dens, mut cdf) = (vec![0.0; n], vec![0.0; n]);
+        self.fill_tables(&mut dens, &mut cdf);
         (dens, cdf)
+    }
+
+    /// [`GapLaw::tables`] into `dens` and `cdf` (of one length, `max_len + 1`): the density in
+    /// parallel, then the running sum in one serial pass.
+    fn fill_tables(&self, dens: &mut [f64], cdf: &mut [f64]) {
+        fill_par(dens, |d| {
+            let b = Self::bin(d as u32);
+            self.h.get(b).map_or(0.0, |p| p / Self::width(b))
+        });
+        let mut acc = 0.0;
+        for (c, x) in cdf.iter_mut().zip(dens.iter()) {
+            acc += x;
+            *c = acc;
+        }
     }
 
     /// Mass at gap 0, in 1-15, 16-255 and 256 or more.
@@ -511,26 +515,38 @@ impl LenLaw {
     }
 
     /// Per-nt density `dens[x]` and survival `surv[x] = P(length >= x)` for `x` up to `max_len`.
+    #[cfg(test)]
     fn tables(&self, max_len: u32) -> (Vec<f64>, Vec<f64>) {
+        let n = max_len as usize + 1;
+        let (mut dens, mut surv) = (vec![0.0; n], vec![0.0; n]);
+        self.fill_tables(&mut dens, &mut surv);
+        (dens, surv)
+    }
+
+    /// [`LenLaw::tables`] into `dens` and `surv` (of one length, `max_len + 1`), in parallel.
+    fn fill_tables(&self, dens: &mut [f64], surv: &mut [f64]) {
         let nb = self.h.len();
         let mut tail = vec![0.0; nb + 1];
         for b in (0..nb).rev() {
             tail[b] = tail[b + 1] + self.h[b];
         }
-        let dens = (0..=max_len)
-            .map(|x| self.h.get(Self::bin(x as f64)).map_or(0.0, |p| p / Self::W))
-            .collect();
-        let surv = (0..=max_len)
-            .map(|x| {
-                let b = Self::bin(x as f64);
-                if b >= nb {
-                    return 0.0;
-                }
-                let within = (x as f64 - b as f64 * Self::W) / Self::W;
-                (tail[b + 1] + self.h[b] * (1.0 - within)).max(0.0)
-            })
-            .collect();
-        (dens, surv)
+        rayon::join(
+            || {
+                fill_par(dens, |x| {
+                    self.h.get(Self::bin(x as f64)).map_or(0.0, |p| p / Self::W)
+                })
+            },
+            || {
+                fill_par(surv, |x| {
+                    let b = Self::bin(x as f64);
+                    if b >= nb {
+                        return 0.0;
+                    }
+                    let within = (x as f64 - b as f64 * Self::W) / Self::W;
+                    (tail[b + 1] + self.h[b] * (1.0 - within)).max(0.0)
+                })
+            },
+        );
     }
 
     /// Total-variation distance between two laws.
@@ -712,12 +728,29 @@ struct Exps {
 
 impl Exps {
     fn new(par: &Params, max_len: u32) -> Self {
-        let (d3, s3) = par.len3.tables(max_len);
-        let (d5, s5) = par.len5.tables(max_len);
-        let (du, su) = par.lenu.tables(max_len);
-        let (g3d, g3c) = par.k3.abs.tables(max_len);
-        let (g5d, g5c) = par.k5.abs.tables(max_len);
-        Exps {
+        let n = max_len as usize + 1;
+        let v = || vec![0.0; n];
+        let mut e = Exps {
+            d3: v(),
+            s3: v(),
+            d5: v(),
+            s5: v(),
+            du: v(),
+            su: v(),
+            g3d: v(),
+            g3c: v(),
+            g5d: v(),
+            g5c: v(),
+        };
+        e.fill(par);
+        e
+    }
+
+    /// Recompute every table for `par`, in place (the lengths stay those `new` gave). The ten
+    /// tables are filled in parallel; each element is the same expression as a serial fill,
+    /// and each running sum keeps its serial order, so the result is identical.
+    fn fill(&mut self, par: &Params) {
+        let Exps {
             d3,
             s3,
             d5,
@@ -728,8 +761,38 @@ impl Exps {
             g3c,
             g5d,
             g5c,
-        }
+        } = self;
+        rayon::join(
+            || {
+                rayon::join(
+                    || par.len3.fill_tables(d3, s3),
+                    || par.len5.fill_tables(d5, s5),
+                )
+            },
+            || {
+                rayon::join(
+                    || par.lenu.fill_tables(du, su),
+                    || {
+                        rayon::join(
+                            || par.k3.abs.fill_tables(g3d, g3c),
+                            || par.k5.abs.fill_tables(g5d, g5c),
+                        )
+                    },
+                )
+            },
+        );
     }
+}
+
+/// `out[i] = f(i)` for every `i`, over chunks on the rayon pool.
+fn fill_par(out: &mut [f64], f: impl Fn(usize) -> f64 + Sync) {
+    const CHUNK: usize = 4096;
+    out.par_chunks_mut(CHUNK).enumerate().for_each(|(c, o)| {
+        let x0 = c * CHUNK;
+        for (i, y) in o.iter_mut().enumerate() {
+            *y = f(x0 + i);
+        }
+    });
 }
 
 /// Expected sufficient statistics for the M-step, accumulated per thread.
@@ -1727,6 +1790,9 @@ fn run_from(
         Vec::new()
     };
     let mut sq = Squarem::new(tinfo.len());
+    // The fit's per-nt tables, refilled in place each iteration (allocated here, on the
+    // calling thread, once).
+    let mut exps: Option<Exps> = None;
     while niter < em_info.max_iter {
         if let Some(p) = &mut pres {
             refresh_presence(
@@ -1751,8 +1817,14 @@ fn run_from(
             }
             Some(ws) => step_static(&mut lay, ws, src, &curr, mult),
             None => {
-                let e = Exps::new(&par, max_len);
-                let st = step_with(&mut lay, f, &par, src, &curr, mult, &e);
+                let e = match &mut exps {
+                    Some(e) => {
+                        e.fill(&par);
+                        &*e
+                    }
+                    None => &*exps.insert(Exps::new(&par, max_len)),
+                };
+                let st = step_with(&mut lay, f, &par, src, &curr, mult, e);
                 ll_gain = st.ll - last_ll;
                 last_ll = st.ll;
                 let next = st.params(&par);
