@@ -397,12 +397,19 @@ fn main() -> anyhow::Result<()> {
             "--map-strand needs --mapper spearfish (with rammap, --strand-filter keeps the \
              alignments of one orientation)"
         );
-    } else if args.bump_alloc {
+    } else if args.bump_alloc > 0 {
         anyhow::bail!("--bump-alloc needs --mapper spearfish");
     }
     // Before the mapping threads start, so that each takes its arena with its first read.
-    if args.bump_alloc && !nudgy::enable() {
-        tracing::warn!("--bump-alloc: the arenas are not available here; mapping without them");
+    if args.bump_alloc > 0 {
+        if nudgy::enable_with(nudgy::Config::new().with_max_block(args.bump_alloc)) {
+            info!(
+                "--bump-alloc: per-thread arenas serve allocations of up to {} bytes",
+                nudgy::stats().max_block
+            );
+        } else {
+            tracing::warn!("--bump-alloc: the arenas are not available here; mapping without them");
+        }
     }
 
     // if we are just indexing, don't bother with anything else

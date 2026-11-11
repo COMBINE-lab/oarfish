@@ -33,8 +33,9 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`--bump-alloc` turns on per-thread arenas for the spearfish backend** (with
   `--mapper spearfish`). The mapper's small allocations (up to 8 KB) then come from memory
   that belongs to each mapping thread instead of from the general allocator: a little less
-  mapping time, for a few MB of memory a thread, with the same mappings. Off by default. The
-  arenas are the [`nudgy`](https://crates.io/crates/nudgy) crate, the allocator behind
+  mapping time, for a few MB of memory a thread, with the same mappings. Off by default. A
+  size in place of 8 KB is given as `--bump-alloc=1KB` (at most 32 KB), and
+  `--bump-alloc=off` or `none` is the same as leaving the option out. The arenas are the [`nudgy`](https://crates.io/crates/nudgy) crate, the allocator behind
   `spearfish map --bump-alloc`: oarfish's global allocator is now `nudgy::Bump` around
   mimalloc (or around the system allocator without the `mimalloc` feature), and without the
   option it forwards every call, so nothing else changes.

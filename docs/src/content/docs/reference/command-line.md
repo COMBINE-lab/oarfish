@@ -33,8 +33,9 @@ raw read mode:
       --map-strand <MAP_STRAND>
                                with --mapper spearfish, the read orientation to map (fw, rc or both);
                                fw for reads already oriented to the transcript strand
-      --bump-alloc             with --mapper spearfish, serve the mapper's small allocations from
-                               per-thread arenas (a little less mapping time)
+      --bump-alloc[=<SIZE>]    with --mapper spearfish, serve the mapper's small allocations from
+                               per-thread arenas (a little less mapping time); SIZE is the
+                               largest one served (8KB without it, at most 32KB), off for none
       --seq-tech <SEQ_TECH>    [possible values: ont-cdna, ont-drna, pac-bio, pac-bio-hifi]
       --best-n <BEST_N>        max secondary mappings to consider [default: 100]
       --dp-cache-cap-mb <DP_CACHE_CAP_MB>

@@ -97,8 +97,7 @@ rammap = { package = "rammap-core", version = "1.2.0", default-features = false,
 # (`--mapper spearfish`).
 spearfish = { version = "0.1", default-features = false }
 # The per-thread arenas that `--bump-alloc` turns on (the allocator spearfish's own CLI uses).
-# `Bump` and `enable` are the same in 0.1 and 0.2.
-nudgy = ">=0.1, <0.3"
+nudgy = "0.2"
 # RAD input (`bulk_long_read` records, e.g. from `spearfish map --rad`).
 long-read-rad = "0.1"
 

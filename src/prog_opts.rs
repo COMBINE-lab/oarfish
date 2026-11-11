@@ -23,6 +23,15 @@ fn parse_strand(arg: &str) -> anyhow::Result<bio_types::strand::Strand> {
     }
 }
 
+/// `--bump-alloc[=<size>]`: the largest block, in bytes, that the per-thread arenas serve,
+/// and 0 (`off`, `none`) for no arenas.
+fn parse_bump_alloc(arg: &str) -> anyhow::Result<usize> {
+    if arg.eq_ignore_ascii_case("off") || arg.eq_ignore_ascii_case("none") {
+        return Ok(0);
+    }
+    Ok(arg.parse::<nudgy::Config>()?.max_block())
+}
+
 /// Parse a strictly-positive `f32` (used for parameters that divide, so 0 and
 /// negatives are rejected to avoid degenerate probabilities).
 fn parse_pos_f32(arg: &str) -> anyhow::Result<f32> {
@@ -526,8 +535,20 @@ pub struct Args {
     /// memory that belongs to each thread instead of from the general allocator. Mapping a
     /// read makes a few hundred of them and frees nearly all before the next read. A little
     /// less mapping time, for a few MB of memory a thread; what is mapped does not change.
-    #[arg(long, requires = "reads", help_heading = "raw read mode")]
-    pub bump_alloc: bool,
+    /// A size sets the largest allocation served this way in place of 8 KB
+    /// (`--bump-alloc=1KB`, at most 32KB); `off` or `none` is no arenas.
+    #[arg(
+        long,
+        value_name = "SIZE",
+        num_args = 0..=1,
+        require_equals = true,
+        default_value = "off",
+        default_missing_value = "8KB",
+        value_parser = parse_bump_alloc,
+        requires = "reads",
+        help_heading = "raw read mode"
+    )]
+    pub bump_alloc: usize,
 
     /// maximum number of secondary mappings to consider when mapping reads to the transcriptome
     #[arg(
@@ -887,5 +908,43 @@ mod tests {
             "out",
         ]);
         assert!(conflict.is_err(), "expected --genome/--index conflict");
+    }
+
+    /// `--bump-alloc` is off without the option, 8 KB without a value, and takes a size or
+    /// `off` / `none` joined by `=`; a following argument is never its value.
+    #[test]
+    fn bump_alloc_takes_an_optional_size() {
+        let parse = |extra: &[&str]| {
+            let mut v = vec!["oarfish", "--mapper", "spearfish"];
+            v.extend_from_slice(extra);
+            v.extend_from_slice(&["--reads", "r.fq", "--index", "t.sfi", "-o", "out"]);
+            v.extend_from_slice(&["--seq-tech", "ont-cdna"]);
+            Args::try_parse_from(v).map(|a| a.bump_alloc)
+        };
+        assert_eq!(parse(&[]).unwrap(), 0);
+        assert_eq!(parse(&["--bump-alloc"]).unwrap(), 8192);
+        assert_eq!(parse(&["--bump-alloc=8KB"]).unwrap(), 8192);
+        assert_eq!(parse(&["--bump-alloc=1KB"]).unwrap(), 1024);
+        assert_eq!(parse(&["--bump-alloc=500"]).unwrap(), 512);
+        assert_eq!(parse(&["--bump-alloc=32kb"]).unwrap(), 32768);
+        for off in ["--bump-alloc=off", "--bump-alloc=none", "--bump-alloc=0"] {
+            assert_eq!(parse(&[off]).unwrap(), 0, "{off}");
+        }
+        for bad in [
+            "--bump-alloc=64KB",
+            "--bump-alloc=8MB",
+            "--bump-alloc=on",
+            "--bump-alloc=",
+        ] {
+            assert!(parse(&[bad]).is_err(), "{bad}");
+        }
+        // The option needs reads to map, and its default does not.
+        let no_reads = |extra: &[&str]| {
+            let mut v = vec!["oarfish", "-a", "x.bam", "-o", "out"];
+            v.extend_from_slice(extra);
+            Args::try_parse_from(v).map(|a| a.bump_alloc)
+        };
+        assert_eq!(no_reads(&[]).unwrap(), 0);
+        assert!(no_reads(&["--bump-alloc"]).is_err());
     }
 }
