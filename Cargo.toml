@@ -38,15 +38,15 @@ noodles-sam = "0.83.0"
 num-format = "0.4.4"
 lz4 = "1.28.1"
 either = "1.15.0"
-tabled = "0.20.0"
+tabled = "0.22"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 typed-builder = "0.23.2"
 rayon = "1.11"
-statrs = "0.18"
+statrs = "0.19"
 csv = "1.4"
 serde = { version = "1", features = ["derive"] }
-itertools = "0.14.0"
+itertools = "0.15"
 serde_json = "1.0.149"
 # Streaming seqcol digest of a BAM header (`util::digest_utils`); the versions seqcol_rs uses.
 sha2 = "0.10.9"
@@ -54,14 +54,13 @@ base64 = "0.22.1"
 hex = "0.4.3"
 path-tools = "0.1.0"
 atomic_float = "1.1.0"
-sendable-swapvec = "0.4.3"
+# Spill file for the read names kept for `--write-assignment-probs` (util/name_store.rs).
+tempfile = "3.27"
 rand = "0.10.0" #0.8.5"
-arrow2 = { version = "0.18.0", features = [
-  "io_parquet",
-  "io_parquet_gzip",
-  "io_parquet_zstd",
-  "io_parquet_snappy",
-] }
+# Parquet output (`.infreps.pq` bootstrap replicates).
+arrow-array = "60.1"
+arrow-schema = "60.1"
+parquet = { version = "60.1", default-features = false, features = ["arrow", "zstd"] }
 kders = { git = "https://github.com/COMBINE-lab/kde-rs.git", branch = "dev", version = "0.1.1" }
 noodles-bgzf = { version = "0.46.0", features = ["libdeflate"] }
 # raw-deflate inflate + CRC32 of BGZF blocks in the BAM record pipeline (util/bgzf_records.rs);

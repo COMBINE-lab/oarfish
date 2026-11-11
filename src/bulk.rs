@@ -16,7 +16,7 @@ use crate::util::projection::{mapping_to_genomic_alignment, projected_to_records
 use crate::util::read_function::read_short_quant_vec;
 use crate::util::write_function::{write_infrep_file, write_out_prob, write_output};
 use crate::{logistic_prob, normalize_read_probs};
-use arrow2::{array::Float64Array, chunk::Chunk, datatypes::Field};
+use arrow_array::{ArrayRef, Float64Array};
 use bramble_rs::ProjectionConfig;
 use bramble_rs::ProjectionContext;
 use bramble_rs::g2t::G2TTree;
@@ -25,12 +25,12 @@ use crossbeam::channel::Receiver;
 use crossbeam::channel::Sender;
 use crossbeam::channel::bounded;
 
+use crate::util::name_store::NameStore;
 use needletail::parse_fastx_file;
 use noodles_bam as bam;
 use num_format::{Locale, ToFormattedString};
 use serde_json::json;
 use std::io::BufRead;
-use swapvec::{SwapVec, SwapVecConfig};
 use tracing::{info, warn};
 
 /// Produce a [serde_json::Value] that encodes the relevant arguments and
@@ -87,7 +87,7 @@ fn get_json_info(
 pub(crate) fn perform_inference_and_write_output(
     header: &noodles_sam::header::Header,
     store: &mut InMemoryAlignmentStore,
-    name_vec: Option<SwapVec<String>>,
+    name_vec: Option<NameStore>,
     txps: &mut [TranscriptInfo],
     txps_name: &[String],
     seqcol_digest: DeferredDigest<'_>,
@@ -300,19 +300,17 @@ pub(crate) fn perform_inference_and_write_output(
             None => em::bootstrap(&emi, args.num_bootstraps, args.threads),
         };
 
-        let mut new_arrays = vec![];
-        let mut bs_fields = vec![];
-        for (i, b) in breps.into_iter().enumerate() {
-            let bs_array = Float64Array::from_vec(b);
-            bs_fields.push(Field::new(
-                format!("bootstrap.{}", i),
-                bs_array.data_type().clone(),
-                false,
-            ));
-            new_arrays.push(bs_array.boxed());
-        }
-        let chunk = Chunk::new(new_arrays);
-        write_infrep_file(args.output.as_ref().expect("present"), bs_fields, chunk)?;
+        let columns = breps
+            .into_iter()
+            .enumerate()
+            .map(|(i, b)| {
+                (
+                    format!("bootstrap.{}", i),
+                    std::sync::Arc::new(Float64Array::from(b)) as ArrayRef,
+                )
+            })
+            .collect();
+        write_infrep_file(args.output.as_ref().expect("present"), columns)?;
     }
 
     if args.write_assignment_probs.is_some() {
@@ -341,11 +339,7 @@ pub fn quantify_bulk_alignments_from_bam(
     seqcol_digest: DeferredDigest<'_>,
 ) -> anyhow::Result<()> {
     let mut name_vec = if filter_opts.write_assignment_probs {
-        Some(SwapVec::<String>::with_config(SwapVecConfig {
-            swap_after: Default::default(),
-            batch_size: Default::default(),
-            compression: Some(swapvec::Compression::Lz4),
-        }))
+        Some(NameStore::new())
     } else {
         None
     };
@@ -413,11 +407,7 @@ pub fn quantify_genome_alignments_from_bam<R: BufRead>(
     seqcol_digest: NamedDigestVec,
 ) -> anyhow::Result<()> {
     let mut name_vec = if filter_opts.write_assignment_probs {
-        Some(SwapVec::<String>::with_config(SwapVecConfig {
-            swap_after: Default::default(),
-            batch_size: Default::default(),
-            compression: Some(swapvec::Compression::Lz4),
-        }))
+        Some(NameStore::new())
     } else {
         None
     };
@@ -565,7 +555,7 @@ pub fn quantify_genome_raw_reads(
     let (mut store, name_vec, aln_time) = std::thread::scope(
         |s| -> anyhow::Result<(
             InMemoryAlignmentStore,
-            Option<SwapVec<String>>,
+            Option<NameStore>,
             std::time::Duration,
         )> {
             const ALN_GROUP_CHUNK_LIMIT: usize = 100;
@@ -718,11 +708,7 @@ pub fn quantify_genome_raw_reads(
             let filter_opts_store = filter_opts.clone();
             let aln_group_consumer = s.spawn(move || {
                 let mut name_vec = if filter_opts_store.write_assignment_probs {
-                    Some(SwapVec::<String>::with_config(SwapVecConfig {
-                        swap_after: Default::default(),
-                        batch_size: Default::default(),
-                        compression: Some(swapvec::Compression::Lz4),
-                    }))
+                    Some(NameStore::new())
                 } else {
                     None
                 };
@@ -973,7 +959,7 @@ pub fn quantify_bulk_alignments_raw_reads(
     let (mut store, name_vec, aln_time) = std::thread::scope(
         |s| -> anyhow::Result<(
             InMemoryAlignmentStore,
-            Option<SwapVec<String>>,
+            Option<NameStore>,
             std::time::Duration,
         )> {
             const ALN_GROUP_CHUNK_LIMIT: usize = 100;
@@ -1075,11 +1061,7 @@ pub fn quantify_bulk_alignments_raw_reads(
             let filter_opts_store = filter_opts.clone();
             let aln_group_consumer = s.spawn(move || {
                 let mut name_vec = if filter_opts_store.write_assignment_probs {
-                    Some(SwapVec::<String>::with_config(SwapVecConfig {
-                        swap_after: Default::default(),
-                        batch_size: Default::default(),
-                        compression: Some(swapvec::Compression::Lz4),
-                    }))
+                    Some(NameStore::new())
                 } else {
                     None
                 };
