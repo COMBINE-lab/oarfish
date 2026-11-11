@@ -30,6 +30,9 @@ raw read mode:
       --novel <NOVEL>          additional novel/assembled transcripts (indexed together, tracked separately)
       --index <INDEX>          an existing index (oarfish-created preferred, or a compatible prebuilt index)
       --mapper <MAPPER>        read-mode mapping backend: rammap (default) or spearfish
+      --map-strand <MAP_STRAND>
+                               with --mapper spearfish, the read orientation to map (fw, rc or both);
+                               fw for reads already oriented to the transcript strand
       --seq-tech <SEQ_TECH>    [possible values: ont-cdna, ont-drna, pac-bio, pac-bio-hifi]
       --best-n <BEST_N>        max secondary mappings to consider [default: 100]
       --dp-cache-cap-mb <DP_CACHE_CAP_MB>

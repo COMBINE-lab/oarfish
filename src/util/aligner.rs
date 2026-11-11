@@ -309,6 +309,15 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
     if let Some(e) = &mut opts.params.ends {
         e.within = 1.0 - args.score_threshold.try_as_f32().unwrap_or(0.95);
     }
+    // Reads known to be oriented need one orientation mapped (as the drna preset maps).
+    if let Some(strand) = args.map_strand {
+        use bio_types::strand::Strand;
+        opts.params.strands = match strand {
+            Strand::Forward => spearfish::Strands::Forward,
+            Strand::Reverse => spearfish::Strands::Reverse,
+            Strand::Unknown => spearfish::Strands::Both,
+        };
+    }
     let mapper = spearfish::Mapper::new(std::sync::Arc::new(index), &opts)?;
     Ok((
         header,
