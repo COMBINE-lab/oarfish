@@ -99,12 +99,12 @@ spearfish = { version = "0.1", default-features = false }
 # RAD input (`bulk_long_read` records, e.g. from `spearfish map --rad`).
 long-read-rad = "0.1"
 
-needletail = "0.6.3"
+needletail = "0.7.4"
 indicatif = "0.18.3"
 rustc-hash = "2.1.1"
 # HashTable: class maps that hold class ids into flat key arrays, not owned keys.
 hashbrown = { version = "0.17", default-features = false, features = ["inline-more"] }
-niffler = "3.0.0"
+niffler = "3.0.2"
 humantime = "2.3.0"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
