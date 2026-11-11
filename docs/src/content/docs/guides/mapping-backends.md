@@ -56,7 +56,7 @@ Use it only for reads that are oriented. It is not a filter: a read of the other
 
 ### Per-thread arenas
 
-Mapping a read with spearfish makes a few hundred small allocations and frees nearly all of them before the next read. `--bump-alloc` serves these (blocks of up to 1 KB) from memory that belongs to each mapping thread, so that a thread stays in the same few pages, instead of from the general allocator. Mapping takes a little less CPU time, for up to 4 MB of memory a thread, and what is mapped does not change. It is off by default, is for the spearfish backend only, and is there on 64-bit Linux and macOS; elsewhere oarfish says so and maps without it.
+Mapping a read with spearfish makes a few hundred small allocations and frees nearly all of them before the next read. `--bump-alloc` serves these (blocks of up to 8 KB) from memory that belongs to each mapping thread, so that a thread stays in the same few pages, instead of from the general allocator. Mapping takes a little less CPU time, for a few MB of memory a thread, and what is mapped does not change. The arenas are the [`nudgy`](https://crates.io/crates/nudgy) crate, the allocator behind `spearfish map --bump-alloc`. It is off by default, is for the spearfish backend only, and is there on 64-bit Linux and macOS; elsewhere oarfish says so and maps without it.
 
 ### Keeping the mappings
 
