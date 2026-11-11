@@ -28,7 +28,7 @@ categories = ["command-line-utilities", "science"]
 # See more keys and their definitions 
 # at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-seqcol_rs = { git = "https://github.com/COMBINE-lab/seqcol_rs", branch = "dev", version = "0.4.1" }
+seqcol_rs = "0.4.2"
 anyhow = "1.0.100"
 bstr = "1.12.1"
 bio-types = { version = "1.0.4", features = ["serde"] }
@@ -49,8 +49,8 @@ serde = { version = "1", features = ["derive"] }
 itertools = "0.15"
 serde_json = "1.0.149"
 # Streaming seqcol digest of a BAM header (`util::digest_utils`); the versions seqcol_rs uses.
-sha2 = "0.10.9"
-base64 = "0.22.1"
+sha2 = "0.11"
+base64 = "0.23"
 hex = "0.4.3"
 path-tools = "0.1.0"
 atomic_float = "1.1.0"
@@ -61,7 +61,7 @@ rand = "0.10.0" #0.8.5"
 arrow-array = "60.1"
 arrow-schema = "60.1"
 parquet = { version = "60.1", default-features = false, features = ["arrow", "zstd"] }
-kders = { git = "https://github.com/COMBINE-lab/kde-rs.git", branch = "dev", version = "0.1.1" }
+kders = "0.1.1"
 noodles-bgzf = { version = "0.52", features = ["libdeflate"] }
 # raw-deflate inflate + CRC32 of BGZF blocks in the BAM record pipeline (util/bgzf_records.rs);
 # libdeflate's C source is vendored and compiled with the cc crate (no cmake/pkg-config).
@@ -102,12 +102,12 @@ spearfish = { version = "0.1", default-features = false }
 # RAD input (`bulk_long_read` records, e.g. from `spearfish map --rad`).
 long-read-rad = "0.1"
 
-needletail = "0.6.3"
+needletail = "0.7.4"
 indicatif = "0.18.3"
 rustc-hash = "2.1.1"
 # HashTable: class maps that hold class ids into flat key arrays, not owned keys.
 hashbrown = { version = "0.17", default-features = false, features = ["inline-more"] }
-niffler = "3.0.0"
+niffler = "3.0.2"
 humantime = "2.3.0"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 
