@@ -23,6 +23,17 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   process. An `.sfi` given to the rammap backend is now rejected with a hint to pass
   `--mapper spearfish`.
 
+### Changed
+
+- **Read mode uses upstream `rammap-core` 1.2.0** instead of our temporary fork
+  `rammap-core-temp`, now that the per-thread DP cache cap (jwanglab/rammap#9) is released
+  upstream. Upstream redefines `is_supplementary` as the SAM FLAG 0x800 decision (every
+  non-secondary mapping after a read's first); in the fork it marked z-drop chain splits only.
+  Read mode's supplementary filter therefore now matches alignment mode, which filters on
+  0x800. On 2M simulated ONT cDNA reads this drops 5 more mappings in transcriptome read mode,
+  and genome read mode is unchanged. Estimates are otherwise identical, and rammap indices
+  saved by 0.11 load unchanged.
+
 ### Performance
 
 - **The EMs run on a connected-component layout** (after salmon's component
