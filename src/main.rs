@@ -6,9 +6,17 @@ use util::oarfish_types::NamedDigestVec;
 // Genome-projection mapping churns many small allocations across worker threads;
 // glibc malloc fragments/retains that into large peak RSS. mimalloc keeps the
 // peak down and returns memory to the OS. (Disable with `--no-default-features`.)
+//
+// `spearfish::alloc::Bump` wraps it (or the system allocator) and forwards every call until
+// `--bump-alloc` turns spearfish's per-thread arenas for small blocks on.
 #[cfg(feature = "mimalloc")]
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: spearfish::alloc::Bump<mimalloc::MiMalloc> =
+    spearfish::alloc::Bump::new(mimalloc::MiMalloc);
+#[cfg(not(feature = "mimalloc"))]
+#[global_allocator]
+static GLOBAL: spearfish::alloc::Bump<std::alloc::System> =
+    spearfish::alloc::Bump::new(std::alloc::System);
 
 use num_format::{Locale, ToFormattedString};
 use std::{fs::File, io};
@@ -391,6 +399,12 @@ fn main() -> anyhow::Result<()> {
             "--map-strand needs --mapper spearfish (with rammap, --strand-filter keeps the \
              alignments of one orientation)"
         );
+    } else if args.bump_alloc {
+        anyhow::bail!("--bump-alloc needs --mapper spearfish");
+    }
+    // Before the mapping threads start, so that each takes its arena with its first read.
+    if args.bump_alloc && !spearfish::alloc::enable() {
+        tracing::warn!("--bump-alloc: the arenas are not available here; mapping without them");
     }
 
     // if we are just indexing, don't bother with anything else

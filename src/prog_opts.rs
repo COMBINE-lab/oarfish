@@ -522,6 +522,13 @@ pub struct Args {
     #[arg(long, value_parser = parse_strand, requires = "reads", help_heading = "raw read mode")]
     pub map_strand: Option<bio_types::strand::Strand>,
 
+    /// with `--mapper spearfish`, serve the mapper's small allocations (up to 1 KB) from
+    /// memory that belongs to each thread instead of from the general allocator. Mapping a
+    /// read makes a few hundred of them and frees nearly all before the next read. A little
+    /// less mapping time, for up to 4 MB of memory a thread; what is mapped does not change.
+    #[arg(long, requires = "reads", help_heading = "raw read mode")]
+    pub bump_alloc: bool,
+
     /// maximum number of secondary mappings to consider when mapping reads to the transcriptome
     #[arg(
         long,

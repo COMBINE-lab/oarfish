@@ -54,6 +54,10 @@ $ oarfish --reads flnc.fastq.gz --index transcripts.sfi --mapper spearfish --seq
 
 Use it only for reads that are oriented. It is not a filter: a read of the other strand is not simply left unmapped, since part of it may match some transcript in the mapped orientation (a gene on the opposite strand, a repeat), and that weak hit is then all the read has. To keep the alignments of one orientation of reads that were mapped in both, use `-d`/`--strand-filter`. `--map-strand` is for the spearfish backend only.
 
+### Per-thread arenas
+
+Mapping a read with spearfish makes a few hundred small allocations and frees nearly all of them before the next read. `--bump-alloc` serves these (blocks of up to 1 KB) from memory that belongs to each mapping thread, so that a thread stays in the same few pages, instead of from the general allocator. Mapping takes a little less CPU time, for up to 4 MB of memory a thread, and what is mapped does not change. It is off by default, is for the spearfish backend only, and is there on 64-bit Linux and macOS; elsewhere oarfish says so and maps without it.
+
 ### Keeping the mappings
 
 To keep the mappings, map with spearfish itself and quantify the RAD file:

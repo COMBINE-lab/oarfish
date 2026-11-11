@@ -30,6 +30,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in the mapped orientation, so it is for oriented reads only; `--strand-filter` remains the
   way to keep one orientation's alignments of reads mapped in both. Given without
   `--mapper spearfish`, it is an error.
+- **`--bump-alloc` turns on spearfish's per-thread arenas** (with `--mapper spearfish`). The
+  mapper's small allocations (up to 1 KB) then come from memory that belongs to each mapping
+  thread instead of from the general allocator: a little less mapping time, for up to 4 MB of
+  memory a thread, with the same mappings. Off by default. oarfish's global allocator is now
+  `spearfish::alloc::Bump` around mimalloc (or around the system allocator without the
+  `mimalloc` feature); without the option it forwards every call, so nothing else changes.
 
 ### Changed
 
