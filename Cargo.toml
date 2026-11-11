@@ -33,8 +33,8 @@ anyhow = "1.0.100"
 bstr = "1.12.1"
 bio-types = { version = "1.0.4", features = ["serde"] }
 clap = { version = "4.5.57", features = ["derive"] }
-noodles-bam = "0.87.0"
-noodles-sam = "0.83.0"
+noodles-bam = "0.98"
+noodles-sam = "0.93"
 num-format = "0.4.4"
 lz4 = "1.28.1"
 either = "1.15.0"
@@ -62,7 +62,7 @@ arrow-array = "60.1"
 arrow-schema = "60.1"
 parquet = { version = "60.1", default-features = false, features = ["arrow", "zstd"] }
 kders = { git = "https://github.com/COMBINE-lab/kde-rs.git", branch = "dev", version = "0.1.1" }
-noodles-bgzf = { version = "0.46.0", features = ["libdeflate"] }
+noodles-bgzf = { version = "0.52", features = ["libdeflate"] }
 # raw-deflate inflate + CRC32 of BGZF blocks in the BAM record pipeline (util/bgzf_records.rs);
 # libdeflate's C source is vendored and compiled with the cc crate (no cmake/pkg-config).
 libdeflater = "1.25.2"
@@ -78,7 +78,8 @@ sprs = "0.11.4"
 # 0.1.6 exports SeqMap + FastaDb::from_seq_map for the zero-copy rescue path
 # and makes from_seqs hasher-agnostic (0.1.5's deterministic-hasher signature
 # broke default-RandomState callers — COMBINE-lab/oarfish#68; 0.1.5 yanked).
-bramble-rs = "0.1.6"
+# 0.2.0 moves to noodles 0.119 (the noodles-sam/-bam/-bgzf versions used here).
+bramble-rs = "0.2.0"
 
 # rammap: pure-Rust long-read mapper; oarfish's sole read-mapping backend.
 # Published as the `rammap-core` library crate; renamed to `rammap` here so the
