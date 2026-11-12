@@ -17,8 +17,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spearfish `.sfi` with its build manifest next to it as `<path>.sfi.json`. Previously a saved
   index had to come from the separate `spearfish index`. Quantifying from a saved index
   (`--index transcripts.sfi`) skips reading the FASTA and building, and on a human transcriptome
-  lowers peak memory by about 2 GB (TKSM SQ2, 14M reads, 16 threads: 80 s to 77 s and 5.4 GB to
-  3.5 GB) with the same estimates. The index carries the reference's seqcol digests in oarfish's
+  lowers peak memory by about 2.6 GB (TKSM SQ2, 14M reads, 16 threads: 79 s to 72 s and 6.3 GB
+  to 3.7 GB) with the same estimates. The index carries the reference's seqcol digests in oarfish's
   footer, as rammap indices do, so the run records the same reference signature as building in
   process. An `.sfi` given to the rammap backend is now rejected with a hint to pass
   `--mapper spearfish`.
