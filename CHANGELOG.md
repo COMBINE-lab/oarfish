@@ -11,6 +11,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+## 0.12.0 - 2026-11-12
+
 ### Added
 
 - **`--mapper spearfish` writes its index with `--index-out`** (also with `--only-index`), as a
