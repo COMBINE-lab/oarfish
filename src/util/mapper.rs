@@ -8,9 +8,9 @@
 //! its internals:
 //!
 //! * [`Mapper`] — the built aligner type. rammap's `Aligner` is `Send + Sync`,
-//!   so a single shared instance is held behind an [`Arc`] across worker threads.
+//!   so a single shared instance is held behind an [`Arc`](std::sync::Arc) across worker threads.
 //! * [`OMapping`] — the per-alignment record type yielded for a read. It
-//!   implements [`AlnRecordLike`](crate::util::oarfish_types::AlnRecordLike)
+//!   implements [`AlnRecordLike`]
 //!   (transcriptome filter) and is convertible to a bramble `GenomicAlignment`
 //!   via [`crate::util::projection::mapping_to_genomic_alignment`] (genome path).
 //! * [`map_read`] — map one read, returning `anyhow::Result<Vec<OMapping>>`.
@@ -180,6 +180,10 @@ pub(crate) struct SpearfishMapping {
 }
 
 /// One transcriptome alignment from either backend.
+// A run uses one backend, so every value is the same variant, and they only live while their
+// read is filtered. Boxing the rammap variant would add an allocation per alignment on the
+// default backend to save memory only on spearfish's short-lived hits.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub(crate) enum TxMapping {
     Rammap(OMapping),
