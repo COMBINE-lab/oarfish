@@ -1146,8 +1146,13 @@ pub fn quantify_bulk_alignments_raw_reads(
             );
 
             let aln_time = aln_start.elapsed()?;
+            let backend = match args.mapper {
+                crate::prog_opts::MapperBackend::Rammap => "rammap",
+                crate::prog_opts::MapperBackend::Spearfish => "spearfish",
+            };
             info!(
-                "Alignment of raw reads using rammap took: {}",
+                "Alignment of raw reads using {} took: {}",
+                backend,
                 humantime::format_duration(aln_time).to_string()
             );
 

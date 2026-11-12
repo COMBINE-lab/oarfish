@@ -186,10 +186,7 @@ pub fn build_transcriptome_header_and_info(
         names.push(name);
     }
 
-    builder = builder.add_program(
-        "bramble",
-        HeaderMap::<header_val::map::Program>::default(),
-    );
+    builder = builder.add_program("bramble", HeaderMap::<header_val::map::Program>::default());
 
     if n_zero_len > 0 {
         warn!(
@@ -263,7 +260,10 @@ pub fn rescue_fasta_path(args: &Args) -> Option<std::path::PathBuf> {
 pub fn load_rescue_fasta(args: &Args) -> anyhow::Result<Option<FastaDb>> {
     match rescue_fasta_path(args) {
         Some(p) => {
-            info!("loading genome FASTA for soft-clip rescue from {}", p.display());
+            info!(
+                "loading genome FASTA for soft-clip rescue from {}",
+                p.display()
+            );
             Ok(Some(FastaDb::load(&p).with_context(|| {
                 format!("failed to load genome FASTA {}", p.display())
             })?))

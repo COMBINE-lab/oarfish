@@ -242,7 +242,7 @@ impl From<u8> for CigarOp {
     }
 }
 
-/// from noodles: https://docs.rs/noodles-sam/latest/src/noodles_sam/alignment/record/cigar/op/kind.rs.html
+/// from noodles: <https://docs.rs/noodles-sam/latest/src/noodles_sam/alignment/record/cigar/op/kind.rs.html>
 impl CigarOp {
     #[allow(dead_code)]
     pub fn consumes_read(&self) -> bool {
@@ -666,8 +666,8 @@ pub struct TranscriptInfo {
     pub coverage_bins: Vec<f64>,
     pub coverage_prob: Vec<f64>,
     pub lenf: f64,
-    /// The fully covered bins of the alignments added by [`add_unit_interval`]
-    /// (Self::add_unit_interval) and not yet folded into `coverage_bins`, as a difference
+    /// The fully covered bins of the alignments added by
+    /// [`add_unit_interval`](Self::add_unit_interval) and not yet folded into `coverage_bins`, as a difference
     /// array of counts (`nbins + 1` entries, wrapping; empty while there are none):
     /// [`settle_coverage`](Self::settle_coverage) folds them in.
     full_bin_diff: Vec<u32>,
@@ -1424,8 +1424,12 @@ impl fmt::Display for DiscardTable {
             self.discard_supp
         )
         .expect("couldn't format discard table.");
-        writeln!(f, "discarded because read had no mapping {}", self.no_mapping)
-            .expect("couldn't format discard table.");
+        writeln!(
+            f,
+            "discarded because read had no mapping {}",
+            self.no_mapping
+        )
+        .expect("couldn't format discard table.");
         writeln!(
             f,
             "discarded because read had no valid alignment {}",

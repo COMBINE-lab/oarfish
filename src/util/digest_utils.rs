@@ -31,10 +31,7 @@ pub fn get_digest_from_fasta(
 /// ignore trailing bytes (the `.mmi` loader has no EOF check; rammap's
 /// `bincode::deserialize_from` stops at the struct boundary). The footer is read
 /// back by [`read_digest_footer`], which seeks from the end of the file.
-pub(crate) fn append_digest_footer(
-    idx_file: &str,
-    digest: &NamedDigestVec,
-) -> anyhow::Result<()> {
+pub(crate) fn append_digest_footer(idx_file: &str, digest: &NamedDigestVec) -> anyhow::Result<()> {
     if std::fs::exists(idx_file)? {
         let mut writer = std::fs::OpenOptions::new()
             .read(true)
@@ -347,7 +344,7 @@ pub(crate) fn digest_from_rammap_index(
 ) -> anyhow::Result<seqcol_rs::DigestResult> {
     use anyhow::ensure;
     // nt4 encoding: 0=A, 1=C, 2=G, 3=T, 4=N (rammap `Index::NT4_TO_ASCII`).
-    const NT4_TO_ASCII: [u8; 5] = [b'A', b'C', b'G', b'T', b'N'];
+    const NT4_TO_ASCII: [u8; 5] = *b"ACGTN";
     let idx = aligner.index();
     ensure!(
         idx.has_sequences(),
@@ -423,7 +420,8 @@ mod tests {
 
         // (a) Reload through rammap's own loader: trailing footer is ignored and
         // all sequences are present.
-        let reloaded = rammap::api::Aligner::from_index(idx_str, rammap::api::Preset::MapOnt).unwrap();
+        let reloaded =
+            rammap::api::Aligner::from_index(idx_str, rammap::api::Preset::MapOnt).unwrap();
         assert_eq!(reloaded.index().seqs.len(), seqs.len());
         assert!(reloaded.index().has_sequences());
 
@@ -431,7 +429,10 @@ mod tests {
         let read_back = read_digest_footer(idx_str).unwrap();
         let read_json = serde_json::to_string(&read_back.to_json()).unwrap();
         let orig_json = serde_json::to_string(&ndv.to_json()).unwrap();
-        assert_eq!(read_json, orig_json, "footer digest changed across round-trip");
+        assert_eq!(
+            read_json, orig_json,
+            "footer digest changed across round-trip"
+        );
 
         // (c) Index-derived digest equals the FASTA-derived digest.
         let idx_digest = digest_from_rammap_index(&reloaded).unwrap();

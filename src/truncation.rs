@@ -273,7 +273,7 @@ impl GapLaw {
         (dens, cdf)
     }
 
-    /// [`GapLaw::tables`] into `dens` and `cdf` (of one length, `max_len + 1`): the density in
+    /// `tables` into `dens` and `cdf` (of one length, `max_len + 1`): the density in
     /// parallel, then the running sum in one serial pass.
     fn fill_tables(&self, dens: &mut [f64], cdf: &mut [f64]) {
         fill_par(dens, |d| {
@@ -523,7 +523,7 @@ impl LenLaw {
         (dens, surv)
     }
 
-    /// [`LenLaw::tables`] into `dens` and `surv` (of one length, `max_len + 1`), in parallel.
+    /// `tables` into `dens` and `surv` (of one length, `max_len + 1`), in parallel.
     fn fill_tables(&self, dens: &mut [f64], surv: &mut [f64]) {
         let nb = self.h.len();
         let mut tail = vec![0.0; nb + 1];
@@ -891,7 +891,7 @@ impl Stats {
         self
     }
 
-    /// The histogram vectors, in a fixed order (the order [`Stats::from_vecs`] takes).
+    /// The histogram vectors, in a fixed order (the order [`Stats::merge_all`] rebuilds them in).
     fn vecs(&self) -> [&Vec<f64>; 12] {
         [
             &self.l3.stop,

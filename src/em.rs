@@ -140,7 +140,7 @@ fn m_step<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])>>(
 /// `do_log`: `true` if logging information is written about this EM run and false otherwise
 ///
 /// returns:
-/// A [Vec<f64>] represented the expected read assignments to each transcript.
+/// A [`Vec<f64>`] represented the expected read assignments to each transcript.
 pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a, F: Fn() -> I>(
     em_info: &'a EMInfo,
     make_iter: F,

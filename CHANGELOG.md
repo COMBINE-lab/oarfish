@@ -161,6 +161,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   path keeps all reads and the paths agree.
 - **Bootstraps no longer panic on input with no aligned reads**; the replicates are all zero, as
   the point estimate is.
+- `--convergence-thresh` has its own help text (it repeated `--max-em-iter`'s), and read mode's
+  mapping-time log line names the backend in use (it said rammap with `--mapper spearfish` too).
 
 ## 0.11.0 - 2026-10-24
 

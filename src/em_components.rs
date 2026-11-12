@@ -879,7 +879,7 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
         self.loglik_pair(n, base, theta, theta).0
     }
 
-    /// [`Comp::loglik`] at two abundance vectors `a` and `b` in one pass over the classes:
+    /// `loglik` at two abundance vectors `a` and `b` in one pass over the classes:
     /// each of the two is summed in the order a separate call would sum it, so both results
     /// are those of separate calls.
     fn loglik_pair(&self, n: Counts, base: &[f64], a: &[f64], b: &[f64]) -> (f64, f64) {

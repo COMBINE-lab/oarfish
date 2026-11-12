@@ -34,10 +34,10 @@ mod em_read;
 mod em_tests;
 mod eq_classes;
 mod presence;
-mod truncation;
 mod prog_opts;
 mod rad_input;
 mod single_cell;
+mod truncation;
 mod util;
 
 use crate::prog_opts::{Args, FilterGroup};
@@ -286,7 +286,9 @@ fn run_genome_reads(args: &mut Args, filter_opts: AlignmentFilters) -> anyhow::R
         let mut bed = args.output.clone().expect("output prefix required");
         let fname = format!(
             "{}.annot_junctions.bed",
-            bed.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()
+            bed.file_name()
+                .map(|f| f.to_string_lossy().into_owned())
+                .unwrap_or_default()
         );
         bed.set_file_name(fname);
         let n = projection::write_annotation_junction_bed(&transcripts, &bed)?;
