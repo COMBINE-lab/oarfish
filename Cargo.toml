@@ -28,42 +28,41 @@ categories = ["command-line-utilities", "science"]
 # See more keys and their definitions 
 # at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-seqcol_rs = { git = "https://github.com/COMBINE-lab/seqcol_rs", branch = "dev", version = "0.4.1" }
+seqcol_rs = "0.4.2"
 anyhow = "1.0.100"
 bstr = "1.12.1"
 bio-types = { version = "1.0.4", features = ["serde"] }
 clap = { version = "4.5.57", features = ["derive"] }
-noodles-bam = "0.87.0"
-noodles-sam = "0.83.0"
+noodles-bam = "0.98"
+noodles-sam = "0.93"
 num-format = "0.4.4"
 lz4 = "1.28.1"
 either = "1.15.0"
-tabled = "0.20.0"
+tabled = "0.22"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 typed-builder = "0.23.2"
 rayon = "1.11"
-statrs = "0.18"
+statrs = "0.19"
 csv = "1.4"
 serde = { version = "1", features = ["derive"] }
-itertools = "0.14.0"
+itertools = "0.15"
 serde_json = "1.0.149"
 # Streaming seqcol digest of a BAM header (`util::digest_utils`); the versions seqcol_rs uses.
-sha2 = "0.10.9"
-base64 = "0.22.1"
+sha2 = "0.11"
+base64 = "0.23"
 hex = "0.4.3"
 path-tools = "0.1.0"
 atomic_float = "1.1.0"
-sendable-swapvec = "0.4.3"
+# Spill file for the read names kept for `--write-assignment-probs` (util/name_store.rs).
+tempfile = "3.27"
 rand = "0.10.0" #0.8.5"
-arrow2 = { version = "0.18.0", features = [
-  "io_parquet",
-  "io_parquet_gzip",
-  "io_parquet_zstd",
-  "io_parquet_snappy",
-] }
-kders = { git = "https://github.com/COMBINE-lab/kde-rs.git", branch = "dev", version = "0.1.1" }
-noodles-bgzf = { version = "0.46.0", features = ["libdeflate"] }
+# Parquet output (`.infreps.pq` bootstrap replicates).
+arrow-array = "60.1"
+arrow-schema = "60.1"
+parquet = { version = "60.1", default-features = false, features = ["arrow", "zstd"] }
+kders = "0.1.1"
+noodles-bgzf = { version = "0.52", features = ["libdeflate"] }
 # raw-deflate inflate + CRC32 of BGZF blocks in the BAM record pipeline (util/bgzf_records.rs);
 # libdeflate's C source is vendored and compiled with the cc crate (no cmake/pkg-config).
 libdeflater = "1.25.2"
@@ -79,7 +78,8 @@ sprs = "0.11.4"
 # 0.1.6 exports SeqMap + FastaDb::from_seq_map for the zero-copy rescue path
 # and makes from_seqs hasher-agnostic (0.1.5's deterministic-hasher signature
 # broke default-RandomState callers — COMBINE-lab/oarfish#68; 0.1.5 yanked).
-bramble-rs = "0.1.6"
+# 0.2.0 moves to noodles 0.119 (the noodles-sam/-bam/-bgzf versions used here).
+bramble-rs = "0.2.0"
 
 # rammap: pure-Rust long-read mapper; oarfish's sole read-mapping backend.
 # Published as the `rammap-core` library crate; renamed to `rammap` here so the
@@ -102,12 +102,12 @@ spearfish = { version = "0.1", default-features = false }
 # RAD input (`bulk_long_read` records, e.g. from `spearfish map --rad`).
 long-read-rad = "0.1"
 
-needletail = "0.6.3"
+needletail = "0.7.4"
 indicatif = "0.18.3"
 rustc-hash = "2.1.1"
 # HashTable: class maps that hold class ids into flat key arrays, not owned keys.
 hashbrown = { version = "0.17", default-features = false, features = ["inline-more"] }
-niffler = "3.0.0"
+niffler = "3.0.2"
 humantime = "2.3.0"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 

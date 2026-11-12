@@ -9,6 +9,7 @@ pub mod file_utils;
 pub mod kde_utils;
 pub mod logistic_probability;
 pub mod mapper;
+pub mod name_store;
 pub mod normalize_probability;
 pub mod oarfish_types;
 pub mod parquet_utils;

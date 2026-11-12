@@ -82,6 +82,22 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - libdeflate's C source is vendored by `libdeflate-sys` and built with the `cc` crate,
     so the build still needs only a C compiler.
 
+### Dependencies
+
+- **No open cargo-audit advisories.**
+  - arrow2 is replaced by `parquet` 60.1 for the `.infreps.pq` bootstrap file. The schema is
+    unchanged, and the file reads the same in pyarrow. This clears RUSTSEC-2025-0038, and,
+    through parquet2, RUSTSEC-2026-0403.
+  - sendable-swapvec is replaced by a small built-in spill store for the read names that
+    `--write-assignment-probs` keeps (RUSTSEC-2026-0041, lz4_flex).
+- **No git dependencies.** seqcol_rs and kders come from crates.io (0.4.2 and 0.1.1).
+- **Bumps:**
+  - noodles: bam 0.98, sam 0.93, bgzf 0.52;
+  - bramble-rs 0.2.0, needletail 0.7.4, niffler 3.0.2;
+  - sha2 0.11, base64 0.23, tabled 0.22, statrs 0.19, itertools 0.15.
+
+  Outputs and seqcol digests are unchanged.
+
 ### Fixed
 
 - **`--short-quant` no longer loses reads.** The EM's updates are multiplicative, so a

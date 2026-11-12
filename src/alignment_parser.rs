@@ -1,6 +1,7 @@
 use crate::prog_opts::ProjProbSource;
 use crate::util::bgzf_records::RawRecord;
 use crate::util::constants::EMPTY_READ_NAME;
+use crate::util::name_store::NameStore;
 use crate::util::oarfish_types::{
     AlnInfo, AlnRecordLike, InMemoryAlignmentStore, TranscriptInfo, add_coverage_adds,
     prefetch_read,
@@ -17,7 +18,6 @@ use noodles_sam::{Header, alignment::RecordBuf};
 use num_format::{Locale, ToFormattedString};
 use std::io;
 use std::path::Path;
-use swapvec::SwapVec;
 use tracing::{error, info};
 
 const KNOWN_MAPPERS: [&str; 4] = ["minimap2", "pbmm2", "bramble", "rammap"];
@@ -309,7 +309,7 @@ pub fn parse_alignments_for_barcode<R: io::BufRead>(
 
 pub fn parse_alignments(
     store: &mut InMemoryAlignmentStore,
-    name_vec: &mut Option<SwapVec<String>>,
+    name_vec: &mut Option<NameStore>,
     _header: &Header,
     input: BamRecordStream,
     txps: &mut [TranscriptInfo],
@@ -763,7 +763,7 @@ impl ReadBatch {
 /// read names and the count of uniquely aligned reads all come out the same.
 fn add_read_batch(
     store: &mut InMemoryAlignmentStore,
-    name_vec: &mut Option<SwapVec<String>>,
+    name_vec: &mut Option<NameStore>,
     txps: &mut AdderTxps<'_>,
     batch: &mut ReadBatch,
     group: &mut Vec<ParsedAln>,
@@ -960,7 +960,7 @@ fn project_and_add_group(
 #[allow(clippy::too_many_arguments)]
 pub fn parse_genome_alignments<R: io::BufRead>(
     store: &mut InMemoryAlignmentStore,
-    name_vec: &mut Option<SwapVec<String>>,
+    name_vec: &mut Option<NameStore>,
     genome_header: &Header,
     g2t: &G2TTree,
     proj_config: &ProjectionConfig,

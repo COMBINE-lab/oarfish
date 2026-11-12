@@ -3,15 +3,11 @@ use crate::util::oarfish_types::EMInfo;
 use crate::util::parquet_utils;
 use itertools::izip;
 
-use arrow2::{
-    array::Array,
-    chunk::Chunk,
-    datatypes::{Field, Schema},
-};
+use crate::util::name_store::NameStore;
+use arrow_array::ArrayRef;
 use either::Either;
 use lz4::EncoderBuilder;
 use path_tools::WithAdditionalExtension;
-use swapvec::SwapVec;
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -234,16 +230,15 @@ pub fn write_out_cdf(
     Ok(())
 }
 
+/// Writes the bootstrap replicates `columns` (name, values) to `<output_path>.infreps.pq`.
 pub(crate) fn write_infrep_file(
     output_path: &Path,
-    fields: Vec<Field>,
-    chunk: Chunk<Box<dyn Array>>,
+    columns: Vec<(String, ArrayRef)>,
 ) -> anyhow::Result<()> {
     let output_path = output_path
         .to_path_buf()
         .with_additional_extension(".infreps.pq");
-    let schema = Schema::from(fields);
-    parquet_utils::write_chunk_to_file(output_path.to_str().unwrap(), schema, chunk)
+    parquet_utils::write_columns(&output_path, columns)
 }
 
 /// Number of decimal places to use when printing assignment probabilities to
@@ -265,7 +260,7 @@ pub fn write_out_prob(
     output: &PathBuf,
     emi: &EMInfo,
     counts: &[f64],
-    names_vec: SwapVec<String>,
+    names_vec: NameStore,
     txps_name: &[String],
     display_thresh: f64,
 ) -> anyhow::Result<()> {
