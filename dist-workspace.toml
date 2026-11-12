@@ -19,4 +19,4 @@ install-updater = false
 install-path = "CARGO_HOME"
 
 [dist.github-custom-runners]
-aarch64-apple-darwin = "macos-14"
+aarch64-apple-darwin = "macos-15"
