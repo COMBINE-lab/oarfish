@@ -222,7 +222,10 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
             ("novel_transcripts_digest", &args.novel),
         ]
         .into_iter()
-        .filter_map(|(label, f)| f.as_ref().map(|f| (label, digest_utils::get_digest_from_fasta(f))))
+        .filter_map(|(label, f)| {
+            f.as_ref()
+                .map(|f| (label, digest_utils::get_digest_from_fasta(f)))
+        })
         .collect();
         let t_read = std::time::Instant::now();
         let mut txs = Vec::new();
@@ -234,7 +237,11 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
                 txs.push((name, gene, rec.seq().into_owned()));
             }
         }
-        info!("read {} transcripts in {:.1}s", txs.len(), t_read.elapsed().as_secs_f64());
+        info!(
+            "read {} transcripts in {:.1}s",
+            txs.len(),
+            t_read.elapsed().as_secs_f64()
+        );
         let t = std::time::Instant::now();
         let idx_opts = spearfish::IndexOptions::default();
         let (index, rep) = if let Some(out) = &args.index_out {

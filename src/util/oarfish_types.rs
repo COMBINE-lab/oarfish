@@ -1424,8 +1424,12 @@ impl fmt::Display for DiscardTable {
             self.discard_supp
         )
         .expect("couldn't format discard table.");
-        writeln!(f, "discarded because read had no mapping {}", self.no_mapping)
-            .expect("couldn't format discard table.");
+        writeln!(
+            f,
+            "discarded because read had no mapping {}",
+            self.no_mapping
+        )
+        .expect("couldn't format discard table.");
         writeln!(
             f,
             "discarded because read had no valid alignment {}",
