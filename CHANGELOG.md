@@ -22,6 +22,14 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   footer, as rammap indices do, so the run records the same reference signature as building in
   process. An `.sfi` given to the rammap backend is now rejected with a hint to pass
   `--mapper spearfish`.
+- **`--map-strand <fw|rc|both>` chooses the read orientation spearfish maps** (with
+  `--mapper spearfish`). The default is the preset's: both orientations, and the read as given
+  for `ont-drna`. For reads already oriented to the transcript strand (Iso-Seq FLNC reads, cDNA
+  reads oriented by their primers), `--map-strand fw` maps the one orientation, which saves the
+  work of the other. It is not a filter: a read of the other strand can still have a weak hit
+  in the mapped orientation, so it is for oriented reads only; `--strand-filter` remains the
+  way to keep one orientation's alignments of reads mapped in both. Given without
+  `--mapper spearfish`, it is an error.
 
 ### Changed
 

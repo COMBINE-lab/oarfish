@@ -513,6 +513,15 @@ pub struct Args {
     #[arg(long, value_enum, default_value_t = MapperBackend::Rammap, help_heading = "raw read mode")]
     pub mapper: MapperBackend,
 
+    /// with `--mapper spearfish`, which orientation of each read to map: `fw` (the read as
+    /// given), `rc` (its reverse complement) or `both`. The default is the preset's: `both`,
+    /// and `fw` for `ont-drna`. For reads already oriented to the transcript strand (e.g.
+    /// Iso-Seq FLNC reads), `fw` maps the one orientation, which takes less time. This is not
+    /// a filter (see `--strand-filter`): a read of the other strand can still have a weak
+    /// hit in the mapped orientation, so use it only for oriented reads.
+    #[arg(long, value_parser = parse_strand, requires = "reads", help_heading = "raw read mode")]
+    pub map_strand: Option<bio_types::strand::Strand>,
+
     /// maximum number of secondary mappings to consider when mapping reads to the transcriptome
     #[arg(
         long,

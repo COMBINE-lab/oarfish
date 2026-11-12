@@ -43,6 +43,17 @@ Its preset follows `--seq-tech`:
 
 oarfish sets the mapping options its models need: with `--model-truncation`, for instance, spans are extended to the read ends. Hits are weighted by their score difference from the read's best on spearfish's scale (`--score-prob-denom` defaults accordingly).
 
+### Oriented reads
+
+spearfish maps both orientations of a cDNA read, and the read as given for direct RNA. When the reads were oriented to the transcript strand before quantification (Iso-Seq FLNC reads from `isoseq refine`, or cDNA reads turned by a tool that finds their primers), `--map-strand fw` maps only the orientation they are in, which takes less mapping time and changes little else. (`rc` maps only the reverse complement, and `both` maps both, also for direct RNA.)
+
+```bash
+$ oarfish --reads flnc.fastq.gz --index transcripts.sfi --mapper spearfish --seq-tech pac-bio-hifi \
+    --map-strand fw -j 16 -o sample1
+```
+
+Use it only for reads that are oriented. It is not a filter: a read of the other strand is not simply left unmapped, since part of it may match some transcript in the mapped orientation (a gene on the opposite strand, a repeat), and that weak hit is then all the read has. To keep the alignments of one orientation of reads that were mapped in both, use `-d`/`--strand-filter`. `--map-strand` is for the spearfish backend only.
+
 ### Keeping the mappings
 
 To keep the mappings, map with spearfish itself and quantify the RAD file:

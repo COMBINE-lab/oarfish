@@ -386,6 +386,11 @@ fn main() -> anyhow::Result<()> {
         if args.score_prob_denom.is_none() && args.reads.is_some() {
             args.score_prob_denom = Some(crate::util::mapper::SPEARFISH_SCORE_DENOM);
         }
+    } else if args.map_strand.is_some() {
+        anyhow::bail!(
+            "--map-strand needs --mapper spearfish (with rammap, --strand-filter keeps the \
+             alignments of one orientation)"
+        );
     }
 
     // if we are just indexing, don't bother with anything else
