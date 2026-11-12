@@ -76,13 +76,20 @@ Options:
   -V, --version            Print version
 
 alignment mode:
-  -a, --alignments <ALIGNMENTS>  path to a transcriptome-aligned BAM to quantify
+  -a, --alignments <ALIGNMENTS>  path to a transcriptome-aligned BAM, or a RAD file from `spearfish map --rad`, to quantify
 
 raw read mode:
       --reads <READS>          input reads: FASTA/Q (optionally gzipped) or uBAM; format inferred from suffix
       --annotated <ANNOTATED>  transcriptome FASTA (e.g. GENCODE) to map against
       --novel <NOVEL>          additional novel/assembled transcripts (indexed together, tracked separately)
       --index <INDEX>          an existing index (oarfish-created preferred, or a compatible prebuilt index)
+      --mapper <MAPPER>        read-mode mapping backend: rammap (default) or spearfish
+      --map-strand <MAP_STRAND>
+                               with --mapper spearfish, the read orientation to map (fw, rc or both);
+                               fw for reads already oriented to the transcript strand
+      --bump-alloc[=<SIZE>]    with --mapper spearfish, serve the mapper's small allocations from
+                               per-thread arenas (a little less mapping time); SIZE is the
+                               largest one served (8KB without it, at most 32KB), off for none
       --seq-tech <SEQ_TECH>    [possible values: ont-cdna, ont-drna, pac-bio, pac-bio-hifi]
       --best-n <BEST_N>        max secondary mappings to consider [default: 100]
       --dp-cache-cap-mb <DP_CACHE_CAP_MB>
@@ -102,7 +109,9 @@ genome mode:
 
 filters:
       --score-prob-denom <SCORE_PROB_DENOM>
-                               denominator D in exp((score-best)/D) weighting (default 3). Transcriptome mode only
+                               denominator D in exp((score-best)/D) weighting (default 3; with
+                               --mapper spearfish 20, in tenths of a spearfish score point).
+                               Transcriptome mode only
       --filter-group <FILTER_GROUP>     [possible values: no-filters, nanocount-filters]
   -t, --three-prime-clip <THREE_PRIME_CLIP>     max 3' end distance [default: *4294967295]
   -f, --five-prime-clip <FIVE_PRIME_CLIP>       max 5' end distance [default: *4294967295]
@@ -296,6 +305,8 @@ The `--seq-tech` value selects the mapping preset:
 | `pac-bio-hifi` | `map-hifi` | `splice:hq` |
 
 **Bounding peak memory.** The mapper retains a per-thread DP alignment-scratch buffer between reads to avoid reallocation. Rare reads with large unaligned gaps can produce very large buffers, and at high thread counts the retained per-thread high-water marks can dominate peak RSS. `oarfish` caps that buffer at 128 MB by default (frees larger one-off buffers instead of pinning them), which on our genome benchmark cut peak RSS by ~20% with bit-identical output. Tune it with `--dp-cache-cap-mb <MB>` (or the `RAMMAP_DP_CACHE_CAP_MB` environment variable); pass `0` to disable the cap and restore the previous unbounded behavior.
+
+**spearfish.** With `--mapper spearfish`, transcriptome read mode maps with [spearfish](https://github.com/COMBINE-lab/spearfish) instead of rammap, also in process; its preset follows `--seq-tech`, and the genome modes are not supported. For reads already oriented to the transcript strand, `--map-strand fw` maps only the orientation they are in, and `--bump-alloc` serves the mapper's small allocations from per-thread arenas, for a little less mapping time. spearfish scores have their own scale: with this backend `--score-prob-denom` is in tenths of a spearfish score point and defaults to 20. `--alignments` also takes a RAD file written by `spearfish map --rad`. The [mapping backends guide](https://combine-lab.github.io/oarfish/guides/mapping-backends/) has the details.
 
 ## Other notes on `oarfish` parameters
 

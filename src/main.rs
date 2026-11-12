@@ -6,9 +6,15 @@ use util::oarfish_types::NamedDigestVec;
 // Genome-projection mapping churns many small allocations across worker threads;
 // glibc malloc fragments/retains that into large peak RSS. mimalloc keeps the
 // peak down and returns memory to the OS. (Disable with `--no-default-features`.)
+//
+// `nudgy::Bump` wraps it (or the system allocator) and forwards every call until
+// `--bump-alloc` turns the per-thread arenas for small blocks on.
 #[cfg(feature = "mimalloc")]
 #[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+static GLOBAL: nudgy::Bump<mimalloc::MiMalloc> = nudgy::Bump::new(mimalloc::MiMalloc);
+#[cfg(not(feature = "mimalloc"))]
+#[global_allocator]
+static GLOBAL: nudgy::Bump<std::alloc::System> = nudgy::Bump::new(std::alloc::System);
 
 use num_format::{Locale, ToFormattedString};
 use std::{fs::File, io};
@@ -382,7 +388,7 @@ fn main() -> anyhow::Result<()> {
             anyhow::bail!("--only-index needs --index-out, the path to write the index to");
         }
         // spearfish scores are scaled by SPEARFISH_SCORE_SCALE; a hit Δ below the best weighs
-        // exp(-Δ) in spearfish units.
+        // exp(-Δ / spearfish::SCORE_DENOM) in spearfish units.
         if args.score_prob_denom.is_none() && args.reads.is_some() {
             args.score_prob_denom = Some(crate::util::mapper::SPEARFISH_SCORE_DENOM);
         }
@@ -391,6 +397,19 @@ fn main() -> anyhow::Result<()> {
             "--map-strand needs --mapper spearfish (with rammap, --strand-filter keeps the \
              alignments of one orientation)"
         );
+    } else if args.bump_alloc > 0 {
+        anyhow::bail!("--bump-alloc needs --mapper spearfish");
+    }
+    // Before the mapping threads start, so that each takes its arena with its first read.
+    if args.bump_alloc > 0 {
+        if nudgy::enable_with(nudgy::Config::new().with_max_block(args.bump_alloc)) {
+            info!(
+                "--bump-alloc: per-thread arenas serve allocations of up to {} bytes",
+                nudgy::stats().max_block
+            );
+        } else {
+            tracing::warn!("--bump-alloc: the arenas are not available here; mapping without them");
+        }
     }
 
     // if we are just indexing, don't bother with anything else

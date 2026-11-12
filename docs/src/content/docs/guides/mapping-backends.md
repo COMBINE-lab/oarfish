@@ -26,7 +26,7 @@ With `--mapper spearfish`, read mode maps with [spearfish](https://github.com/CO
 
 ### The spearfish index
 
-spearfish builds its index from `--annotated`/`--novel` in a few seconds; `--index-out transcripts.sfi` also writes it to a file (with `--only-index`, without quantifying), and `--index transcripts.sfi` opens a saved one instead of building it, memory-mapped. Reusing a saved index skips reading the FASTA and building, and lowers peak memory (by about 2 GB for a human transcriptome).
+spearfish builds its index from `--annotated`/`--novel` in a few seconds; `--index-out transcripts.sfi` also writes it to a file (with `--only-index`, without quantifying), and `--index transcripts.sfi` opens a saved one instead of building it, memory-mapped. Reusing a saved index skips reading the FASTA and building, and lowers peak memory (by about 2.6 GB for a human transcriptome).
 
 oarfish records the reference's digests in the index it writes, so quantifying from it records the same reference signature as building in process. An index written by `spearfish index` (spearfish installed separately, e.g. `conda install -c bioconda spearfish` or `cargo install spearfish-cli`) also works, but has no such digests, so oarfish records a name/length digest instead.
 
@@ -41,7 +41,7 @@ Its preset follows `--seq-tech`:
 | `pac-bio-hifi` | `hifi` |
 | `pac-bio`    | `ont` (spearfish has no PacBio CLR preset; a warning says so) |
 
-oarfish sets the mapping options its models need: with `--model-truncation`, for instance, spans are extended to the read ends. Hits are weighted by their score difference from the read's best on spearfish's scale (`--score-prob-denom` defaults accordingly).
+oarfish sets the mapping options its models need: with `--model-truncation`, for instance, spans are extended to the read ends. A hit that scores `d` below the read's best counts `exp(-d / 2)` times as much: 2 is the scale spearfish suggests for its scores, and the one it records in its RAD files, so mapping in process and quantifying a RAD file weigh hits alike. (`--score-prob-denom` is in tenths of a spearfish score point with this backend, so its default is 20.) A read with only a chance match to the transcriptome, as reads from unannotated loci and contaminants have, is left unmapped by spearfish and counts as unmapped here.
 
 ### Oriented reads
 
@@ -53,6 +53,10 @@ $ oarfish --reads flnc.fastq.gz --index transcripts.sfi --mapper spearfish --seq
 ```
 
 Use it only for reads that are oriented. It is not a filter: a read of the other strand is not simply left unmapped, since part of it may match some transcript in the mapped orientation (a gene on the opposite strand, a repeat), and that weak hit is then all the read has. To keep the alignments of one orientation of reads that were mapped in both, use `-d`/`--strand-filter`. `--map-strand` is for the spearfish backend only.
+
+### Per-thread arenas
+
+Mapping a read with spearfish makes a few hundred small allocations and frees nearly all of them before the next read. `--bump-alloc` serves these (blocks of up to 8 KB) from memory that belongs to each mapping thread, so that a thread stays in the same few pages, instead of from the general allocator. Mapping takes a little less CPU time, for a few MB of memory a thread, and what is mapped does not change. The option takes another limit than 8 KB as a value joined by `=` (`--bump-alloc=1KB`, or a number of bytes, at most 32 KB); `--bump-alloc=off` or `--bump-alloc=none` is the same as leaving it out. The arenas are the [`nudgy`](https://crates.io/crates/nudgy) crate, the allocator behind `spearfish map --bump-alloc`. It is off by default, is for the spearfish backend only, and is there on 64-bit Linux and macOS; elsewhere oarfish says so and maps without it.
 
 ### Keeping the mappings
 

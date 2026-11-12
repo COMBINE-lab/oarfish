@@ -166,11 +166,11 @@ pub(crate) enum Mapper {
 /// this factor.
 pub(crate) const SPEARFISH_SCORE_SCALE: f32 = 10.0;
 
-/// Default score→probability denominator for spearfish hits (scaled scores): a hit Δ below
-/// the read's best (spearfish units) weighs exp(-Δ). Swept on simulated reads (ONT 95%, ONT 90%,
-/// HiFi) and spike-ins, as `--score-prob-denom` was for alignments (5 -> 3): exp(-Δ) was best or
-/// tied on every set; exp(-Δ / 2), the previous default, spread reads over near-tied isoforms.
-pub(crate) const SPEARFISH_SCORE_DENOM: f32 = SPEARFISH_SCORE_SCALE;
+/// Default score→probability denominator for spearfish hits (scaled scores): the scale
+/// spearfish suggests, `spearfish::SCORE_DENOM`, so that mapping in process weighs hits as a RAD
+/// file from `spearfish map` does (`rad_input`). With spearfish 0.2 that is 2: a hit Δ below
+/// the read's best (spearfish units) weighs exp(-Δ / 2).
+pub(crate) const SPEARFISH_SCORE_DENOM: f32 = spearfish::SCORE_DENOM * SPEARFISH_SCORE_SCALE;
 
 /// A spearfish hit plus the read length (for the aligned-fraction filter).
 #[derive(Debug, Clone)]

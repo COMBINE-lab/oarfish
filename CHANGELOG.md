@@ -17,8 +17,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   spearfish `.sfi` with its build manifest next to it as `<path>.sfi.json`. Previously a saved
   index had to come from the separate `spearfish index`. Quantifying from a saved index
   (`--index transcripts.sfi`) skips reading the FASTA and building, and on a human transcriptome
-  lowers peak memory by about 2 GB (TKSM SQ2, 14M reads, 16 threads: 80 s to 77 s and 5.4 GB to
-  3.5 GB) with the same estimates. The index carries the reference's seqcol digests in oarfish's
+  lowers peak memory by about 2.6 GB (TKSM SQ2, 14M reads, 16 threads: 79 s to 72 s and 6.3 GB
+  to 3.7 GB) with the same estimates. The index carries the reference's seqcol digests in oarfish's
   footer, as rammap indices do, so the run records the same reference signature as building in
   process. An `.sfi` given to the rammap backend is now rejected with a hint to pass
   `--mapper spearfish`.
@@ -30,9 +30,44 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in the mapped orientation, so it is for oriented reads only; `--strand-filter` remains the
   way to keep one orientation's alignments of reads mapped in both. Given without
   `--mapper spearfish`, it is an error.
+- **`--bump-alloc` turns on per-thread arenas for the spearfish backend** (with
+  `--mapper spearfish`). The mapper's small allocations (up to 8 KB) then come from memory
+  that belongs to each mapping thread instead of from the general allocator: a little less
+  mapping time, for a few MB of memory a thread, with the same mappings. Off by default. A
+  size in place of 8 KB is given as `--bump-alloc=1KB` (at most 32 KB), and
+  `--bump-alloc=off` or `none` is the same as leaving the option out. The arenas are the [`nudgy`](https://crates.io/crates/nudgy) crate, the allocator behind
+  `spearfish map --bump-alloc`: oarfish's global allocator is now `nudgy::Bump` around
+  mimalloc (or around the system allocator without the `mimalloc` feature), and without the
+  option it forwards every call, so nothing else changes.
 
 ### Changed
 
+- **`--mapper spearfish` embeds spearfish 0.2** (was 0.1), whose default presets map
+  differently (spearfish's changelog has the details):
+  - a read with only a chance match to the transcriptome (reads from unannotated loci,
+    contaminants) is left unmapped, where it used to be placed on whichever transcript
+    shared a seed with it, so fewer reads count as mapped;
+  - ONT cDNA and direct RNA reads whose first chain leaves them in doubt get more work
+    (re-chaining at spearfish's rescue level, a whole-transcriptome table of rescue seeds,
+    antisense transcripts of the same locus), which places more reads correctly at error
+    rates of 5% and above. ONT cDNA reads take 1.1 to 1.15 times the mapping CPU time, and
+    mapping holds about 1.5 GB more of the index in memory for a human transcriptome;
+  - HiFi reads that end in a poly(A) tail in one orientation are mapped in that orientation
+    first, and in the other only when the first leaves most of the read uncovered.
+
+  An index written with `--index-out` now holds the tables for the second item, and is a
+  little over twice the size it was (2.8 GB for a human transcriptome). An index written by
+  an earlier oarfish, or by spearfish 0.1, still works: the tables are then made at each
+  start.
+- **spearfish hits are weighted by `exp(-d / 2)`**, where `d` is how far a hit scores below
+  its read's best; it was `exp(-d)`. With `--mapper spearfish`, `--score-prob-denom` (in
+  tenths of a spearfish score point) therefore defaults to 20, where it was 10. This is the
+  scale spearfish 0.2 suggests for its scores (`spearfish::SCORE_DENOM`): oarfish now takes
+  its in-process default from there, as it already took a RAD file's from the file, so both
+  routes weigh hits alike. The previous scale suited simulated samples in which every
+  transcript is expressed; when most are not, as in real samples, it gave unexpressed
+  relatives of the expressed transcripts too many of the reads they share.
+  `--score-prob-denom 10` restores it.
 - **Read mode uses upstream `rammap-core` 1.2.0** instead of our temporary fork
   `rammap-core-temp`, now that the per-thread DP cache cap (jwanglab/rammap#9) is released
   upstream. Upstream redefines `is_supplementary` as the SAM FLAG 0x800 decision (every

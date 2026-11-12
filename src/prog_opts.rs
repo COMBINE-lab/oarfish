@@ -23,6 +23,15 @@ fn parse_strand(arg: &str) -> anyhow::Result<bio_types::strand::Strand> {
     }
 }
 
+/// `--bump-alloc[=<size>]`: the largest block, in bytes, that the per-thread arenas serve,
+/// and 0 (`off`, `none`) for no arenas.
+fn parse_bump_alloc(arg: &str) -> anyhow::Result<usize> {
+    if arg.eq_ignore_ascii_case("off") || arg.eq_ignore_ascii_case("none") {
+        return Ok(0);
+    }
+    Ok(arg.parse::<nudgy::Config>()?.max_block())
+}
+
 /// Parse a strictly-positive `f32` (used for parameters that divide, so 0 and
 /// negatives are rejected to avoid degenerate probabilities).
 fn parse_pos_f32(arg: &str) -> anyhow::Result<f32> {
@@ -464,11 +473,14 @@ pub struct Args {
     pub projected_prob_source: ProjProbSource,
 
     /// denominator `D` in the score→probability conversion `exp((score - best)/D)`
-    /// used to weight a read's alignments in the EM (default 3). Larger `D`
-    /// flattens the weighting across alignments of differing score; smaller `D`
-    /// sharpens it toward the best-scoring alignment. Transcriptome mode only —
-    /// in genome mode projected alignments are weighted by bramble similarity, so
-    /// passing this with `--genome`/`--genome-alignments` is an error.
+    /// used to weight a read's alignments in the EM (default 3). spearfish
+    /// mappings are scored in tenths of a spearfish score point, and the default
+    /// is the scale spearfish suggests for them: 20 with `--mapper spearfish`,
+    /// or the one a RAD file records. Larger `D` flattens the weighting across
+    /// alignments of differing score; smaller `D` sharpens it toward the
+    /// best-scoring alignment. Transcriptome mode only — in genome mode projected
+    /// alignments are weighted by bramble similarity, so passing this with
+    /// `--genome`/`--genome-alignments` is an error.
     #[arg(long, value_parser = parse_pos_f32, help_heading = "filters")]
     pub score_prob_denom: Option<f32>,
 
@@ -521,6 +533,25 @@ pub struct Args {
     /// hit in the mapped orientation, so use it only for oriented reads.
     #[arg(long, value_parser = parse_strand, requires = "reads", help_heading = "raw read mode")]
     pub map_strand: Option<bio_types::strand::Strand>,
+
+    /// with `--mapper spearfish`, serve the mapper's small allocations (up to 8 KB) from
+    /// memory that belongs to each thread instead of from the general allocator. Mapping a
+    /// read makes a few hundred of them and frees nearly all before the next read. A little
+    /// less mapping time, for a few MB of memory a thread; what is mapped does not change.
+    /// A size sets the largest allocation served this way in place of 8 KB
+    /// (`--bump-alloc=1KB`, at most 32KB); `off` or `none` is no arenas.
+    #[arg(
+        long,
+        value_name = "SIZE",
+        num_args = 0..=1,
+        require_equals = true,
+        default_value = "off",
+        default_missing_value = "8KB",
+        value_parser = parse_bump_alloc,
+        requires = "reads",
+        help_heading = "raw read mode"
+    )]
+    pub bump_alloc: usize,
 
     /// maximum number of secondary mappings to consider when mapping reads to the transcriptome
     #[arg(
@@ -880,5 +911,43 @@ mod tests {
             "out",
         ]);
         assert!(conflict.is_err(), "expected --genome/--index conflict");
+    }
+
+    /// `--bump-alloc` is off without the option, 8 KB without a value, and takes a size or
+    /// `off` / `none` joined by `=`; a following argument is never its value.
+    #[test]
+    fn bump_alloc_takes_an_optional_size() {
+        let parse = |extra: &[&str]| {
+            let mut v = vec!["oarfish", "--mapper", "spearfish"];
+            v.extend_from_slice(extra);
+            v.extend_from_slice(&["--reads", "r.fq", "--index", "t.sfi", "-o", "out"]);
+            v.extend_from_slice(&["--seq-tech", "ont-cdna"]);
+            Args::try_parse_from(v).map(|a| a.bump_alloc)
+        };
+        assert_eq!(parse(&[]).unwrap(), 0);
+        assert_eq!(parse(&["--bump-alloc"]).unwrap(), 8192);
+        assert_eq!(parse(&["--bump-alloc=8KB"]).unwrap(), 8192);
+        assert_eq!(parse(&["--bump-alloc=1KB"]).unwrap(), 1024);
+        assert_eq!(parse(&["--bump-alloc=500"]).unwrap(), 512);
+        assert_eq!(parse(&["--bump-alloc=32kb"]).unwrap(), 32768);
+        for off in ["--bump-alloc=off", "--bump-alloc=none", "--bump-alloc=0"] {
+            assert_eq!(parse(&[off]).unwrap(), 0, "{off}");
+        }
+        for bad in [
+            "--bump-alloc=64KB",
+            "--bump-alloc=8MB",
+            "--bump-alloc=on",
+            "--bump-alloc=",
+        ] {
+            assert!(parse(&[bad]).is_err(), "{bad}");
+        }
+        // The option needs reads to map, and its default does not.
+        let no_reads = |extra: &[&str]| {
+            let mut v = vec!["oarfish", "-a", "x.bam", "-o", "out"];
+            v.extend_from_slice(extra);
+            Args::try_parse_from(v).map(|a| a.bump_alloc)
+        };
+        assert_eq!(no_reads(&[]).unwrap(), 0);
+        assert!(no_reads(&["--bump-alloc"]).is_err());
     }
 }
