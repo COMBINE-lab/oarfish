@@ -388,7 +388,7 @@ fn main() -> anyhow::Result<()> {
             anyhow::bail!("--only-index needs --index-out, the path to write the index to");
         }
         // spearfish scores are scaled by SPEARFISH_SCORE_SCALE; a hit Δ below the best weighs
-        // exp(-Δ) in spearfish units.
+        // exp(-Δ / spearfish::SCORE_DENOM) in spearfish units.
         if args.score_prob_denom.is_none() && args.reads.is_some() {
             args.score_prob_denom = Some(crate::util::mapper::SPEARFISH_SCORE_DENOM);
         }

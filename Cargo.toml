@@ -95,11 +95,11 @@ rammap = { package = "rammap-core", version = "1.2.0", default-features = false,
 
 # spearfish: LCP-based long-read transcriptome mapper, an alternative read-mode backend
 # (`--mapper spearfish`).
-spearfish = { version = "0.1", default-features = false }
+spearfish = { version = "0.2", default-features = false }
 # The per-thread arenas that `--bump-alloc` turns on (the allocator spearfish's own CLI uses).
 nudgy = "0.2"
 # RAD input (`bulk_long_read` records, e.g. from `spearfish map --rad`).
-long-read-rad = "0.1"
+long-read-rad = "0.2"
 
 needletail = "0.7.4"
 indicatif = "0.18.3"

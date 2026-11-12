@@ -42,6 +42,32 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`--mapper spearfish` embeds spearfish 0.2** (was 0.1), whose default presets map
+  differently (spearfish's changelog has the details):
+  - a read with only a chance match to the transcriptome (reads from unannotated loci,
+    contaminants) is left unmapped, where it used to be placed on whichever transcript
+    shared a seed with it, so fewer reads count as mapped;
+  - ONT cDNA and direct RNA reads whose first chain leaves them in doubt get more work
+    (re-chaining at spearfish's rescue level, a whole-transcriptome table of rescue seeds,
+    antisense transcripts of the same locus), which places more reads correctly at error
+    rates of 5% and above. ONT cDNA reads take 1.1 to 1.15 times the mapping CPU time, and
+    mapping holds about 1.5 GB more of the index in memory for a human transcriptome;
+  - HiFi reads that end in a poly(A) tail in one orientation are mapped in that orientation
+    first, and in the other only when the first leaves most of the read uncovered.
+
+  An index written with `--index-out` now holds the tables for the second item, and is a
+  little over twice the size it was (2.8 GB for a human transcriptome). An index written by
+  an earlier oarfish, or by spearfish 0.1, still works: the tables are then made at each
+  start.
+- **spearfish hits are weighted by `exp(-d / 2)`**, where `d` is how far a hit scores below
+  its read's best; it was `exp(-d)`. With `--mapper spearfish`, `--score-prob-denom` (in
+  tenths of a spearfish score point) therefore defaults to 20, where it was 10. This is the
+  scale spearfish 0.2 suggests for its scores (`spearfish::SCORE_DENOM`): oarfish now takes
+  its in-process default from there, as it already took a RAD file's from the file, so both
+  routes weigh hits alike. The previous scale suited simulated samples in which every
+  transcript is expressed; when most are not, as in real samples, it gave unexpressed
+  relatives of the expressed transcripts too many of the reads they share.
+  `--score-prob-denom 10` restores it.
 - **Read mode uses upstream `rammap-core` 1.2.0** instead of our temporary fork
   `rammap-core-temp`, now that the per-thread DP cache cap (jwanglab/rammap#9) is released
   upstream. Upstream redefines `is_supplementary` as the SAM FLAG 0x800 decision (every

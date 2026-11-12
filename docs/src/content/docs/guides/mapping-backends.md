@@ -41,7 +41,7 @@ Its preset follows `--seq-tech`:
 | `pac-bio-hifi` | `hifi` |
 | `pac-bio`    | `ont` (spearfish has no PacBio CLR preset; a warning says so) |
 
-oarfish sets the mapping options its models need: with `--model-truncation`, for instance, spans are extended to the read ends. Hits are weighted by their score difference from the read's best on spearfish's scale (`--score-prob-denom` defaults accordingly).
+oarfish sets the mapping options its models need: with `--model-truncation`, for instance, spans are extended to the read ends. A hit that scores `d` below the read's best counts `exp(-d / 2)` times as much: 2 is the scale spearfish suggests for its scores, and the one it records in its RAD files, so mapping in process and quantifying a RAD file weigh hits alike. (`--score-prob-denom` is in tenths of a spearfish score point with this backend, so its default is 20.) A read with only a chance match to the transcriptome, as reads from unannotated loci and contaminants have, is left unmapped by spearfish and counts as unmapped here.
 
 ### Oriented reads
 
