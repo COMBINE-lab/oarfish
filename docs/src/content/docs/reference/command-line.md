@@ -84,6 +84,8 @@ output read-txps probabilities:
 EM:
       --max-em-iter <MAX_EM_ITER>            max EM iterations [default: 1000]
       --convergence-thresh <CONVERGENCE_THRESH>  EM convergence threshold [default: 0.001]
+      --per-read-em                          per-read EM even without a per-read model term
+      --presence-model <PRESENCE_MODEL>      none | spike-slab | bayes (experimental) [default: none]
   -q, --short-quant <SHORT_QUANT>            short-read quantification (if provided)
 ```
 

@@ -681,7 +681,8 @@ pub struct Args {
     #[arg(long, help_heading = "EM", default_value_t = 1000)]
     pub max_em_iter: u32,
 
-    /// maximum number of iterations for which to run the EM algorithm
+    /// the EM stops once the largest relative change in a transcript's abundance between two
+    /// rounds is below this value
     #[arg(long, help_heading = "EM", default_value_t = 1e-3)]
     pub convergence_thresh: f64,
 
