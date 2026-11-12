@@ -473,11 +473,14 @@ pub struct Args {
     pub projected_prob_source: ProjProbSource,
 
     /// denominator `D` in the score→probability conversion `exp((score - best)/D)`
-    /// used to weight a read's alignments in the EM (default 3). Larger `D`
-    /// flattens the weighting across alignments of differing score; smaller `D`
-    /// sharpens it toward the best-scoring alignment. Transcriptome mode only —
-    /// in genome mode projected alignments are weighted by bramble similarity, so
-    /// passing this with `--genome`/`--genome-alignments` is an error.
+    /// used to weight a read's alignments in the EM (default 3). spearfish
+    /// mappings are scored in tenths of a spearfish score point, and the default
+    /// is the scale spearfish suggests for them: 20 with `--mapper spearfish`,
+    /// or the one a RAD file records. Larger `D` flattens the weighting across
+    /// alignments of differing score; smaller `D` sharpens it toward the
+    /// best-scoring alignment. Transcriptome mode only — in genome mode projected
+    /// alignments are weighted by bramble similarity, so passing this with
+    /// `--genome`/`--genome-alignments` is an error.
     #[arg(long, value_parser = parse_pos_f32, help_heading = "filters")]
     pub score_prob_denom: Option<f32>,
 

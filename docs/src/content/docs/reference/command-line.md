@@ -55,7 +55,9 @@ genome mode:
 
 filters:
       --score-prob-denom <SCORE_PROB_DENOM>
-                               denominator D in exp((score-best)/D) weighting (default 3). Transcriptome mode only
+                               denominator D in exp((score-best)/D) weighting (default 3; with
+                               --mapper spearfish 20, in tenths of a spearfish score point).
+                               Transcriptome mode only
       --filter-group <FILTER_GROUP>     [possible values: no-filters, nanocount-filters]
   -t, --three-prime-clip <THREE_PRIME_CLIP>     max 3' end distance [default: *4294967295]
   -f, --five-prime-clip <FIVE_PRIME_CLIP>       max 5' end distance [default: *4294967295]
