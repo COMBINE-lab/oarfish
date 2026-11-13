@@ -11,6 +11,21 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Changed
+
+- **`--mapper spearfish` embeds spearfish 0.2.1** (was 0.2.0; spearfish's changelog has the
+  details):
+  - a read that ends where a transcript ends, followed by a base or two that align to nothing
+    (adapter, primer, basecalling junk), no longer prefers a longer isoform that those bases
+    can be aligned into as mismatches. Such a read now ties between the two isoforms, and the
+    EM decides. Estimates change slightly for genes with isoforms that are a prefix of one
+    another;
+  - mapping takes a little less CPU time, with the same mappings otherwise (the index data a
+    read's lookups need is asked for ahead of use).
+
+  spearfish's own command line now turns the per-thread arenas on by default; in oarfish they
+  remain an option (`--bump-alloc`).
+
 ## 0.12.0 - 2026-11-12
 
 ### Added
