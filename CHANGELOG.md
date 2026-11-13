@@ -22,9 +22,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     another;
   - mapping takes a little less CPU time, with the same mappings otherwise (the index data a
     read's lookups need is asked for ahead of use).
-
-  spearfish's own command line now turns the per-thread arenas on by default; in oarfish they
-  remain an option (`--bump-alloc`).
+- **The per-thread arenas are on by default with `--mapper spearfish`**, as they are in
+  spearfish's own command line from 0.2.1. They were opt-in (`--bump-alloc`) in 0.12.0. A run
+  takes a little less time, for a few MB more memory a thread; what is mapped and the
+  estimates do not change. `--bump-alloc=off` (or `none`) turns them off, and
+  `--bump-alloc=<size>` still sets the largest allocation they serve. Other inputs and
+  backends are not affected.
 
 ## 0.12.0 - 2026-11-12
 

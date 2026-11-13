@@ -8,7 +8,8 @@ use util::oarfish_types::NamedDigestVec;
 // peak down and returns memory to the OS. (Disable with `--no-default-features`.)
 //
 // `nudgy::Bump` wraps it (or the system allocator) and forwards every call until
-// `--bump-alloc` turns the per-thread arenas for small blocks on.
+// the per-thread arenas for small blocks are turned on: by default with
+// `--mapper spearfish`, and not with `--bump-alloc=off`.
 #[cfg(feature = "mimalloc")]
 #[global_allocator]
 static GLOBAL: nudgy::Bump<mimalloc::MiMalloc> = nudgy::Bump::new(mimalloc::MiMalloc);
@@ -399,17 +400,28 @@ fn main() -> anyhow::Result<()> {
             "--map-strand needs --mapper spearfish (with rammap, --strand-filter keeps the \
              alignments of one orientation)"
         );
-    } else if args.bump_alloc > 0 {
+    } else if args.bump_alloc.is_some_and(|max_block| max_block > 0) {
         anyhow::bail!("--bump-alloc needs --mapper spearfish");
     }
+    // The arenas are on by default where spearfish maps reads; `--bump-alloc=off` is no arenas.
+    let arenas_asked_for = args.bump_alloc.is_some();
+    let max_block = match args.bump_alloc {
+        Some(max_block) => max_block,
+        None if args.mapper == crate::prog_opts::MapperBackend::Spearfish
+            && args.reads.is_some() =>
+        {
+            nudgy::DEFAULT_MAX_BLOCK
+        }
+        None => 0,
+    };
     // Before the mapping threads start, so that each takes its arena with its first read.
-    if args.bump_alloc > 0 {
-        if nudgy::enable_with(nudgy::Config::new().with_max_block(args.bump_alloc)) {
+    if max_block > 0 {
+        if nudgy::enable_with(nudgy::Config::new().with_max_block(max_block)) {
             info!(
-                "--bump-alloc: per-thread arenas serve allocations of up to {} bytes",
+                "per-thread arenas serve allocations of up to {} bytes (--bump-alloc=off for none)",
                 nudgy::stats().max_block
             );
-        } else {
+        } else if arenas_asked_for {
             tracing::warn!("--bump-alloc: the arenas are not available here; mapping without them");
         }
     }
