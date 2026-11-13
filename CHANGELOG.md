@@ -55,6 +55,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `--bump-alloc=<size>` still sets the largest allocation they serve. Other inputs and
   backends are not affected.
 
+### Fixed
+
+- Typos in the help text (`--min-aligned-fraction`, `--write-assignment-probs`), in two log
+  messages and in the README.
+
 ## 0.12.0 - 2026-11-12
 
 ### Added

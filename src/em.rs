@@ -136,7 +136,7 @@ fn m_step<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])>>(
 /// The parameters are
 /// `em_info` : an [EMInfo] struct that contains the relevant parameters and data
 /// `make_iter`: a function that returns an iterator over the alignments and conditional
-/// probabilites
+/// probabilities
 /// `do_log`: `true` if logging information is written about this EM run and false otherwise
 ///
 /// returns:

@@ -590,7 +590,7 @@ pub struct Args {
     #[arg(short, long, help_heading = "filters", default_value_t = FilterArg::DefaultF32(0.95), value_parser = parse_filter_f32)]
     pub score_threshold: FilterArg,
 
-    /// fraction of a query that must be mapped within an alignemnt to consider the alignemnt
+    /// fraction of a query that must be mapped within an alignment to consider the alignment
     /// valid
     #[arg(short, long, help_heading = "filters", default_value_t = FilterArg::DefaultF32(0.5), value_parser = parse_filter_f32)]
     pub min_aligned_fraction: FilterArg,
@@ -653,7 +653,7 @@ pub struct Args {
     )]
     pub growth_rate: f64,
 
-    /// write output alignment probabilites (optionally compressed) for each mapped read.
+    /// write output alignment probabilities (optionally compressed) for each mapped read.
     /// If <WRITE_ASSIGNMENT_PROBS> is present, it must be one of `uncompressed` (default) or
     /// `compressed`, which will cause the output file to be lz4 compressed.
     #[arg(

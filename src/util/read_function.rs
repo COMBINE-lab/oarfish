@@ -68,7 +68,7 @@ pub fn read_short_quant_vec(
 
     if num_missing > 0 {
         warn!(
-            "There were {} transcripts appearing in the BAM header but missing from the short read quatifications; they have been assumed to have 0 abunance.",
+            "There were {} transcripts appearing in the BAM header but missing from the short read quantifications; they have been assumed to have 0 abunance.",
             num_missing
         );
     }
