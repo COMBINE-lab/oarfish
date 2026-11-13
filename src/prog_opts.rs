@@ -24,7 +24,8 @@ fn parse_strand(arg: &str) -> anyhow::Result<bio_types::strand::Strand> {
 }
 
 /// `--bump-alloc[=<size>]`: the largest block, in bytes, that the per-thread arenas serve,
-/// and 0 (`off`, `none`) for no arenas.
+/// and 0 (`off`, `none`) for no arenas. Without the option, `--mapper spearfish` has the
+/// arenas on with the 8 KB limit.
 fn parse_bump_alloc(arg: &str) -> anyhow::Result<usize> {
     if arg.eq_ignore_ascii_case("off") || arg.eq_ignore_ascii_case("none") {
         return Ok(0);
@@ -534,24 +535,24 @@ pub struct Args {
     #[arg(long, value_parser = parse_strand, requires = "reads", help_heading = "raw read mode")]
     pub map_strand: Option<bio_types::strand::Strand>,
 
-    /// with `--mapper spearfish`, serve the mapper's small allocations (up to 8 KB) from
+    /// with `--mapper spearfish`, the mapper's small allocations (up to 8 KB) are served from
     /// memory that belongs to each thread instead of from the general allocator. Mapping a
     /// read makes a few hundred of them and frees nearly all before the next read. A little
     /// less mapping time, for a few MB of memory a thread; what is mapped does not change.
-    /// A size sets the largest allocation served this way in place of 8 KB
-    /// (`--bump-alloc=1KB`, at most 32KB); `off` or `none` is no arenas.
+    /// This is on by default: `--bump-alloc=off` (or `none`) turns the arenas off, and a
+    /// size sets the largest allocation served this way in place of 8 KB
+    /// (`--bump-alloc=1KB`, at most 32KB).
     #[arg(
         long,
         value_name = "SIZE",
         num_args = 0..=1,
         require_equals = true,
-        default_value = "off",
         default_missing_value = "8KB",
         value_parser = parse_bump_alloc,
         requires = "reads",
         help_heading = "raw read mode"
     )]
-    pub bump_alloc: usize,
+    pub bump_alloc: Option<usize>,
 
     /// maximum number of secondary mappings to consider when mapping reads to the transcriptome
     #[arg(
@@ -914,7 +915,8 @@ mod tests {
         assert!(conflict.is_err(), "expected --genome/--index conflict");
     }
 
-    /// `--bump-alloc` is off without the option, 8 KB without a value, and takes a size or
+    /// `--bump-alloc` is unset without the option (the spearfish backend then turns the
+    /// arenas on with their default limit), 8 KB without a value, and takes a size or
     /// `off` / `none` joined by `=`; a following argument is never its value.
     #[test]
     fn bump_alloc_takes_an_optional_size() {
@@ -925,14 +927,14 @@ mod tests {
             v.extend_from_slice(&["--seq-tech", "ont-cdna"]);
             Args::try_parse_from(v).map(|a| a.bump_alloc)
         };
-        assert_eq!(parse(&[]).unwrap(), 0);
-        assert_eq!(parse(&["--bump-alloc"]).unwrap(), 8192);
-        assert_eq!(parse(&["--bump-alloc=8KB"]).unwrap(), 8192);
-        assert_eq!(parse(&["--bump-alloc=1KB"]).unwrap(), 1024);
-        assert_eq!(parse(&["--bump-alloc=500"]).unwrap(), 512);
-        assert_eq!(parse(&["--bump-alloc=32kb"]).unwrap(), 32768);
+        assert_eq!(parse(&[]).unwrap(), None);
+        assert_eq!(parse(&["--bump-alloc"]).unwrap(), Some(8192));
+        assert_eq!(parse(&["--bump-alloc=8KB"]).unwrap(), Some(8192));
+        assert_eq!(parse(&["--bump-alloc=1KB"]).unwrap(), Some(1024));
+        assert_eq!(parse(&["--bump-alloc=500"]).unwrap(), Some(512));
+        assert_eq!(parse(&["--bump-alloc=32kb"]).unwrap(), Some(32768));
         for off in ["--bump-alloc=off", "--bump-alloc=none", "--bump-alloc=0"] {
-            assert_eq!(parse(&[off]).unwrap(), 0, "{off}");
+            assert_eq!(parse(&[off]).unwrap(), Some(0), "{off}");
         }
         for bad in [
             "--bump-alloc=64KB",
@@ -948,7 +950,7 @@ mod tests {
             v.extend_from_slice(extra);
             Args::try_parse_from(v).map(|a| a.bump_alloc)
         };
-        assert_eq!(no_reads(&[]).unwrap(), 0);
+        assert_eq!(no_reads(&[]).unwrap(), None);
         assert!(no_reads(&["--bump-alloc"]).is_err());
     }
 }
