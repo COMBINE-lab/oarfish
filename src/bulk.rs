@@ -41,6 +41,7 @@ fn get_json_info(
     emi: &EMInfo,
     seqcol_digest: &NamedDigestVec,
     aln_time: std::time::Duration,
+    run_warnings: &[crate::util::run_warnings::RunWarning],
 ) -> serde_json::Value {
     let prob = if args.model_coverage {
         "logistic_coverage"
@@ -67,6 +68,7 @@ fn get_json_info(
         "bin_width" : args.bin_width,
         "filter_options" : &emi.eq_map.filter_opts,
         "discard_table" : &emi.eq_map.discard_table,
+        "warnings" : run_warnings,
         "alignments": &args.alignments,
         "output": args.output.as_ref().expect("present"),
         "verbose": &args.verbose,
@@ -96,6 +98,20 @@ pub(crate) fn perform_inference_and_write_output(
 ) -> anyhow::Result<()> {
     // print discard table information in which the user might be interested.
     info!("\ndiscard_table: \n{}\n", store.discard_table.to_table());
+
+    // Conditions the user should look at before trusting the result: to the log here, and
+    // to meta_info.json below.
+    let run_warnings = crate::util::run_warnings::check(
+        &store.discard_table,
+        &crate::util::run_warnings::RunContext {
+            strand_filter: store.filter_opts.which_strand(),
+            map_strand: args.map_strand,
+            min_aligned_fraction: store.filter_opts.min_aligned_fraction(),
+        },
+    );
+    for w in &run_warnings {
+        warn!("{}", w.message);
+    }
 
     // if we are using the KDE, create that here.
     let kde_opt: Option<kders::kde::KDEModel> = if args.use_kde {
@@ -266,7 +282,7 @@ pub(crate) fn perform_inference_and_write_output(
     // prepare the JSON object we'll write
     // to meta_info.json
     let seqcol_digest = seqcol_digest.resolve()?;
-    let json_info = get_json_info(args, &emi, &seqcol_digest, aln_time);
+    let json_info = get_json_info(args, &emi, &seqcol_digest, aln_time, &run_warnings);
 
     // write the output
     write_output(
