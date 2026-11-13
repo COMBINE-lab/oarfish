@@ -256,6 +256,51 @@ fn prob_display_decimals(display_thresh: f64) -> usize {
     }
 }
 
+/// The probability that a read comes from each transcript it aligns to, from the weight
+/// (abundance times alignment probability) of each of its alignments.
+///
+/// A read can have several alignments to one transcript; their weights are added, so that
+/// each transcript is listed once, with the probability of the transcript and not of one
+/// alignment to it. Transcripts are in the order of their first alignment. Those below
+/// `display_thresh` are left out, and the rest are renormalized to sum to 1.
+fn read_assignment_probs(
+    weights: impl Iterator<Item = (usize, f64)>,
+    display_thresh: f64,
+    txps: &mut Vec<usize>,
+    txp_probs: &mut Vec<f64>,
+) {
+    txps.clear();
+    txp_probs.clear();
+    for (target_id, w) in weights {
+        // a read has few alignments, so a scan is cheaper than a map
+        match txps.iter().position(|&t| t == target_id) {
+            Some(i) => txp_probs[i] += w,
+            None => {
+                txps.push(target_id);
+                txp_probs.push(w);
+            }
+        }
+    }
+    let denom: f64 = txp_probs.iter().sum();
+
+    let mut kept = 0;
+    let mut kept_sum = 0.0_f64;
+    for i in 0..txps.len() {
+        let nprob = (txp_probs[i] / denom).clamp(0.0, 1.0);
+        if nprob >= display_thresh {
+            txps[kept] = txps[i];
+            txp_probs[kept] = nprob;
+            kept_sum += nprob;
+            kept += 1;
+        }
+    }
+    txps.truncate(kept);
+    txp_probs.truncate(kept);
+    for p in txp_probs.iter_mut() {
+        *p /= kept_sum;
+    }
+}
+
 pub fn write_out_prob(
     output: &PathBuf,
     emi: &EMInfo,
@@ -314,41 +359,17 @@ pub fn write_out_prob(
     let prob_decimals = prob_display_decimals(display_thresh);
 
     for ((alns, probs, coverage_probs), name) in izip!(emi.eq_map.iter_input_order(), names_iter) {
-        let mut denom = 0.0_f64;
-
-        for (a, p, cp) in izip!(alns, probs, coverage_probs) {
-            let target_id = a.ref_id as usize;
-            let prob = *p as f64;
-            let cov_prob = if model_coverage { *cp } else { 1.0 };
-            denom += counts[target_id] * prob * cov_prob;
-        }
-
         let rn = name.expect("could not extract read name from file");
         let read = rn.trim_end_matches('\0');
 
         write!(writer_prob, "{}\t", read).expect("couldn't write to prob output file");
 
-        txps.clear();
-        txp_probs.clear();
-
-        let mut denom2 = 0.0_f64;
-
-        for (a, p, cp) in izip!(alns, probs, coverage_probs) {
+        let weights = izip!(alns, probs, coverage_probs).map(|(a, p, cp)| {
             let target_id = a.ref_id as usize;
-            let prob = *p as f64;
             let cov_prob = if model_coverage { *cp } else { 1.0 };
-            let nprob = ((counts[target_id] * prob * cov_prob) / denom).clamp(0.0, 1.0);
-
-            if nprob >= display_thresh {
-                txps.push(target_id);
-                txp_probs.push(nprob);
-                denom2 += nprob;
-            }
-        }
-
-        for p in txp_probs.iter_mut() {
-            *p /= denom2;
-        }
+            (target_id, counts[target_id] * (*p as f64) * cov_prob)
+        });
+        read_assignment_probs(weights, display_thresh, &mut txps, &mut txp_probs);
 
         let txp_ids = txps
             .iter()
@@ -374,7 +395,34 @@ pub fn write_out_prob(
 
 #[cfg(test)]
 mod tests {
-    use super::{add_run_info, prob_display_decimals};
+    use super::{add_run_info, prob_display_decimals, read_assignment_probs};
+
+    fn assign(weights: &[(usize, f64)], thresh: f64) -> (Vec<usize>, Vec<f64>) {
+        let (mut t, mut p) = (vec![99], vec![9.0]);
+        read_assignment_probs(weights.iter().copied(), thresh, &mut t, &mut p);
+        (t, p)
+    }
+
+    #[test]
+    fn alignments_to_one_transcript_are_summed() {
+        // two alignments to transcript 0: one entry, not two of 0.5
+        assert_eq!(assign(&[(0, 1.0), (0, 1.0)], 1e-6), (vec![0], vec![1.0]));
+        // transcripts stay in the order of their first alignment
+        let (t, p) = assign(&[(3, 1.0), (1, 2.0), (3, 1.0)], 1e-6);
+        assert_eq!(t, [3, 1]);
+        assert_eq!(p, [0.5, 0.5]);
+    }
+
+    #[test]
+    fn the_threshold_applies_to_the_transcript_total() {
+        // each alignment to transcript 5 is below 0.1, their sum is not
+        let (t, p) = assign(&[(2, 0.85), (5, 0.075), (5, 0.075)], 0.1);
+        assert_eq!(t, [2, 5]);
+        assert!((p[0] - 0.85).abs() < 1e-12 && (p[1] - 0.15).abs() < 1e-12);
+        // a transcript below the threshold is left out and the rest sum to 1
+        let (t, p) = assign(&[(2, 0.95), (5, 0.05)], 0.1);
+        assert_eq!((t, p), (vec![2], vec![1.0]));
+    }
 
     #[test]
     fn run_info_matches_salmon_fields() {

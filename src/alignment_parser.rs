@@ -199,7 +199,7 @@ pub fn sort_and_parse_barcode_records(
         x => x,
     });
 
-    // Parse the input alignemnt file, gathering the alignments aggregated
+    // Parse the input alignment file, gathering the alignments aggregated
     // by their source read. **Note**: this requires that we have a
     // name-sorted input bam file (currently, aligned against the transcriptome).
     //
@@ -259,7 +259,7 @@ pub fn parse_alignments_for_barcode<R: io::BufRead>(
         Vec::<noodles_sam::alignment::record_buf::RecordBuf>::with_capacity(2048);
     let mut _records_processed = 0_usize;
 
-    // Parse the input alignemnt file, gathering the alignments aggregated
+    // Parse the input alignment file, gathering the alignments aggregated
     // by their source read. **Note**: this requires that we have a
     // name-sorted input bam file (currently, aligned against the transcriptome).
     //
@@ -343,7 +343,7 @@ pub fn parse_alignments(
     );
     pb.set_draw_target(indicatif::ProgressDrawTarget::stderr_with_hz(4));
 
-    // Parse the input alignemnt file, gathering the alignments aggregated
+    // Parse the input alignment file, gathering the alignments aggregated
     // by their source read. **Note**: this requires that we have a
     // name-sorted input bam file (currently, aligned against the transcriptome).
     //

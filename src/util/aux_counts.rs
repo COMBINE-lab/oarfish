@@ -51,11 +51,20 @@ pub fn get_aux_counts(
     // Counts `[total, unique]` per transcript over reads `lo..hi`.
     let count = |lo: usize, hi: usize| -> Vec<[u32; 2]> {
         let mut c = vec![[0u32; 2]; m];
+        // the transcripts of one read; a read with several alignments to one transcript
+        // counts once for it, and is unique if that is its only transcript
+        let mut ids = Vec::<u32>::new();
         for r in lo..hi {
             let (start, end) = (bounds[r], bounds[r + 1]);
-            let is_unique = (end - start == 1) as u32;
-            for a in &alns[start..end] {
-                if let Some(ci) = c.get_mut(a.ref_id as usize) {
+            ids.clear();
+            ids.extend(alns[start..end].iter().map(|a| a.ref_id));
+            if ids.len() > 1 {
+                ids.sort_unstable();
+                ids.dedup();
+            }
+            let is_unique = (ids.len() == 1) as u32;
+            for &id in &ids {
+                if let Some(ci) = c.get_mut(id as usize) {
                     ci[0] += 1;
                     ci[1] += is_unique;
                 }
@@ -92,4 +101,28 @@ pub fn get_aux_counts(
         })
         .collect_into_vec(&mut cinfo);
     Ok(cinfo)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::get_aux_counts;
+    use crate::em_tests::{store_of, tinfo};
+    use noodles_sam::Header;
+
+    #[test]
+    fn reads_are_counted_once_per_transcript() {
+        let h = Header::default();
+        let mut txps = tinfo(&[1000, 1000, 1000]);
+        let reads = vec![
+            // two alignments to transcript 0 and none elsewhere: one read, and a unique one
+            vec![(0, 1.0), (0, 0.5)],
+            // transcript 1 twice and transcript 2: one ambiguous read for each
+            vec![(1, 1.0), (2, 1.0), (1, 0.5)],
+            vec![(2, 1.0)],
+        ];
+        let store = store_of(&h, &reads, &mut txps);
+        let c = get_aux_counts(&store, &txps).unwrap();
+        let got: Vec<(u32, u32)> = c.iter().map(|c| (c.unique_count, c.total_count)).collect();
+        assert_eq!(got, [(1, 1), (0, 1), (1, 2)]);
+    }
 }

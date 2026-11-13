@@ -1051,7 +1051,7 @@ pub fn quantify_bulk_alignments_raw_reads(
                                     }
                                 } else {
                                     warn!(
-                                        "Error encountered mappread_ing read : {}",
+                                        "Error encountered mapping read: {}",
                                         map_res_opt.unwrap_err()
                                     );
                                 }
