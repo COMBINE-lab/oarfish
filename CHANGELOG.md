@@ -11,7 +11,33 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Added
+
+- **Warnings about the run, in the log and in `meta_info.json`.** When a bulk run finishes,
+  oarfish checks the read counts of the discard table and warns when
+  - more than 10% of the mapped reads were dropped by the aligned-fraction filter
+    (`aligned_fraction_filter`; reads that still carry adapters or primers are the usual
+    cause),
+  - the strand filter (`-d fw|rc`) left more than 10% of the mapped reads without an
+    alignment (`strand_filter`),
+  - the other alignment filters did (`alignment_filters`),
+  - more than 30% of the reads did not map under `--map-strand fw|rc`
+    (`map_strand_unmapped`; the reads are probably not oriented), or
+  - more than half of the reads did not map (`low_mapping_rate`).
+
+  Each warning is logged, and recorded in a new `warnings` array of `meta_info.json` with its
+  code, the share of reads, the threshold and the message. The checks use counts that were
+  kept already; estimates are not affected.
+- **`discard_ori_reads` in the discard table**: the reads all of whose alignments the strand
+  filter removed (they are also counted in `no_valid_aln`, as before).
+- **A guide on recommended practices by sequencing technology** (docs site): trimming of ONT
+  cDNA reads (adapters and primers, not the poly(A) tails), when to use `--map-strand fw` and
+  `-d fw` for PacBio reads, and what each warning means.
+
 ### Changed
+
+- In the genome modes, a read with no usable projected alignment is now counted in
+  `no_valid_aln` of the discard table (it was not counted anywhere). Estimates do not change.
 
 - **`--mapper spearfish` embeds spearfish 0.2.1** (was 0.2.0; spearfish's changelog has the
   details):

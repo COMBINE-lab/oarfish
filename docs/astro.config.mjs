@@ -34,6 +34,7 @@ export default defineConfig({
 						{ label: 'Quantification modes', slug: 'guides/quantification-modes' },
 						{ label: 'Input', slug: 'guides/input' },
 						{ label: 'Mapping backends', slug: 'guides/mapping-backends' },
+						{ label: 'Sequencing technologies', slug: 'guides/sequencing-technologies' },
 						{ label: 'Coverage and truncation models', slug: 'guides/models' },
 						{ label: 'Inferential replicates', slug: 'guides/inferential-replicates' },
 						{ label: 'Single-cell mode', slug: 'guides/single-cell' },

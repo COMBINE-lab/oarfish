@@ -11,6 +11,37 @@ The `--output` option passed to `oarfish` corresponds to a path prefix (this pre
 - `P.ambig_info.tsv` - a tab separated file listing, for each transcript (in the same order in which they appear in `P.quant`) the number of uniquely mapped, ambiguously mapped, and total reads. The quantification estimate for each transcript, in general, should reside between the number of uniquely aligned reads and the total number of reads (i.e. these provide, respectively lower and upper bounds for the number of reads assigned to each transcript). Note that the total in this file is the total number of reads that align to this transcript with a sufficiently high alignment score --- it is _not_, in general, an estimate of the number of reads originating from this transcript as many of those reads can be multimapping and, in fact, potentially better described by other transcripts.
 - `P.prob[.lz4]` - a file encoding the assignment probability of each read to each transcript to which it had a valid alignment (optionally compressed using [`lz4`](https://github.com/lz4/lz4)). This file is optional and is generated only if `--write-assignment-probs` is passed to `oarfish`.
 
+## Run information (`meta_info.json`)
+
+Besides the options of the run, `P.meta_info.json` records what happened to the reads.
+
+### Discard table
+
+`discard_table` counts the alignments each filter removed (`discard_5p`, `discard_3p`, `discard_score`, `discard_aln_len`, `discard_ori`, `discard_supp`), and, for reads:
+
+- `no_mapping`: reads without any mapping;
+- `no_valid_aln`: mapped reads with no alignment left after the alignment filters;
+- `discard_ori_reads`: those among `no_valid_aln` all of whose alignments were removed by the strand filter (`-d`);
+- `discard_aln_frac`: reads dropped because the fraction of the read in its best alignment is below `--min-aligned-fraction`;
+- `valid_best_aln`: reads that were kept and quantified.
+
+### Run warnings
+
+`warnings` is an array, empty for a run that gave none, with one object for each warning about the run as a whole:
+
+```json
+"warnings": [
+  {
+    "code": "aligned_fraction_filter",
+    "fraction": 0.257,
+    "threshold": 0.1,
+    "message": "..."
+  }
+]
+```
+
+`code` is a stable name for the condition, `fraction` the share of reads that triggered it, `threshold` the share above which it is issued, and `message` the text that was also written to the log. The codes, and what to do about each, are listed in [Recommended practices by sequencing technology](/oarfish/guides/sequencing-technologies/#run-warnings). The single-cell mode does not record warnings.
+
 ## Read-level assignment probabilities
 
 `oarfish` has the ability to output read-level assignment probabilities. That is, for each input read, what is the probability, conditioned on the final estimate of transcript abundances, that the read was sequenced from each transcript to which it aligned. By default, this information is not recorded (as it's not required, or commonly used, for most standard analyses). To enable this output, you should pass the `--write-assignment-probs` option to `oarfish`. Optionally, you may also pass `--write-assignment-probs=compressed` to write the output to a compressed ([lz4](https://github.com/lz4/lz4)) stream --- the default output is to an uncompressed text file.

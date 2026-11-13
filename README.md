@@ -310,6 +310,15 @@ The `--seq-tech` value selects the mapping preset:
 
 **spearfish.** With `--mapper spearfish`, transcriptome read mode maps with [spearfish](https://github.com/COMBINE-lab/spearfish) instead of rammap, also in process; its preset follows `--seq-tech`, and the genome modes are not supported. For reads already oriented to the transcript strand, `--map-strand fw` maps only the orientation they are in, and the mapper's small allocations are served from per-thread arenas, for a little less mapping time (`--bump-alloc=off` turns this off). spearfish scores have their own scale: with this backend `--score-prob-denom` is in tenths of a spearfish score point and defaults to 20. `--alignments` also takes a RAD file written by `spearfish map --rad`. The [mapping backends guide](https://combine-lab.github.io/oarfish/guides/mapping-backends/) has the details.
 
+## Recommended practices by sequencing technology
+
+How the reads should be prepared differs between technologies; the [guide](https://combine-lab.github.io/oarfish/guides/sequencing-technologies/) has the details. In short:
+
+* **ONT cDNA.** Trim adapters and primers before quantification (a current `dorado` does so when basecalling; older and archived reads often still carry them), but keep the poly(A) tails. Untrimmed reads are dropped by the aligned-fraction filter (`-m`).
+* **PacBio.** For reads oriented to the transcript strand (Iso-Seq / Kinnex FLNC reads from `isoseq refine`), `--map-strand fw` with `--mapper spearfish` maps only that orientation and saves time. Do not use it (or `-d fw`) for reads that were not oriented: about half of them would be lost.
+
+When a run looks as if one of these was missed (many reads dropped by the aligned-fraction filter or the strand filter, many reads unmapped), `oarfish` says so in the log and in the `warnings` array of `meta_info.json`.
+
 ## Other notes on `oarfish` parameters
 
 The parameters above should be explained by their relevant help option, but the `-d`/`--strand-filter` is worth noting explicitly. By default, alignments to both strands of a transcript will be considered valid.  You can use this option to allow only alignments in the specified orientation; for example `-d fw` will allow only alignments in the forward orientation and `-d rc` will allow only alignments in the reverse-complement orientation and `-d both` (the default) will allow both.  The `-d` filter, if explicitly provided, overrides the orientation filter in any provided "filter group" so e.g. passing `--filter-group no-filters -d fw` will disable other filters, but will still only admit alignments in the forward orientation.

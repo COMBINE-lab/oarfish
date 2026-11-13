@@ -52,7 +52,7 @@ $ oarfish --reads flnc.fastq.gz --index transcripts.sfi --mapper spearfish --seq
     --map-strand fw -j 16 -o sample1
 ```
 
-Use it only for reads that are oriented. It is not a filter: a read of the other strand is not simply left unmapped, since part of it may match some transcript in the mapped orientation (a gene on the opposite strand, a repeat), and that weak hit is then all the read has. To keep the alignments of one orientation of reads that were mapped in both, use `-d`/`--strand-filter`. `--map-strand` is for the spearfish backend only.
+Use it only for reads that are oriented. It is not a filter: a read of the other strand is not simply left unmapped, since part of it may match some transcript in the mapped orientation (a gene on the opposite strand, a repeat), and that weak hit is then all the read has. To keep the alignments of one orientation of reads that were mapped in both, use `-d`/`--strand-filter`. `--map-strand` is for the spearfish backend only. oarfish warns when many reads stay unmapped under it; see [Recommended practices by sequencing technology](/oarfish/guides/sequencing-technologies/).
 
 ### Per-thread arenas
 

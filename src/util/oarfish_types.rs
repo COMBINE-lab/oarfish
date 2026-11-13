@@ -1309,6 +1309,9 @@ pub struct DiscardTable {
     discard_aln_frac: u32,
     discard_aln_len: u32,
     discard_ori: u32,
+    // reads whose mapped alignments were all removed by the strand filter (a count of
+    // reads; `discard_ori` counts alignments). These reads are also in `no_valid_aln`.
+    discard_ori_reads: u32,
     discard_supp: u32,
     // reads for which the mapper returned no (mapped) alignment records at all.
     no_mapping: u32,
@@ -1327,6 +1330,7 @@ impl DiscardTable {
             discard_aln_frac: 0,
             discard_aln_len: 0,
             discard_ori: 0,
+            discard_ori_reads: 0,
             discard_supp: 0,
             no_mapping: 0,
             no_valid_aln: 0,
@@ -1341,6 +1345,7 @@ impl DiscardTable {
         self.discard_aln_frac += other.discard_aln_frac;
         self.discard_aln_len += other.discard_aln_len;
         self.discard_ori += other.discard_ori;
+        self.discard_ori_reads += other.discard_ori_reads;
         self.discard_supp += other.discard_supp;
         self.no_mapping += other.no_mapping;
         self.no_valid_aln += other.no_valid_aln;
@@ -1349,6 +1354,55 @@ impl DiscardTable {
 }
 
 impl DiscardTable {
+    /// A table with the given counts of reads (for tests of what is derived from them).
+    #[cfg(test)]
+    pub fn from_read_counts(
+        no_mapping: u32,
+        no_valid_aln: u32,
+        discard_ori_reads: u32,
+        discard_aln_frac: u32,
+        valid_best_aln: u32,
+    ) -> Self {
+        DiscardTable {
+            no_mapping,
+            no_valid_aln,
+            discard_ori_reads,
+            discard_aln_frac,
+            valid_best_aln,
+            ..Self::new()
+        }
+    }
+
+    /// The reads the filters saw: each is in exactly one of the four counts summed here.
+    pub fn reads_seen(&self) -> u64 {
+        self.no_mapping as u64 + self.reads_mapped()
+    }
+
+    /// The reads with at least one mapped alignment record.
+    pub fn reads_mapped(&self) -> u64 {
+        self.no_valid_aln as u64 + self.discard_aln_frac as u64 + self.valid_best_aln as u64
+    }
+
+    /// The reads without a mapped alignment record.
+    pub fn reads_unmapped(&self) -> u64 {
+        self.no_mapping as u64
+    }
+
+    /// The reads dropped because too little of the read is in its best alignment.
+    pub fn reads_low_aligned_fraction(&self) -> u64 {
+        self.discard_aln_frac as u64
+    }
+
+    /// The reads whose mapped alignments were all on the strand the strand filter removes.
+    pub fn reads_filtered_strand(&self) -> u64 {
+        self.discard_ori_reads as u64
+    }
+
+    /// The reads that had mapped alignments of which none was usable.
+    pub fn reads_no_valid_aln(&self) -> u64 {
+        self.no_valid_aln as u64
+    }
+
     pub fn to_table(&self) -> tabled::tables::Table {
         let d5 = format!("{}", self.discard_5p);
         let d3 = format!("{}", self.discard_3p);
@@ -1356,6 +1410,7 @@ impl DiscardTable {
         let dfrac = format!("{}", self.discard_aln_frac);
         let dlen = format!("{}", self.discard_aln_len);
         let dori = format!("{}", self.discard_ori);
+        let dorir = format!("{}", self.discard_ori_reads);
         let dsupp = format!("{}", self.discard_supp);
         let dnomap = format!("{}", self.no_mapping);
         let dnoval = format!("{}", self.no_valid_aln);
@@ -1372,6 +1427,7 @@ impl DiscardTable {
             ["supplementary alignment", &dsupp],
             ["read had no mapping", &dnomap],
             ["read had no valid alignment", &dnoval],
+            ["  of these, all alignments on the filtered strand", &dorir],
             ["reads with valid best alignment", &vread],
         ];
         let mut binding = Builder::from_iter(data).build();
@@ -1435,10 +1491,26 @@ impl fmt::Display for DiscardTable {
             "discarded because read had no valid alignment {}",
             self.no_valid_aln
         )
+        .expect("couldn't format discard table.");
+        writeln!(
+            f,
+            "discarded because all of the read's alignments were on the filtered strand {}",
+            self.discard_ori_reads
+        )
     }
 }
 
 impl AlignmentFilters {
+    /// The strand whose alignments are kept (`Unknown`: both).
+    pub fn which_strand(&self) -> bio_types::strand::Strand {
+        self.which_strand
+    }
+
+    /// The least fraction of a read that its best alignment must cover.
+    pub fn min_aligned_fraction(&self) -> f32 {
+        self.min_aligned_fraction
+    }
+
     /// Applies the filters defined by this AlignmentFilters struct
     /// to the alignments provided in `ag`, a vector of alignments representing
     /// a group of contiguous alignments for the same target.
@@ -1484,6 +1556,8 @@ impl AlignmentFilters {
         // (before filtering). used to distinguish "the mapper returned nothing"
         // from "the mapper returned candidates but none survived filtering".
         let n_mapped_in = ag.iter().filter(|x| !x.is_unmapped()).count();
+        // how many of them the strand filter removes.
+        let mut n_ori = 0_usize;
 
         // because of the SAM format, we can't rely on the sequence
         // itself to be present in each alignment record (only the primary)
@@ -1537,11 +1611,13 @@ impl AlignmentFilters {
                     // is fw and we want rc
                     (false, bio_types::strand::Strand::Reverse) => {
                         discard_table.discard_ori += 1;
+                        n_ori += 1;
                         return false;
                     }
                     // is rc and we want fw
                     (true, bio_types::strand::Strand::Forward) => {
                         discard_table.discard_ori += 1;
+                        n_ori += 1;
                         return false;
                     }
                 }
@@ -1606,6 +1682,9 @@ impl AlignmentFilters {
                 discard_table.no_mapping += 1;
             } else {
                 discard_table.no_valid_aln += 1;
+                if n_ori == n_mapped_in {
+                    discard_table.discard_ori_reads += 1;
+                }
             }
             return (vec![], vec![]);
         }
@@ -1716,6 +1795,8 @@ impl AlignmentFilters {
         let mut best_score = i32::MIN;
         let mut aln_frac_at_best = 0_f32;
         let mut kept: Vec<&ProjectedAlnRecord> = Vec::with_capacity(recs.len());
+        // how many of the read's records the strand filter removes.
+        let mut n_ori = 0_usize;
 
         for r in recs.iter() {
             // strand orientation
@@ -1725,6 +1806,7 @@ impl AlignmentFilters {
                 (false, Strand::Forward) => { /* keep */ }
                 (false, Strand::Reverse) | (true, Strand::Forward) => {
                     discard_table.discard_ori += 1;
+                    n_ori += 1;
                     continue;
                 }
             }
@@ -1765,6 +1847,13 @@ impl AlignmentFilters {
         }
 
         if kept.is_empty() || best_sim <= 0.0 {
+            // As in `filter`: a read with records of which none is usable.
+            if !recs.is_empty() {
+                discard_table.no_valid_aln += 1;
+                if n_ori == recs.len() {
+                    discard_table.discard_ori_reads += 1;
+                }
+            }
             return (vec![], vec![]);
         }
         if aln_frac_at_best < self.min_aligned_fraction {
