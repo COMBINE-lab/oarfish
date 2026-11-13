@@ -57,6 +57,15 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`--write-assignment-probs` reports a probability for each transcript, not for each
+  alignment.** A read with several alignments to one transcript had an entry for each of them
+  in the `.prob` file (the same transcript listed more than once, each with part of its
+  probability). Those are now added, so that every transcript is listed once with the
+  probability that the read comes from it, and `--display-thresh` applies to that sum.
+- **`ambig_info.tsv` counts reads, not alignments.** A read with several alignments to one
+  transcript was counted once for each in that transcript's total, and was counted as
+  ambiguous even when it aligned to no other transcript. It now counts once, and as unique in
+  that case. Estimates do not change.
 - Typos in the help text (`--min-aligned-fraction`, `--write-assignment-probs`), in two log
   messages and in the README.
 
