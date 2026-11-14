@@ -46,9 +46,10 @@ accuracy suffers. The labels can come from:
 without gene groups gets an `index_without_gene_groups` warning, in the log (also with `--quiet`)
 and in `meta_info.json`, and every spearfish run records where the index's genes came from under
 `spearfish_settings.index_genes` (`fasta`, `t2g`, `inferred` or `none`; see [the output
-reference](/oarfish/reference/output/#spearfish-settings-spearfish_settings)). For a RAD file,
-whose header does not record the index's genes in spearfish 0.3.0, it is `unknown` and there is no
-warning.
+reference](/oarfish/reference/output/#spearfish-settings-spearfish_settings)). RAD input reports
+the same, with the same warning, when the RAD file was written by `spearfish map --rad` 0.3.1 or
+later, which records the index's gene labels in the file. A RAD file from spearfish 0.3.0 does not
+record them: `source` is then `unknown` and there is no warning.
 
 ```bash
 $ oarfish --only-index --mapper spearfish --annotated transcripts.fa --t2g t2g.tsv \

@@ -958,10 +958,12 @@ pub struct SpearfishSettings {
 /// `meta_info.json` records them (`spearfish_settings.index_genes`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct IndexGenes {
-    /// Where the genes came from, as the index manifest's `genes_from`: `fasta` (gene IDs in
-    /// the FASTA headers) or `t2g` (a transcript-to-gene table), both provided; `inferred`
-    /// (spearfish's gene inference); `none` (every transcript its own gene); or `unknown` (an
-    /// index without a manifest, or a RAD file, whose header does not record it).
+    /// Where the genes came from, as the index manifest's `genes_from` (or, for RAD input, the
+    /// file tag `index_genes_from`): `fasta` (gene IDs in the FASTA headers) or `t2g` (a
+    /// transcript-to-gene table), both provided; `provided` (genes given through spearfish's
+    /// Python API, `given` in the RAD file); `inferred` (spearfish's gene inference); `none`
+    /// (every transcript its own gene); or `unknown` (an index without a manifest, or a RAD
+    /// file written before spearfish 0.3.1, which does not record it).
     pub source: String,
     /// Genes in the index (`null` when unknown).
     pub genes: Option<usize>,

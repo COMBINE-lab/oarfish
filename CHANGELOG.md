@@ -49,9 +49,12 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and ties among them go by FASTA order. The warning says how to fix it: build the index with a
   transcript-to-gene table or with gene inference.
 - **`spearfish_settings.index_genes` in `meta_info.json`**, for every spearfish run: where the
-  index's gene labels came from (`source`: `fasta` or `t2g`, both provided; `inferred`; `none`;
-  or `unknown`), and its `genes`, `transcripts` and `has_gene_groups`, from the index manifest.
-  For RAD input `source` is `unknown`: spearfish 0.3.0 RAD headers do not record it.
+  index's gene labels came from (`source`: `fasta`, `t2g` or `provided`, all provided;
+  `inferred`; `none`; or `unknown`), and its `genes`, `transcripts` and `has_gene_groups`, from
+  the index manifest. For RAD input they come from the file tags that `spearfish map --rad`
+  writes from 0.3.1 on (`given` is recorded as `provided`, and an empty source as `unknown`), with
+  the same warning for an index without gene groups. A RAD file from spearfish 0.3.0 lacks the
+  tags: `source` is `unknown`, and there is no warning.
 - **`--t2g FILE` and `--infer-genes`** (with `--mapper spearfish`, when oarfish builds the index
   from `--annotated`/`--novel`): gene labels from a transcript-to-gene table, or inferred from
   shared sequence, as `spearfish index --t2g` / `--infer-genes` give them. The index manifest
@@ -74,7 +77,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **spearfish 0.3.0** (`spearfish`, `long-read-rad` 0.3). Mapping output is as with 0.2.1;
+- **spearfish 0.3.1** (`spearfish`, `long-read-rad` 0.3.1, the minimum versions; 0.3.1 adds the
+  RAD file tags for the index's gene labels). Mapping output is as with 0.3.0 and 0.2.1;
   default quantification changes where the quantification score differs from the mapping score.
   `--mapper spearfish` runs get a quantification score in every preset except the `-fast`
   ones, and RAD files written by `spearfish map` 0.3.0 carry `qscore`.

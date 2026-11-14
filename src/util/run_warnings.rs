@@ -123,6 +123,10 @@ pub fn check_index_genes(genes: &crate::prog_opts::IndexGenes) -> Option<RunWarn
         "t2g" => "the transcript-to-gene table puts each transcript in a gene of its own",
         "inferred" => "gene inference grouped no transcripts",
         "fasta" => "the gene IDs in the FASTA headers put each transcript in a gene of its own",
+        "provided" => {
+            "the gene labels given when the index was built put each transcript in a \
+             gene of its own"
+        }
         "none" => {
             "the FASTA headers carry no gene IDs, and the index was built without a \
              transcript-to-gene table or gene inference"
