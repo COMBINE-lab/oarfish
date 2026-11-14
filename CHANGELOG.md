@@ -11,6 +11,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+## 0.13.0 - 2026-11-14
+
 ### Added
 
 - **A warning when the EM stops at its iteration limit before converging**, in the log and
