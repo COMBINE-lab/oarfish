@@ -36,6 +36,18 @@ raw read mode:
       --bump-alloc[=<SIZE>]    with --mapper spearfish, the mapper's small allocations are served
                                from per-thread arenas (a little less mapping time; on by default);
                                SIZE is the largest one served (8KB without it, at most 32KB), off for none
+      --end-fit <SCORE>        with --mapper spearfish, points for hits whose annotated 3' end a read
+                               without a poly(A) tail reaches (weights only; 0: off) [default: preset's, 5]
+      --end-fit-tol <BASES>    with --mapper spearfish, how far a read's end may lie from a 3' end and
+                               still fit it, in compressed bases [default: preset's, 4]
+      --end-fit-from <END_FIT_FROM>
+                               with --mapper spearfish, measure where a read ends from its chain or by
+                               alignment [default: chain for ont-drna, else alignment; alignment with
+                               --model-truncation] [possible values: chain, alignment]
+      --orient-evidence <ORIENT_EVIDENCE>
+                               with --mapper spearfish, what the orientation evidence for antisense pairs
+                               moves: the weights only (quant), the mapping (mapping), or nothing (off, as
+                               spearfish 0.2.1) [default: preset's, quant] [possible values: quant, mapping, off]
       --seq-tech <SEQ_TECH>    [possible values: ont-cdna, ont-drna, pac-bio, pac-bio-hifi]
       --best-n <BEST_N>        max secondary mappings to consider [default: 100]
       --dp-cache-cap-mb <DP_CACHE_CAP_MB>
@@ -69,6 +81,10 @@ filters:
 indexing:
       --only-index             only build the index, do not quantify
       --index-out <INDEX_OUT>  path where the index will be written (if provided)
+      --t2g <FILE>             with --mapper spearfish, a transcript-to-gene table for the index oarfish
+                               builds (gene labels let spearfish group isoforms by gene)
+      --infer-genes            with --mapper spearfish, infer genes from shared sequence for the index
+                               oarfish builds (for transcriptomes without gene labels)
 
 coverage model:
       --coverage-model <MODEL>     none | logistic | truncation (where reads land on transcripts) [default: none]

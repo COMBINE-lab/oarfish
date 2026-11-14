@@ -402,6 +402,12 @@ fn main() -> anyhow::Result<()> {
         );
     } else if args.bump_alloc.is_some_and(|max_block| max_block > 0) {
         anyhow::bail!("--bump-alloc needs --mapper spearfish");
+    } else if args.end_fit.is_some() || args.end_fit_tol.is_some() || args.end_fit_from.is_some() {
+        anyhow::bail!("--end-fit, --end-fit-tol and --end-fit-from need --mapper spearfish");
+    } else if args.orient_evidence.is_some() {
+        anyhow::bail!("--orient-evidence needs --mapper spearfish");
+    } else if args.t2g.is_some() || args.infer_genes {
+        anyhow::bail!("--t2g and --infer-genes need --mapper spearfish");
     }
     // The arenas are on by default where spearfish maps reads; `--bump-alloc=off` is no arenas.
     let arenas_asked_for = args.bump_alloc.is_some();

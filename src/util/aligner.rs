@@ -227,6 +227,16 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
                 .map(|f| (label, digest_utils::get_digest_from_fasta(f)))
         })
         .collect();
+        // The gene table is small: read it first, so a bad path fails before the FASTAs are read.
+        let t2g = match &args.t2g {
+            Some(path) => {
+                let table = std::fs::read_to_string(path)
+                    .map_err(|e| anyhow::anyhow!("reading --t2g {}: {e}", path.display()))?;
+                let hash = spearfish::provenance::file_xxh3(path)?;
+                Some((path, table, hash))
+            }
+            None => None,
+        };
         let t_read = std::time::Instant::now();
         let mut txs = Vec::new();
         for f in [&args.annotated, &args.novel].into_iter().flatten() {
@@ -242,24 +252,41 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
             txs.len(),
             t_read.elapsed().as_secs_f64()
         );
+        // Where the genes come from, as `spearfish index` records it in the manifest.
+        let mut input = spearfish::provenance::InputInfo {
+            path: [&args.annotated, &args.novel]
+                .into_iter()
+                .flatten()
+                .map(|f| spearfish::provenance::absolute(f))
+                .collect::<Vec<_>>()
+                .join(","),
+            genes_from: if txs.iter().any(|(name, gene, _)| name != gene) {
+                "fasta"
+            } else {
+                "none"
+            }
+            .to_string(),
+            ..Default::default()
+        };
+        if let Some((path, table, hash)) = t2g {
+            let missing = spearfish::apply_t2g(&mut txs, &table);
+            if missing > 0 {
+                warn!(
+                    "{} transcripts are not in --t2g {}; their gene IDs come from the FASTA",
+                    missing.to_formatted_string(&Locale::en),
+                    path.display()
+                );
+            }
+            input.genes_from = "t2g".to_string();
+            input.t2g = Some((spearfish::provenance::absolute(path), hash));
+        }
+        let mut idx_opts = spearfish::IndexOptions::default();
+        if args.infer_genes {
+            idx_opts.infer_genes = Some(spearfish::InferGenesOptions::default());
+            input.genes_from = "inferred".to_string();
+        }
         let t = std::time::Instant::now();
-        let idx_opts = spearfish::IndexOptions::default();
         let (index, rep) = if let Some(out) = &args.index_out {
-            let input = spearfish::provenance::InputInfo {
-                path: [&args.annotated, &args.novel]
-                    .into_iter()
-                    .flatten()
-                    .map(|f| spearfish::provenance::absolute(f))
-                    .collect::<Vec<_>>()
-                    .join(","),
-                genes_from: if txs.iter().any(|(name, gene, _)| name != gene) {
-                    "fasta"
-                } else {
-                    "none"
-                }
-                .to_string(),
-                ..Default::default()
-            };
             let (_, rep, _) = spearfish::Index::build_to_file_with(
                 txs,
                 &idx_opts,
@@ -269,7 +296,7 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
             )?;
             (None, rep)
         } else {
-            let (index, rep) = spearfish::Index::build(txs, &idx_opts)?;
+            let (index, rep) = spearfish::Index::build_with(txs, &idx_opts, input)?;
             (Some(index), rep)
         };
         info!(
@@ -303,23 +330,77 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
         }
     };
     let header = spearfish_header(&index)?;
+    let opts = spearfish_map_options(args)?;
+    let mut settings = spearfish_settings(args, &opts)?;
+    let genes = index_genes(&index);
+    info!(
+        "spearfish index: {} transcripts, {} genes (gene labels: {})",
+        index.n_transcripts().to_formatted_string(&Locale::en),
+        index.n_genes().to_formatted_string(&Locale::en),
+        genes.source
+    );
+    // Also in the run's warnings at the end, and in meta_info.json.
+    if let Some(w) = crate::util::run_warnings::check_index_genes(&genes) {
+        warn!("{}", w.message);
+    }
+    settings.index_genes = Some(genes);
+    info!("spearfish: {}", settings.span_extension().describe());
+    args.spearfish_settings = Some(settings);
+    let mapper = spearfish::Mapper::new(std::sync::Arc::new(index), &opts)?;
+    Ok((
+        header,
+        None,
+        Some(crate::util::mapper::Mapper::Spearfish(std::sync::Arc::new(
+            mapper,
+        ))),
+        digests,
+    ))
+}
+
+/// The spearfish mapping options: the preset `--seq-tech` names, with oarfish's changes and
+/// the spearfish options given.
+fn spearfish_map_options(args: &Args) -> anyhow::Result<spearfish::MapOptions> {
     let preset = spearfish_preset(&args.seq_tech)?;
     let mut opts = spearfish::MapOptions::preset(preset);
     // The truncation model needs where reads start and end on each transcript, so spans are
     // extended to the read ends even where the preset leaves them at the outermost seeds.
-    let span_ext = crate::prog_opts::SpanExtension::in_process(
-        serde_json::to_value(preset)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_owned))
-            .unwrap_or_else(|| format!("{preset:?}")),
-        opts.params.ends.is_some(),
-        args.model_truncation,
-    );
+    // This also has the end fit measure every candidate by alignment (drna's chain measurement
+    // only saves alignments that spans left unextended would otherwise run for it alone),
+    // unless `--end-fit-from chain` asks for the chain.
     if args.model_truncation {
         opts.extend_ends(preset);
     }
-    info!("spearfish: {}", span_ext.describe());
-    args.span_extension = Some(span_ext);
+    // The end fit (the quantification score): the preset's settings unless given.
+    if let Some(tb) = &mut opts.params.tiebreak {
+        if let Some(w) = args.end_fit {
+            tb.end_fit = w;
+        }
+        if let Some(t) = args.end_fit_tol {
+            tb.end_fit_tol = t;
+        }
+        if let Some(from) = args.end_fit_from {
+            tb.end_fit_chain = from == crate::prog_opts::EndFitFrom::Chain;
+        }
+    }
+    // The orientation evidence for antisense pairs: the preset's unless given (or unless
+    // `ORIENT_EVIDENCE_DEFAULT` names a default of oarfish's own).
+    if let (Some(ev), Some(tb)) = (
+        args.orient_evidence
+            .or(crate::prog_opts::ORIENT_EVIDENCE_DEFAULT),
+        &mut opts.params.tiebreak,
+    ) {
+        use crate::prog_opts::{ORIENT_TAIL_AFTER_OFF, OrientEvidence};
+        match ev {
+            OrientEvidence::Quant | OrientEvidence::Mapping => {
+                tb.orient_quant = ev == OrientEvidence::Quant;
+            }
+            // As spearfish's `--no-orient-same-exact --orient-tail-after=80`.
+            OrientEvidence::Off => {
+                tb.orient_same_exact = false;
+                tb.orient_tail_after = ORIENT_TAIL_AFTER_OFF;
+            }
+        }
+    }
     // Only hits within the score filter of the best usually reach the EM, so only those are
     // extended. (Reporting only those lost reads whose best hit fails the span filters: oarfish
     // then rescales the threshold to the best hit that passes.)
@@ -335,15 +416,71 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
             Strand::Unknown => spearfish::Strands::Both,
         };
     }
-    let mapper = spearfish::Mapper::new(std::sync::Arc::new(index), &opts)?;
-    Ok((
-        header,
-        None,
-        Some(crate::util::mapper::Mapper::Spearfish(std::sync::Arc::new(
-            mapper,
-        ))),
-        digests,
-    ))
+    Ok(opts)
+}
+
+/// The spearfish settings recorded in `meta_info.json`: the preset, span extension and why,
+/// the orientations mapped and the quantification score's settings, as resolved from the
+/// preset and oarfish's options.
+fn spearfish_settings(
+    args: &Args,
+    opts: &spearfish::MapOptions,
+) -> anyhow::Result<crate::prog_opts::SpearfishSettings> {
+    use crate::prog_opts::{EndFitFrom, SpanExtension, SpearfishSettings};
+    let preset = spearfish_preset(&args.seq_tech)?;
+    let span = SpanExtension::in_process(
+        opts.preset.name().to_string(),
+        spearfish::MapOptions::preset(preset).params.ends.is_some(),
+        args.model_truncation,
+    );
+    debug_assert_eq!(span.extended, opts.params.ends.is_some());
+    let tb = opts.params.tiebreak.as_ref();
+    Ok(SpearfishSettings {
+        source: "in_process",
+        mapper: None,
+        mapper_version: None,
+        preset: span.preset,
+        extend_ends: opts.params.ends.is_some(),
+        extend_ends_reason: span.reason,
+        strands: opts.params.strands.name().to_string(),
+        quant_scores: opts.quant_scores(),
+        end_fit: Some(tb.map_or(0.0, |tb| tb.end_fit)),
+        end_fit_tol: tb.map(|tb| tb.end_fit_tol),
+        end_fit_from: tb.map(|tb| {
+            if tb.end_fit_chain {
+                EndFitFrom::Chain
+            } else {
+                EndFitFrom::Alignment
+            }
+        }),
+        orient_quant: tb.map(|tb| tb.orient_quant),
+        index_genes: None,
+        orient_evidence: tb.map(|tb| {
+            crate::prog_opts::OrientEvidence::of(
+                tb.orient_same_exact,
+                tb.orient_tail_after,
+                tb.orient_quant,
+            )
+        }),
+    })
+}
+
+/// Where the index's gene labels came from (its manifest's `genes_from`; `unknown` for an
+/// index without a manifest), its gene and transcript counts, and whether it groups isoforms
+/// into genes.
+pub(crate) fn index_genes(index: &spearfish::Index) -> crate::prog_opts::IndexGenes {
+    let manifest = index.manifest();
+    let input = manifest.as_ref().map(|m| &m.input);
+    let source = input
+        .map(|i| i.genes_from.as_str())
+        .filter(|g| !g.is_empty())
+        .unwrap_or("unknown");
+    crate::prog_opts::IndexGenes {
+        source: source.to_string(),
+        genes: Some(input.map_or(index.n_genes(), |i| i.genes)),
+        transcripts: Some(input.map_or(index.n_transcripts(), |i| i.transcripts)),
+        has_gene_groups: Some(index.has_gene_groups()),
+    }
 }
 
 fn spearfish_header(index: &spearfish::Index) -> anyhow::Result<noodles_sam::header::Header> {
@@ -681,4 +818,352 @@ pub(crate) fn rescue_db_from_genome_index(
         seqs.insert(name, ascii);
     }
     Some(bramble_rs::fasta::FastaDb::from_seq_map(seqs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn opts(extra: &[&str]) -> spearfish::MapOptions {
+        let mut v = vec!["oarfish", "--mapper", "spearfish", "--reads", "r.fq"];
+        v.extend_from_slice(&["--index", "t.sfi", "-o", "out"]);
+        v.extend_from_slice(extra);
+        spearfish_map_options(&Args::try_parse_from(v).unwrap()).unwrap()
+    }
+
+    fn end_fit(o: &spearfish::MapOptions) -> (f32, u32, bool) {
+        let tb = o.params.tiebreak.as_ref().unwrap();
+        (tb.end_fit, tb.end_fit_tol, tb.end_fit_chain)
+    }
+
+    /// Without the end-fit options the options are the preset's, and each option sets its
+    /// setting alone.
+    #[test]
+    fn end_fit_options_default_to_the_preset() {
+        for (tech, p) in [
+            ("ont-cdna", spearfish::Preset::Ont),
+            ("ont-drna", spearfish::Preset::Drna),
+            ("pac-bio-hifi", spearfish::Preset::Hifi),
+        ] {
+            let o = opts(&["--seq-tech", tech]);
+            assert_eq!(
+                end_fit(&o),
+                end_fit(&spearfish::MapOptions::preset(p)),
+                "{tech}"
+            );
+        }
+        let drna = |extra: &[&str]| {
+            let mut v = vec!["--seq-tech", "ont-drna"];
+            v.extend_from_slice(extra);
+            end_fit(&opts(&v))
+        };
+        let (w, t, chain) = drna(&[]);
+        assert!(w > 0.0 && chain);
+        assert_eq!(drna(&["--end-fit-from", "alignment"]), (w, t, false));
+        assert_eq!(drna(&["--end-fit", "0"]), (0.0, t, true));
+        assert_eq!(
+            drna(&["--end-fit", "2.5", "--end-fit-tol", "6"]),
+            (2.5, 6, true)
+        );
+        let ont = end_fit(&opts(&[
+            "--seq-tech",
+            "ont-cdna",
+            "--end-fit-from",
+            "chain",
+        ]));
+        assert!(ont.2);
+    }
+
+    /// `--model-truncation` extends spans, and the end fit then measures by alignment in
+    /// every preset, unless `--end-fit-from chain` is given.
+    #[test]
+    fn truncation_model_measures_the_end_fit_by_alignment() {
+        for tech in ["ont-cdna", "ont-drna", "pac-bio-hifi"] {
+            let o = opts(&["--seq-tech", tech, "--model-truncation"]);
+            assert!(o.params.ends.is_some(), "{tech}");
+            assert!(!end_fit(&o).2, "{tech}");
+        }
+        let o = opts(&[
+            "--seq-tech",
+            "ont-drna",
+            "--model-truncation",
+            "--end-fit-from",
+            "chain",
+        ]);
+        assert!(o.params.ends.is_some() && end_fit(&o).2);
+    }
+
+    fn settings(extra: &[&str]) -> serde_json::Value {
+        let mut v = vec!["oarfish", "--mapper", "spearfish", "--reads", "r.fq"];
+        v.extend_from_slice(&["--index", "t.sfi", "-o", "out"]);
+        v.extend_from_slice(extra);
+        let args = Args::try_parse_from(v).unwrap();
+        let o = spearfish_map_options(&args).unwrap();
+        serde_json::to_value(spearfish_settings(&args, &o).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn end_fit_options_are_recorded() {
+        let s = settings(&["--seq-tech", "ont-drna", "--end-fit-tol", "3"]);
+        assert_eq!(s["source"], "in_process");
+        assert_eq!(s["preset"], "drna");
+        assert_eq!(s["end_fit_tol"], 3);
+        assert_eq!(s["end_fit_from"], "chain");
+        assert_eq!(s["extend_ends"], false);
+        assert_eq!(s["extend_ends_reason"], "preset_off");
+        assert_eq!(s["strands"], "fwd");
+        assert_eq!(s["quant_scores"], true);
+        assert!(s.get("mapper").is_none());
+        let s = settings(&["--seq-tech", "ont-cdna", "--end-fit", "0"]);
+        assert_eq!(s["end_fit"], 0.0);
+        assert_eq!(s["end_fit_from"], "alignment");
+        assert_eq!(s["extend_ends_reason"], "preset");
+        assert_eq!(s["strands"], "both");
+        // The orientation evidence still acts through the quantification score.
+        assert_eq!(s["orient_quant"], true);
+        assert_eq!(s["quant_scores"], true);
+    }
+
+    /// Span extension and why are recorded with the other settings (and agree with the
+    /// options the mapper is made with).
+    #[test]
+    fn span_extension_is_recorded_with_the_settings() {
+        for (tech, extra, ext, reason) in [
+            ("ont-cdna", None, true, "preset"),
+            ("ont-cdna", Some("--model-truncation"), true, "preset"),
+            ("ont-drna", None, false, "preset_off"),
+            (
+                "ont-drna",
+                Some("--model-truncation"),
+                true,
+                "model_truncation",
+            ),
+            ("pac-bio-hifi", None, false, "preset_off"),
+            (
+                "pac-bio-hifi",
+                Some("--model-truncation"),
+                true,
+                "model_truncation",
+            ),
+        ] {
+            let mut v = vec!["--seq-tech", tech];
+            v.extend(extra);
+            let s = settings(&v);
+            assert_eq!(s["extend_ends"], ext, "{tech} {extra:?}");
+            assert_eq!(s["extend_ends_reason"], reason, "{tech} {extra:?}");
+        }
+    }
+
+    fn orient(o: &spearfish::MapOptions) -> (bool, u32, bool) {
+        let tb = o.params.tiebreak.as_ref().unwrap();
+        (tb.orient_same_exact, tb.orient_tail_after, tb.orient_quant)
+    }
+
+    /// Without `--orient-evidence` the orientation evidence is the preset's (through the
+    /// quantification score); `off` is spearfish's `--no-orient-same-exact
+    /// --orient-tail-after=80`, which with `--end-fit 0` leaves no quantification score of its
+    /// own; `mapping` is spearfish's `--no-orient-quant`.
+    #[test]
+    fn orient_evidence_option() {
+        for (tech, p) in [
+            ("ont-cdna", spearfish::Preset::Ont),
+            ("ont-drna", spearfish::Preset::Drna),
+            ("pac-bio-hifi", spearfish::Preset::Hifi),
+        ] {
+            let preset = spearfish::MapOptions::preset(p);
+            assert_eq!(
+                orient(&opts(&["--seq-tech", tech])),
+                orient(&preset),
+                "{tech}"
+            );
+            assert_eq!(
+                settings(&["--seq-tech", tech])["orient_evidence"],
+                "quant",
+                "{tech}"
+            );
+            let off = opts(&["--seq-tech", tech, "--orient-evidence", "off"]);
+            assert_eq!(orient(&off), (false, 80, orient(&preset).2), "{tech}");
+            let off0 = opts(&[
+                "--seq-tech",
+                tech,
+                "--orient-evidence",
+                "off",
+                "--end-fit",
+                "0",
+            ]);
+            assert!(!off0.quant_scores(), "{tech}");
+            let s = settings(&[
+                "--seq-tech",
+                tech,
+                "--orient-evidence",
+                "off",
+                "--end-fit",
+                "0",
+            ]);
+            assert_eq!(s["orient_evidence"], "off");
+            assert_eq!(s["quant_scores"], false);
+            let m = opts(&["--seq-tech", tech, "--orient-evidence", "mapping"]);
+            let (exact, after, quant) = orient(&m);
+            assert!(exact && after == orient(&preset).1 && !quant, "{tech}");
+            assert_eq!(
+                settings(&["--seq-tech", tech, "--orient-evidence", "mapping"])["orient_evidence"],
+                "mapping"
+            );
+        }
+        // `off` is what spearfish's own presets without the evidence (the `-fast` ones) use.
+        let fast = spearfish::MapOptions::preset(spearfish::Preset::OntFast);
+        let (exact, after, _) = orient(&fast);
+        assert!(!exact);
+        assert_eq!(after, crate::prog_opts::ORIENT_TAIL_AFTER_OFF);
+        assert_eq!(crate::prog_opts::ORIENT_EVIDENCE_DEFAULT, None);
+        assert!(
+            Args::try_parse_from([
+                "oarfish",
+                "-a",
+                "x.rad",
+                "-o",
+                "o",
+                "--orient-evidence",
+                "off"
+            ])
+            .is_err()
+        );
+    }
+
+    /// A tiny transcriptome: two genes of two isoforms each (all exons, and all but the
+    /// middle one), written with `header(transcript, gene)` as the FASTA IDs.
+    fn tiny_fasta(
+        dir: &std::path::Path,
+        header: impl Fn(&str, &str) -> String,
+    ) -> std::path::PathBuf {
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let mut exon = || -> Vec<u8> {
+            (0..400)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    b"ACGT"[(x >> 33) as usize % 4]
+                })
+                .collect()
+        };
+        let mut fa = String::new();
+        for g in ["A", "B"] {
+            let (e1, e2, e3) = (exon(), exon(), exon());
+            for (t, seq) in [
+                ("1", [&e1[..], &e2[..], &e3[..]].concat()),
+                ("2", [&e1[..], &e3[..]].concat()),
+            ] {
+                let tx = format!("{g}{t}");
+                fa += &format!(">{}\n{}\n", header(&tx, g), String::from_utf8(seq).unwrap());
+            }
+        }
+        let path = dir.join("tx.fa");
+        std::fs::write(&path, fa).unwrap();
+        path
+    }
+
+    /// The index's gene labels as a spearfish run records them, for oarfish's arguments.
+    fn index_genes_of(extra: &[&str]) -> crate::prog_opts::IndexGenes {
+        let mut v = vec!["oarfish", "--mapper", "spearfish", "--seq-tech", "ont-cdna"];
+        v.extend_from_slice(extra);
+        let mut args = Args::try_parse_from(v).unwrap();
+        get_spearfish_mapper(&mut args).unwrap();
+        args.spearfish_settings.unwrap().index_genes.unwrap()
+    }
+
+    /// An index without gene labels is recorded as such and warned about; one with gene IDs in
+    /// its FASTA headers, from a table, or inferred is recorded with its source and not.
+    #[test]
+    fn index_gene_labels_are_recorded_and_warned_about() {
+        use crate::util::run_warnings::check_index_genes;
+        let dir = tempfile::tempdir().unwrap();
+        let bare = tiny_fasta(dir.path(), |t, _| t.to_string());
+        let bare = bare.to_str().unwrap();
+        let base = ["--reads", "r.fq", "-o", "out", "--annotated"];
+        let run = |fa: &str, extra: &[&str]| {
+            let mut v = base.to_vec();
+            v.push(fa);
+            v.extend_from_slice(extra);
+            index_genes_of(&v)
+        };
+
+        let none = run(bare, &[]);
+        assert_eq!(none.source, "none");
+        assert_eq!((none.genes, none.transcripts), (Some(4), Some(4)));
+        assert_eq!(none.has_gene_groups, Some(false));
+        let w = check_index_genes(&none).unwrap();
+        assert_eq!(w.code, "index_without_gene_groups");
+        assert!(w.message.contains("FASTA order") || w.message.contains("order in the FASTA"));
+        assert!(w.message.contains("--t2g") && w.message.contains("--infer-genes"));
+        let v = serde_json::to_value(&none).unwrap();
+        assert_eq!(v["source"], "none");
+        assert_eq!(v["has_gene_groups"], false);
+
+        // GENCODE-style headers: `transcript|gene|...`.
+        let sub = dir.path().join("gencode");
+        std::fs::create_dir(&sub).unwrap();
+        let gencode = tiny_fasta(&sub, |t, g| {
+            format!("{t}|G{g}|OTTHUMG|OTTHUMT|{t}-201|G{g}|")
+        });
+        let fasta = run(gencode.to_str().unwrap(), &[]);
+        assert_eq!(fasta.source, "fasta");
+        assert_eq!((fasta.genes, fasta.transcripts), (Some(2), Some(4)));
+        assert_eq!(fasta.has_gene_groups, Some(true));
+        assert!(check_index_genes(&fasta).is_none());
+
+        // A transcript-to-gene table.
+        let t2g = dir.path().join("t2g.tsv");
+        std::fs::write(&t2g, "A1\tGA\nA2\tGA\nB1\tGB\nB2\tGB\n").unwrap();
+        let table = run(bare, &["--t2g", t2g.to_str().unwrap()]);
+        assert_eq!(table.source, "t2g");
+        assert_eq!(table.genes, Some(2));
+        assert!(check_index_genes(&table).is_none());
+
+        // Gene inference groups the isoforms that share exons.
+        let inferred = run(bare, &["--infer-genes"]);
+        assert_eq!(inferred.source, "inferred");
+        assert_eq!(inferred.genes, Some(2));
+        assert_eq!(inferred.has_gene_groups, Some(true));
+        assert!(check_index_genes(&inferred).is_none());
+
+        // An index oarfish writes keeps the source in its manifest, digest footer and all.
+        let sfi = dir.path().join("tx.sfi");
+        let sfi = sfi.to_str().unwrap();
+        let mut v = vec!["oarfish", "--mapper", "spearfish", "--seq-tech", "ont-cdna"];
+        v.extend_from_slice(&["--only-index", "--annotated", bare, "--index-out", sfi]);
+        get_spearfish_mapper(&mut Args::try_parse_from(v).unwrap()).unwrap();
+        let reopened = index_genes_of(&["--reads", "r.fq", "-o", "out", "--index", sfi]);
+        assert_eq!(reopened, none);
+
+        // The build options need oarfish to build the index.
+        let parse = |extra: &[&str]| {
+            let mut v = vec!["oarfish", "--mapper", "spearfish", "--seq-tech", "ont-cdna"];
+            v.extend_from_slice(&["--reads", "r.fq", "-o", "out"]);
+            v.extend_from_slice(extra);
+            Args::try_parse_from(v)
+        };
+        assert!(parse(&["--index", sfi, "--infer-genes"]).is_err());
+        assert!(parse(&["--index", sfi, "--t2g", "t.tsv"]).is_err());
+        assert!(parse(&["--annotated", bare, "--t2g", "t.tsv", "--infer-genes"]).is_err());
+    }
+
+    #[test]
+    fn end_fit_options_are_checked() {
+        let parse = |extra: &[&str]| {
+            let mut v = vec!["oarfish", "--mapper", "spearfish", "--reads", "r.fq"];
+            v.extend_from_slice(&["--index", "t.sfi", "-o", "out", "--seq-tech", "ont-drna"]);
+            v.extend_from_slice(extra);
+            Args::try_parse_from(v)
+        };
+        assert!(parse(&["--end-fit", "-1"]).is_err());
+        assert!(parse(&["--end-fit", "inf"]).is_err());
+        assert!(parse(&["--end-fit-tol", "-1"]).is_err());
+        assert!(parse(&["--end-fit-from", "both"]).is_err());
+        // They need reads to map.
+        assert!(
+            Args::try_parse_from(["oarfish", "-a", "x.rad", "-o", "o", "--end-fit", "1"]).is_err()
+        );
+    }
 }

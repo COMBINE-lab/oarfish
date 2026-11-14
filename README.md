@@ -90,6 +90,18 @@ raw read mode:
       --bump-alloc[=<SIZE>]    with --mapper spearfish, the mapper's small allocations are served
                                from per-thread arenas (a little less mapping time; on by default);
                                SIZE is the largest one served (8KB without it, at most 32KB), off for none
+      --end-fit <SCORE>        with --mapper spearfish, points for hits whose annotated 3' end a read
+                               without a poly(A) tail reaches (weights only; 0: off) [default: preset's, 5]
+      --end-fit-tol <BASES>    with --mapper spearfish, how far a read's end may lie from a 3' end and
+                               still fit it, in compressed bases [default: preset's, 4]
+      --end-fit-from <END_FIT_FROM>
+                               with --mapper spearfish, measure where a read ends from its chain or by
+                               alignment [default: chain for ont-drna, else alignment; alignment with
+                               --model-truncation] [possible values: chain, alignment]
+      --orient-evidence <ORIENT_EVIDENCE>
+                               with --mapper spearfish, what the orientation evidence for antisense pairs
+                               moves: the weights only (quant), the mapping (mapping), or nothing (off, as
+                               spearfish 0.2.1) [default: preset's, quant] [possible values: quant, mapping, off]
       --seq-tech <SEQ_TECH>    [possible values: ont-cdna, ont-drna, pac-bio, pac-bio-hifi]
       --best-n <BEST_N>        max secondary mappings to consider [default: 100]
       --dp-cache-cap-mb <DP_CACHE_CAP_MB>
@@ -123,6 +135,10 @@ filters:
 indexing:
       --only-index             only build the index, do not quantify
       --index-out <INDEX_OUT>  path where the index will be written (if provided)
+      --t2g <FILE>             with --mapper spearfish, a transcript-to-gene table for the index oarfish
+                               builds (gene labels let spearfish group isoforms by gene)
+      --infer-genes            with --mapper spearfish, infer genes from shared sequence for the index
+                               oarfish builds (for transcriptomes without gene labels)
 
 coverage model:
       --coverage-model <MODEL>     none | logistic | truncation (where reads land on transcripts) [default: none]
@@ -178,8 +194,8 @@ The truncation EM's convergence test leaves out transcripts below 0.01 reads (as
 and with this model `--max-em-iter` defaults to 5,000: it typically converges after 1,000-1,300
 iterations. With `--mapper spearfish`, the model also extends alignment spans to the read ends
 for the `ont-drna` and `pac-bio-hifi` presets, which otherwise leave them at the outermost seeds;
-that changes which reads `-m` drops. The log and `meta_info.json` (`spearfish_span_extension`)
-record whether spans were extended and why.
+that changes which reads `-m` drops. The log and `meta_info.json` (`spearfish_settings`: `extend_ends`
+and `extend_ends_reason`) record whether spans were extended and why.
 
 Alignment scores are also made *tail-neutral* (for all models): when a read's poly(A) tail aligns
 to an A-run at the end of a transcript, the score credit those bases earn is removed, so that
@@ -316,7 +332,7 @@ The `--seq-tech` value selects the mapping preset:
 
 **Bounding peak memory.** The mapper retains a per-thread DP alignment-scratch buffer between reads to avoid reallocation. Rare reads with large unaligned gaps can produce very large buffers, and at high thread counts the retained per-thread high-water marks can dominate peak RSS. `oarfish` caps that buffer at 128 MB by default (frees larger one-off buffers instead of pinning them), which on our genome benchmark cut peak RSS by ~20% with bit-identical output. Tune it with `--dp-cache-cap-mb <MB>` (or the `RAMMAP_DP_CACHE_CAP_MB` environment variable); pass `0` to disable the cap and restore the previous unbounded behavior.
 
-**spearfish.** With `--mapper spearfish`, transcriptome read mode maps with [spearfish](https://github.com/COMBINE-lab/spearfish) instead of rammap, also in process; its preset follows `--seq-tech`, and the genome modes are not supported. For reads already oriented to the transcript strand, `--map-strand fw` maps only the orientation they are in, and the mapper's small allocations are served from per-thread arenas, for a little less mapping time (`--bump-alloc=off` turns this off). spearfish scores have their own scale: with this backend `--score-prob-denom` is in tenths of a spearfish score point and defaults to 20. `--alignments` also takes a RAD file written by `spearfish map --rad`. The [mapping backends guide](https://combine-lab.github.io/oarfish/guides/mapping-backends/) has the details.
+**spearfish.** With `--mapper spearfish`, transcriptome read mode maps with [spearfish](https://github.com/COMBINE-lab/spearfish) instead of rammap, also in process; its preset follows `--seq-tech`, and the genome modes are not supported. For reads already oriented to the transcript strand, `--map-strand fw` maps only the orientation they are in, and the mapper's small allocations are served from per-thread arenas, for a little less mapping time (`--bump-alloc=off` turns this off). spearfish scores have their own scale: with this backend `--score-prob-denom` is in tenths of a spearfish score point and defaults to 20. `--alignments` also takes a RAD file written by `spearfish map --rad`. Alignments are weighed by spearfish's quantification score (spearfish 0.3.0 and later; `qscore` in RAD files), which adds an end fit for reads without a poly(A) tail (`--end-fit`, `--end-fit-tol`, `--end-fit-from`) and spearfish's orientation evidence (`--orient-evidence`; `off` maps as spearfish 0.2.1 did); spearfish's mapping itself is unchanged. `meta_info.json` records the spearfish settings, span extension included, under `spearfish_settings`, with where the index's gene labels came from (`index_genes`). Build the spearfish index with gene labels (GENCODE-style FASTA headers, `--t2g FILE` or `--infer-genes`): oarfish warns about an index without gene groups, also for RAD input written by spearfish 0.3.1 or later, which records the index's gene labels. The [mapping backends guide](https://combine-lab.github.io/oarfish/guides/mapping-backends/) has the details.
 
 ## Recommended practices by sequencing technology
 

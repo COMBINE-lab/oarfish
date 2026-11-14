@@ -23,9 +23,49 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`em` in `meta_info.json`**: which EM ran (`standard` or `truncation`), its iterations and
   limit, whether it converged, and its last convergence statistic, for every bulk run. The log
   also reports the iteration count (`EM finished in ... (N iterations)`).
-- **`spearfish_span_extension` in `meta_info.json`**, and a line in the log at the start of
-  the run: with `--mapper spearfish` (and for RAD input), whether alignment spans were extended
-  to the read ends, and why (`preset`, `model_truncation`, `preset_off`, `rad_header`). Spans
+- **spearfish 0.3.0: alignments are weighed by spearfish's quantification score.** With
+  `--mapper spearfish`, oarfish weighs a read's hits by `Hit::quant_score`, and from a RAD file
+  by the `qscore` alignment tag when the file has it (the `score` tag otherwise, so files from
+  earlier spearfish versions quantify as before). The quantification score is the mapping score
+  plus an end fit for reads without a poly(A) tail, which favours the candidates whose annotated
+  3' end the read reaches, and spearfish's orientation evidence for antisense pairs. Which hits
+  a read has is unchanged; only their weights change. The score filters see the same score.
+- **`--end-fit`, `--end-fit-tol` and `--end-fit-from chain|alignment`** (with `--mapper
+  spearfish`): the end fit's points (0: off), its tolerance in compressed bases, and how where
+  a read ends is measured. Each defaults to the preset's value. With `--model-truncation`, the
+  end fit measures every candidate by alignment (spans are extended anyway) unless
+  `--end-fit-from chain` is given.
+- **`--orient-evidence quant|mapping|off`** (with `--mapper spearfish`): what spearfish's
+  orientation evidence for antisense pairs does. `quant` (the preset's, so the default) moves
+  only the quantification score; `mapping` moves the mapping score and decides the orientation
+  (spearfish's `--no-orient-quant`); `off` turns it off, as spearfish 0.2.1 mapped (spearfish's
+  `--no-orient-same-exact --orient-tail-after=80`). With `--end-fit 0 --orient-evidence off`,
+  alignments are weighed by their mapping scores alone, and quantification is as with
+  spearfish 0.2.1. `--end-fit 0` alone leaves the orientation evidence on. Recorded as
+  `spearfish_settings.orient_evidence`.
+- **A warning for spearfish indexes without gene groups** (`index_without_gene_groups`, in the
+  log at warn level, also with `--quiet`, and in `meta_info.json`): when every transcript of the
+  index is its own gene, isoforms compete one by one for spearfish's per-gene candidate places
+  and ties among them go by FASTA order. The warning says how to fix it: build the index with a
+  transcript-to-gene table or with gene inference.
+- **`spearfish_settings.index_genes` in `meta_info.json`**, for every spearfish run: where the
+  index's gene labels came from (`source`: `fasta`, `t2g` or `provided`, all provided;
+  `inferred`; `none`; or `unknown`), and its `genes`, `transcripts` and `has_gene_groups`, from
+  the index manifest. For RAD input they come from the file tags that `spearfish map --rad`
+  writes from 0.3.1 on (`given` is recorded as `provided`, and an empty source as `unknown`), with
+  the same warning for an index without gene groups. A RAD file from spearfish 0.3.0 lacks the
+  tags: `source` is `unknown`, and there is no warning.
+- **`--t2g FILE` and `--infer-genes`** (with `--mapper spearfish`, when oarfish builds the index
+  from `--annotated`/`--novel`): gene labels from a transcript-to-gene table, or inferred from
+  shared sequence, as `spearfish index --t2g` / `--infer-genes` give them. The index manifest
+  records the source; an index oarfish builds in memory now has it too.
+- **`spearfish_settings` in `meta_info.json`**, and a line in the log at the start of the run:
+  with `--mapper spearfish`, and for RAD input, the settings the alignments were made with:
+  `source` (`in_process` or `rad_header`), `preset`, `extend_ends` and `extend_ends_reason`
+  (`preset`, `model_truncation`, `preset_off`, `rad_header`), `strands`, `quant_scores`, and
+  the end fit (`end_fit`, `end_fit_tol`, `end_fit_from`), `orient_quant` and
+  `orient_evidence`; for a RAD file
+  also `mapper` and `mapper_version`, with the end fit read from the mapper's parameters. Spans
   decide how much of a read counts as aligned, and so which reads `--min-aligned-fraction`
   drops.
 - **Trimming guidance for the aligned-fraction filter** (docs site and README): on untrimmed
@@ -37,6 +77,11 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **spearfish 0.3.1** (`spearfish`, `long-read-rad` 0.3.1, the minimum versions; 0.3.1 adds the
+  RAD file tags for the index's gene labels). Mapping output is as with 0.3.0 and 0.2.1;
+  default quantification changes where the quantification score differs from the mapping score.
+  `--mapper spearfish` runs get a quantification score in every preset except the `-fast`
+  ones, and RAD files written by `spearfish map` 0.3.0 carry `qscore`.
 - **The truncation EM's convergence test leaves out transcripts with 0.01 reads or fewer**
   (salmon's cutoff; it was 1e-5 reads), and still counts relative changes in either
   direction. Abundances decaying toward zero kept the test from passing for 2,300-2,700

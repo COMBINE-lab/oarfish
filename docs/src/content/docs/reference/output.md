@@ -40,7 +40,7 @@ Besides the options of the run, `P.meta_info.json` records what happened to the 
 ]
 ```
 
-`code` is a stable name for the condition, `fraction` the share of reads that triggered it, `threshold` the share above which it is issued, and `message` the text that was also written to the log. For `em_not_converged` (the default or a per-read EM) and `truncation_em_not_converged` (the truncation EM), `fraction` is instead the EM's last convergence statistic (the largest relative change of a transcript's abundance) and `threshold` is `--convergence-thresh`. The codes, and what to do about each, are listed in [Recommended practices by sequencing technology](/oarfish/guides/sequencing-technologies/#run-warnings). The single-cell mode does not record warnings.
+`code` is a stable name for the condition, `fraction` the share of reads that triggered it, `threshold` the share above which it is issued, and `message` the text that was also written to the log. For `em_not_converged` (the default or a per-read EM) and `truncation_em_not_converged` (the truncation EM), `fraction` is instead the EM's last convergence statistic (the largest relative change of a transcript's abundance) and `threshold` is `--convergence-thresh`. For `index_without_gene_groups` (a spearfish index without gene groups), `fraction` is the index's genes per transcript (1) and `threshold` is 1. The codes, and what to do about each, are listed in [Recommended practices by sequencing technology](/oarfish/guides/sequencing-technologies/#run-warnings). The single-cell mode does not record warnings.
 
 ### EM (`em`)
 
@@ -59,19 +59,46 @@ Besides the options of the run, `P.meta_info.json` records what happened to the 
 
 `kind` is `truncation` (`--model-truncation`) or `standard` (the equivalence-class EM or a per-read EM). `last_rel_change` is the convergence statistic of the last iteration, as that EM measures it. The truncation EM counts each accelerated (SQUAREM) step as three iterations, so its `iterations` can exceed `max_iter` by up to two. Bootstrap replicates are not recorded here.
 
-### Span extension (spearfish backend)
+### spearfish settings (`spearfish_settings`)
 
-Runs with `--mapper spearfish`, and runs on a RAD file, also record whether alignment spans were extended to the read ends:
+Runs with `--mapper spearfish`, and runs on a RAD file, record the spearfish settings their alignments were made with:
 
 ```json
-"spearfish_span_extension": {
-  "extended": true,
-  "reason": "model_truncation",
-  "preset": "drna"
+"spearfish_settings": {
+  "source": "in_process",
+  "preset": "drna",
+  "extend_ends": true,
+  "extend_ends_reason": "model_truncation",
+  "strands": "fwd",
+  "quant_scores": true,
+  "end_fit": 5.0,
+  "end_fit_tol": 4,
+  "end_fit_from": "alignment",
+  "orient_quant": true,
+  "orient_evidence": "quant",
+  "index_genes": {
+    "source": "fasta",
+    "genes": 2,
+    "transcripts": 4,
+    "has_gene_groups": true
+  }
 }
 ```
 
-`reason` is `preset` (the mapping preset extends spans), `model_truncation` (the preset leaves spans at the outermost seeds, and `--model-truncation` turned extension on), `preset_off` (the preset leaves them at the outermost seeds), or `rad_header` (a RAD file: as its mapper recorded). The span decides how much of a read counts as aligned, and so which reads `--min-aligned-fraction` drops.
+- `source`: `in_process` (oarfish mapped the reads; the settings are resolved from the preset, `--seq-tech`, and the options) or `rad_header` (read from the RAD file, which then also gives `mapper` and `mapper_version`).
+- `preset`: the mapping preset.
+- `extend_ends`: whether alignment spans were extended to the read ends, and `extend_ends_reason` why: `preset` (the preset extends spans), `model_truncation` (the preset leaves them at the outermost seeds, and `--model-truncation` turned extension on), `preset_off` (the preset leaves them at the outermost seeds), or `rad_header` (a RAD file: as its mapper recorded). The span decides how much of a read counts as aligned, and so which reads `--min-aligned-fraction` drops.
+- `strands`: the read orientations mapped (`both`, `fwd` or `rev`).
+- `quant_scores`: whether the alignments carry quantification scores that can differ from their mapping scores. oarfish weighs alignments by the quantification score; without one it is the mapping score. A RAD file from spearfish before 0.3.0 has none.
+- `end_fit` (points; 0 when off), `end_fit_tol` and `end_fit_from` (`chain` or `alignment`): the end fit, `orient_quant`: whether spearfish's orientation evidence acts through the quantification score, and `orient_evidence`: what the evidence does, `quant` (moves only the quantification score), `mapping` (moves the mapping score and the orientation) or `off` (none, as spearfish 0.2.1 mapped; see `--orient-evidence`). See [Mapping and quantification scores](/oarfish/guides/mapping-backends/#mapping-and-quantification-scores). For a RAD file they are read from the mapper's parameters in its header, and are `null` where the header does not have them.
+
+- `index_genes`: the gene labels of the spearfish index the reads were mapped against.
+  - `source`: where the genes came from, as the index manifest records it: `fasta` (gene IDs in the FASTA headers, GENCODE-style `transcript|gene|...`) and `t2g` (a transcript-to-gene table) are provided labels; `inferred` means spearfish grouped transcripts by shared sequence; `provided` means the genes were given when the index was built through spearfish's Python API (`given` in the RAD file); `none` means every transcript is its own gene; `unknown` is an index without a manifest, or a RAD file written before spearfish 0.3.1.
+  - `genes` and `transcripts`: their numbers in the index.
+  - `has_gene_groups`: whether the index groups isoforms into genes. When it is `false`, the run also has an `index_without_gene_groups` [warning](#run-warnings).
+  - For a RAD file, all four are read from its file tags (`index_genes_from`, `index_num_genes`, `index_num_transcripts`, `index_gene_groups`), which `spearfish map --rad` writes from 0.3.1 on; an index without gene groups gets the same warning as in process. A RAD file from spearfish 0.3.0 has no such tags: `source` is then `unknown`, `genes` and `has_gene_groups` are `null`, `transcripts` is the number of targets in the file, and there is no warning, since oarfish cannot tell.
+
+Runs on a BAM file have no `spearfish_settings`.
 
 ## Read-level assignment probabilities
 

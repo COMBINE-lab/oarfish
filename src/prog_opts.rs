@@ -46,6 +46,74 @@ fn parse_pos_f32(arg: &str) -> anyhow::Result<f32> {
     }
 }
 
+/// Parse a non-negative, finite `f32` (`--end-fit`, where 0 turns the end fit off).
+fn parse_nonneg_f32(arg: &str) -> anyhow::Result<f32> {
+    let v: f32 = arg
+        .parse()
+        .map_err(|_| anyhow::anyhow!("`{}` is not a valid number", arg))?;
+    if v >= 0.0 && v.is_finite() {
+        Ok(v)
+    } else {
+        anyhow::bail!("value must be >= 0, but got {}", v)
+    }
+}
+
+/// How spearfish's end fit measures where a read ends on each candidate transcript
+/// (`--end-fit-from`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EndFitFrom {
+    /// The read taken to continue along the transcript from its last seed, without gaps (no
+    /// alignment is run).
+    Chain,
+    /// The alignment of the read's right end.
+    Alignment,
+}
+
+/// What spearfish does with its orientation evidence for antisense pairs (`--orient-evidence`):
+/// the exact comparison of read orientations whose best hits are one sequence on opposite
+/// strands, and the longer allowance after a poly(A) tail for cDNA reads that kept their
+/// adapters (spearfish's `orient_same_exact` and `orient_tail_after`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OrientEvidence {
+    /// The evidence moves only the quantification scores, which alignments are weighed by;
+    /// the mapping scores, the orientation and the hits reported are as without it
+    /// (spearfish's `orient_quant`, on in its 0.3.0 presets).
+    Quant,
+    /// The evidence moves the mapping scores and decides the orientation, and so which hits
+    /// are reported (spearfish's `--no-orient-quant`).
+    Mapping,
+    /// No orientation evidence: reads map and are weighed as with spearfish 0.2.1 (spearfish's
+    /// `--no-orient-same-exact --orient-tail-after=80`).
+    Off,
+}
+
+/// The default of `--orient-evidence`. `None` keeps the spearfish preset's setting, which is
+/// `quant` in spearfish 0.3.0. To map as spearfish 0.2.1 did by default, set this to
+/// `Some(OrientEvidence::Off)` (and update the default named in the help of
+/// `--orient-evidence` and in the docs).
+pub const ORIENT_EVIDENCE_DEFAULT: Option<OrientEvidence> = None;
+
+/// spearfish's `orient_tail_after` with the orientation evidence off: the allowance any A-run
+/// has after it (spearfish's `TAIL_AFTER`, the value of its 0.2.1 presets and of its `-fast`
+/// presets).
+pub const ORIENT_TAIL_AFTER_OFF: u32 = 80;
+
+impl OrientEvidence {
+    /// The setting spearfish's tie-break settings amount to: `off` when neither part of the
+    /// evidence is on, otherwise where `orient_quant` sends it.
+    pub fn of(orient_same_exact: bool, orient_tail_after: u32, orient_quant: bool) -> Self {
+        if !orient_same_exact && orient_tail_after <= ORIENT_TAIL_AFTER_OFF {
+            OrientEvidence::Off
+        } else if orient_quant {
+            OrientEvidence::Quant
+        } else {
+            OrientEvidence::Mapping
+        }
+    }
+}
+
 /// Default denominator `D` of the score→probability conversion `exp((score - best) / D)`
 /// (`--score-prob-denom`). 3 rather than the earlier 5: sharper weighting toward the
 /// best-scoring alignment improved accuracy on simulations with exact truth and on LongBench
@@ -529,6 +597,30 @@ pub struct Args {
     #[arg(long, conflicts_with_all = ["alignments", "index"], requires_ifs([(ArgPredicate::IsPresent, "only_index")]), help_heading = "indexing")]
     pub index_out: Option<PathBuf>,
 
+    /// with `--mapper spearfish`, when oarfish builds the index from `--annotated`/`--novel`:
+    /// a transcript-to-gene table (whitespace-separated `transcript gene` per line; further
+    /// columns are ignored) whose genes replace those in the FASTA headers. spearfish groups
+    /// isoforms by gene; without gene labels every transcript is its own gene. Transcripts
+    /// the table lacks keep the gene from their header
+    #[arg(
+        long,
+        value_name = "FILE",
+        conflicts_with_all = ["alignments", "index", "infer_genes"],
+        help_heading = "indexing"
+    )]
+    pub t2g: Option<PathBuf>,
+
+    /// with `--mapper spearfish`, when oarfish builds the index from `--annotated`/`--novel`:
+    /// group transcripts into genes from shared sequence (spearfish's gene inference, with its
+    /// default settings), for transcriptomes whose FASTA headers carry no gene IDs and that
+    /// have no transcript-to-gene table
+    #[arg(
+        long,
+        conflicts_with_all = ["alignments", "index"],
+        help_heading = "indexing"
+    )]
+    pub infer_genes: bool,
+
     /// sequencing technology in which to expect reads if using mapping based mode
     #[arg(
         long,
@@ -572,6 +664,57 @@ pub struct Args {
         help_heading = "raw read mode"
     )]
     pub bump_alloc: Option<usize>,
+
+    /// with `--mapper spearfish`, the end fit's weight: points added to the score of the hits
+    /// whose annotated 3' end a read without a poly(A) tail reaches, when the read's candidate
+    /// transcripts end at distinguishable places. It only changes the scores alignments are
+    /// weighed by, not which hits a read has. 0 turns it off; alignments are then weighed by
+    /// their mapping scores, but for the reads spearfish's orientation evidence moves (see
+    /// `--orient-evidence`; `--orient-evidence off` too gives mapping-score weights). The
+    /// default is the preset's (5).
+    #[arg(
+        long,
+        value_name = "SCORE",
+        value_parser = parse_nonneg_f32,
+        requires = "reads",
+        help_heading = "raw read mode"
+    )]
+    pub end_fit: Option<f32>,
+
+    /// with `--mapper spearfish`, the end fit's tolerance: how far (in homopolymer-compressed
+    /// bases) where a read ends may lie from a transcript's annotated 3' end and still fit
+    /// it. Transcripts whose 3' ends are closer to each other than this are not told apart.
+    /// The default is the preset's (4).
+    #[arg(
+        long,
+        value_name = "BASES",
+        requires = "reads",
+        help_heading = "raw read mode"
+    )]
+    pub end_fit_tol: Option<u32>,
+
+    /// with `--mapper spearfish`, how the end fit measures where a read ends on each
+    /// candidate transcript: `chain` (the read taken to continue along the transcript from
+    /// its last seed, without gaps; no alignment is run) or `alignment` (the alignment of the
+    /// read's right end; more exact, and more mapping time where spans are not extended).
+    /// The default is the preset's: `chain` for `ont-drna` and `alignment` otherwise, but
+    /// `alignment` for every preset with `--model-truncation`, which aligns the read ends
+    /// anyway. Hits whose spans were extended are measured from their alignment either way.
+    #[arg(long, value_enum, requires = "reads", help_heading = "raw read mode")]
+    pub end_fit_from: Option<EndFitFrom>,
+
+    /// with `--mapper spearfish`, what spearfish's orientation evidence for antisense pairs
+    /// does. Where a read's best hits in its two orientations are one sequence on opposite
+    /// strands (antisense isoforms, a transcript inside another's intron on the other strand),
+    /// spearfish compares the two by exact alignment of the whole read, and gives cDNA reads
+    /// that kept their adapters a longer allowance after a poly(A) tail. `quant`: the evidence
+    /// moves only the quantification scores alignments are weighed by; which hits a read has
+    /// does not change. `mapping`: it moves the mapping scores and decides the orientation.
+    /// `off`: no orientation evidence, as spearfish 0.2.1 mapped; with `--end-fit 0` as well,
+    /// alignments are weighed by their mapping scores alone. The default is the preset's
+    /// (`quant`).
+    #[arg(long, value_enum, requires = "reads", help_heading = "raw read mode")]
+    pub orient_evidence: Option<OrientEvidence>,
 
     /// maximum number of secondary mappings to consider when mapping reads to the transcriptome
     #[arg(
@@ -658,7 +801,7 @@ pub struct Args {
     /// also extends alignment spans to the read ends where the preset leaves them at the
     /// outermost seeds (`--seq-tech ont-drna` and `pac-bio-hifi`). Longer spans change which reads
     /// `--min-aligned-fraction` drops, so the reads kept differ from a run without
-    /// `--model-truncation`; the log and `meta_info.json` (`spearfish_span_extension`) record
+    /// `--model-truncation`; the log and `meta_info.json` (`spearfish_settings`) record
     /// whether spans were extended and why
     #[arg(
         long,
@@ -766,17 +909,136 @@ pub struct Args {
     #[arg(short, long, hide = true)]
     pub use_kde: bool,
 
-    /// Whether the mapper extended alignment spans to the read ends, and why (set by the
-    /// spearfish backend and by RAD input; recorded in `meta_info.json`).
+    /// The spearfish settings the alignments were made with: span extension and why, the
+    /// orientations mapped and the quantification score's settings (set by the spearfish
+    /// backend and by RAD input; recorded in `meta_info.json` as `spearfish_settings`).
     #[arg(skip)]
     #[serde(skip)]
-    pub span_extension: Option<SpanExtension>,
+    pub spearfish_settings: Option<SpearfishSettings>,
+}
+
+/// The spearfish settings a run's alignments were made with, as `meta_info.json` records them
+/// (`spearfish_settings`). In process they are resolved from the preset and oarfish's options;
+/// for a RAD file they are read from its header, and a setting the header does not carry is
+/// `null`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SpearfishSettings {
+    /// `in_process` (oarfish mapped the reads) or `rad_header` (read from a RAD file).
+    pub source: &'static str,
+    /// The mapper and its version, as the RAD file records them (RAD input only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mapper: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mapper_version: Option<String>,
+    /// The mapping preset.
+    pub preset: String,
+    /// Whether alignment spans were extended to the read ends.
+    pub extend_ends: bool,
+    /// Why (see [`SpanExtension::reason`]).
+    pub extend_ends_reason: &'static str,
+    /// The orientations mapped: `both`, `fwd` or `rev`.
+    pub strands: String,
+    /// Whether the alignments carry quantification scores that may differ from their mapping
+    /// scores (otherwise the two are equal).
+    pub quant_scores: bool,
+    /// The end fit's points (0: off), tolerance and measurement.
+    pub end_fit: Option<f32>,
+    pub end_fit_tol: Option<u32>,
+    pub end_fit_from: Option<EndFitFrom>,
+    /// Whether spearfish's orientation evidence acts through the quantification score.
+    pub orient_quant: Option<bool>,
+    /// What the orientation evidence does: `quant`, `mapping` or `off` (see
+    /// [`OrientEvidence`]).
+    pub orient_evidence: Option<OrientEvidence>,
+    /// Where the index's gene labels came from, and whether it groups isoforms into genes.
+    pub index_genes: Option<IndexGenes>,
+}
+
+/// The gene labels of the spearfish index the alignments were made against, as
+/// `meta_info.json` records them (`spearfish_settings.index_genes`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IndexGenes {
+    /// Where the genes came from, as the index manifest's `genes_from` (or, for RAD input, the
+    /// file tag `index_genes_from`): `fasta` (gene IDs in the FASTA headers) or `t2g` (a
+    /// transcript-to-gene table), both provided; `provided` (genes given through spearfish's
+    /// Python API, `given` in the RAD file); `inferred` (spearfish's gene inference); `none`
+    /// (every transcript its own gene); or `unknown` (an index without a manifest, or a RAD
+    /// file written before spearfish 0.3.1, which does not record it).
+    pub source: String,
+    /// Genes in the index (`null` when unknown).
+    pub genes: Option<usize>,
+    /// Transcripts in the index.
+    pub transcripts: Option<usize>,
+    /// Whether the index groups isoforms into genes (spearfish's `Index::has_gene_groups`;
+    /// `null` when unknown).
+    pub has_gene_groups: Option<bool>,
+}
+
+impl IndexGenes {
+    /// The record for an index whose gene labels are not known (`source: unknown`).
+    pub fn unknown(transcripts: Option<usize>) -> Self {
+        IndexGenes {
+            source: "unknown".to_string(),
+            genes: None,
+            transcripts,
+            has_gene_groups: None,
+        }
+    }
+}
+
+impl SpearfishSettings {
+    /// The settings from a RAD file's header. The end fit is read from the mapper's parameters
+    /// (spearfish records its options there as JSON); it is `null` where they do not have it.
+    pub fn from_rad(m: &long_read_rad::Meta) -> Self {
+        let params: serde_json::Value = serde_json::from_str(&m.params).unwrap_or_default();
+        let tb = &params["parameters"]["params"]["tiebreak"];
+        SpearfishSettings {
+            source: "rad_header",
+            mapper: Some(m.mapper.clone()),
+            mapper_version: Some(m.mapper_version.clone()),
+            preset: m.preset.clone(),
+            extend_ends: m.ends_extended,
+            extend_ends_reason: "rad_header",
+            strands: m.strands.clone(),
+            quant_scores: m.quant_scores,
+            end_fit: tb["end_fit"].as_f64().map(|v| v as f32),
+            end_fit_tol: tb["end_fit_tol"].as_u64().map(|v| v as u32),
+            end_fit_from: tb["end_fit_chain"].as_bool().map(|chain| {
+                if chain {
+                    EndFitFrom::Chain
+                } else {
+                    EndFitFrom::Alignment
+                }
+            }),
+            orient_quant: tb["orient_quant"].as_bool(),
+            index_genes: None,
+            orient_evidence: match (
+                tb["orient_same_exact"].as_bool(),
+                tb["orient_tail_after"].as_u64(),
+                tb["orient_quant"].as_bool(),
+            ) {
+                (Some(exact), Some(after), Some(quant)) => {
+                    Some(OrientEvidence::of(exact, after as u32, quant))
+                }
+                _ => None,
+            },
+        }
+    }
+
+    /// Whether alignment spans were extended, and why, for the log line.
+    pub fn span_extension(&self) -> SpanExtension {
+        SpanExtension {
+            extended: self.extend_ends,
+            reason: self.extend_ends_reason,
+            preset: self.preset.clone(),
+        }
+    }
 }
 
 /// Whether alignment spans reach the read ends, or stop at the outermost seeds, and why. Span
 /// length decides the aligned fraction of a read, and so which reads `--min-aligned-fraction`
-/// drops.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// drops. Recorded in `meta_info.json` as part of [`SpearfishSettings`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpanExtension {
     /// Whether alignment spans were extended to the read ends.
     pub extended: bool,
@@ -904,10 +1166,42 @@ mod tests {
         assert!(s.describe().contains("--min-aligned-fraction"));
         let s = SpanExtension::in_process("hifi".into(), false, false);
         assert_eq!((s.extended, s.reason), (false, "preset_off"));
-        let v = serde_json::to_value(&s).unwrap();
-        assert_eq!(v["extended"], false);
-        assert_eq!(v["reason"], "preset_off");
-        assert_eq!(v["preset"], "hifi");
+    }
+
+    /// A RAD file's settings come from its header, with the end fit from the mapper's
+    /// parameters where they have it.
+    #[test]
+    fn spearfish_settings_from_a_rad_header() {
+        let mut m = long_read_rad::Meta {
+            mapper: "spearfish".into(),
+            mapper_version: "0.3.0".into(),
+            preset: "drna".into(),
+            strands: "fwd".into(),
+            quant_scores: true,
+            params: r#"{"parameters":{"params":{"tiebreak":{"end_fit":5.0,"end_fit_tol":4,
+                "end_fit_chain":true,"orient_quant":true,"orient_same_exact":false,
+                "orient_tail_after":80}}}}"#
+                .into(),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(super::SpearfishSettings::from_rad(&m)).unwrap();
+        assert_eq!(v["source"], "rad_header");
+        assert_eq!(v["mapper_version"], "0.3.0");
+        assert_eq!(v["extend_ends"], false);
+        assert_eq!(v["extend_ends_reason"], "rad_header");
+        assert_eq!(v["quant_scores"], true);
+        assert_eq!(v["end_fit"], 5.0);
+        assert_eq!(v["end_fit_tol"], 4);
+        assert_eq!(v["end_fit_from"], "chain");
+        assert_eq!(v["orient_quant"], true);
+        assert_eq!(v["orient_evidence"], "off");
+        // A file from another mapper, or an older one, has no end fit in its parameters.
+        m.params = "not json".into();
+        m.quant_scores = false;
+        m.ends_extended = true;
+        let s = super::SpearfishSettings::from_rad(&m);
+        assert!(s.end_fit.is_none() && s.end_fit_from.is_none() && !s.quant_scores);
+        assert!(s.span_extension().describe().contains("extended"));
     }
 
     #[test]

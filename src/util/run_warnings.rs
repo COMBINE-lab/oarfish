@@ -28,10 +28,11 @@ pub struct RunWarning {
     /// A stable name for the condition, for programs that read `meta_info.json`.
     pub code: &'static str,
     /// The share of reads that triggered the warning (for `em_not_converged` and
-    /// `truncation_em_not_converged`, the EM's last convergence statistic).
+    /// `truncation_em_not_converged`, the EM's last convergence statistic; for
+    /// `index_without_gene_groups`, the index's genes per transcript).
     pub fraction: f64,
     /// The share above which the warning is issued (for the two EM codes, the convergence
-    /// threshold).
+    /// threshold; for `index_without_gene_groups`, 1).
     pub threshold: f64,
     /// What happened and what to check, for a person.
     pub message: String,
@@ -108,6 +109,53 @@ pub fn check_em(em: &EmConvergence, kind: EmKind) -> Option<RunWarning> {
                 em.max_iter
             ),
         },
+    })
+}
+
+/// The warning for a spearfish index without gene groups (`index_without_gene_groups`), if the
+/// index has none. Its `fraction` is the index's genes per transcript (1: every transcript its
+/// own gene) and its `threshold` is 1.
+pub fn check_index_genes(genes: &crate::prog_opts::IndexGenes) -> Option<RunWarning> {
+    if genes.has_gene_groups != Some(false) {
+        return None;
+    }
+    let cause = match genes.source.as_str() {
+        "t2g" => "the transcript-to-gene table puts each transcript in a gene of its own",
+        "inferred" => "gene inference grouped no transcripts",
+        "fasta" => "the gene IDs in the FASTA headers put each transcript in a gene of its own",
+        "provided" => {
+            "the gene labels given when the index was built put each transcript in a \
+             gene of its own"
+        }
+        "none" => {
+            "the FASTA headers carry no gene IDs, and the index was built without a \
+             transcript-to-gene table or gene inference"
+        }
+        _ => "the index does not record where its genes came from",
+    };
+    let fix = if genes.source == "inferred" {
+        "rebuild the index with a transcript-to-gene table (`--t2g FILE` when oarfish builds \
+         it, `spearfish index --t2g FILE` otherwise)"
+    } else {
+        "rebuild the index with a transcript-to-gene table (`--t2g FILE` when oarfish builds \
+         it, `spearfish index --t2g FILE` otherwise), or with gene inference (`--infer-genes`, \
+         or `spearfish index --infer-genes`) when no gene annotation exists"
+    };
+    let (n_genes, n_tx) = (
+        genes.genes.unwrap_or(0),
+        genes.transcripts.unwrap_or(0).max(1),
+    );
+    Some(RunWarning {
+        code: "index_without_gene_groups",
+        fraction: n_genes as f64 / n_tx as f64,
+        threshold: 1.0,
+        message: format!(
+            "The spearfish index has no gene groups: each of its {n_tx} transcripts is its own \
+             gene ({cause}). spearfish keeps a few candidate places per gene for each read, so \
+             isoforms then compete for those places one by one instead of as a gene, and ties \
+             among them go by their order in the FASTA. This costs accuracy. To fix it, \
+             {fix}."
+        ),
     })
 }
 
@@ -269,6 +317,32 @@ mod tests {
 
     fn codes(w: &[RunWarning]) -> Vec<&'static str> {
         w.iter().map(|w| w.code).collect()
+    }
+
+    #[test]
+    fn index_without_gene_groups() {
+        use crate::prog_opts::IndexGenes;
+        let genes = |source: &str, genes, has| IndexGenes {
+            source: source.to_string(),
+            genes: Some(genes),
+            transcripts: Some(10),
+            has_gene_groups: has,
+        };
+        let w = check_index_genes(&genes("none", 10, Some(false))).unwrap();
+        assert_eq!(w.code, "index_without_gene_groups");
+        assert_eq!((w.fraction, w.threshold), (1.0, 1.0));
+        assert!(w.message.contains("no gene IDs"));
+        assert!(w.message.contains("--t2g") && w.message.contains("--infer-genes"));
+        // Inference that grouped nothing: a table is the fix.
+        let w = check_index_genes(&genes("inferred", 10, Some(false))).unwrap();
+        assert!(w.message.contains("--t2g") && !w.message.contains("`--infer-genes`"));
+        assert!(check_index_genes(&genes("fasta", 4, Some(true))).is_none());
+        // RAD input: not known, no warning.
+        assert!(check_index_genes(&IndexGenes::unknown(Some(10))).is_none());
+        let v = serde_json::to_value(IndexGenes::unknown(Some(10))).unwrap();
+        assert_eq!(v["source"], "unknown");
+        assert!(v["genes"].is_null() && v["has_gene_groups"].is_null());
+        assert_eq!(v["transcripts"], 10);
     }
 
     #[test]

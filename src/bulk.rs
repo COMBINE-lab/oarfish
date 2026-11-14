@@ -85,9 +85,9 @@ fn get_json_info(
         "num_bootstraps": &args.num_bootstraps,
         "digest": seqcol_digest.to_json()
     });
-    // Only runs whose mapper reports it (the spearfish backend and RAD input) carry this.
-    if let Some(span) = &args.span_extension {
-        info["spearfish_span_extension"] = json!(span);
+    // Only runs whose alignments spearfish made (in process, or a RAD file) carry this.
+    if let Some(settings) = &args.spearfish_settings {
+        info["spearfish_settings"] = json!(settings);
     }
     info
 }
@@ -116,6 +116,15 @@ pub(crate) fn perform_inference_and_write_output(
             min_aligned_fraction: store.filter_opts.min_aligned_fraction(),
         },
     );
+    // A spearfish index without gene groups (also logged when the index was loaded).
+    if let Some(w) = args
+        .spearfish_settings
+        .as_ref()
+        .and_then(|s| s.index_genes.as_ref())
+        .and_then(crate::util::run_warnings::check_index_genes)
+    {
+        run_warnings.insert(0, w);
+    }
     for w in &run_warnings {
         warn!("{}", w.message);
     }

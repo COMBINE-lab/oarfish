@@ -35,6 +35,7 @@ pub fn is_rad(path: &Path) -> anyhow::Result<bool> {
 /// user gave none and the mapper suggests one.
 pub fn read_header(path: &Path, args: &mut Args) -> anyhow::Result<RadHeader> {
     let h = long_read_rad::read_header(path)?;
+    let index_info = long_read_rad::read_index_info(path)?;
     let m = &h.meta;
     info!(
         "RAD file {}: {} targets; {} of {} reads mapped by {} {} (preset {:?}, chunk codec {})",
@@ -56,13 +57,30 @@ pub fn read_header(path: &Path, args: &mut Args) -> anyhow::Result<RadHeader> {
         );
         args.score_prob_denom = Some(d);
     }
-    let span_ext = crate::prog_opts::SpanExtension {
-        extended: m.ends_extended,
-        reason: "rad_header",
-        preset: m.preset.clone(),
-    };
-    info!("{}", span_ext.describe());
-    args.span_extension = Some(span_ext);
+    let mut settings = crate::prog_opts::SpearfishSettings::from_rad(m);
+    let genes = index_genes(&h, index_info.as_ref());
+    match &index_info {
+        Some(i) => info!(
+            "spearfish index: {} transcripts, {} genes (gene labels: {})",
+            i.num_transcripts.to_formatted_string(&Locale::en),
+            i.num_genes.to_formatted_string(&Locale::en),
+            genes.source
+        ),
+        None => info!(
+            "the RAD file does not record the index's gene labels (written before spearfish \
+             0.3.1); gene labels: unknown"
+        ),
+    }
+    // Also in the run's warnings at the end, and in meta_info.json.
+    if let Some(w) = crate::util::run_warnings::check_index_genes(&genes) {
+        warn!("{}", w.message);
+    }
+    settings.index_genes = Some(genes);
+    info!("{}", settings.span_extension().describe());
+    if m.quant_scores {
+        info!("alignments are weighed by the mapper's quantification scores (qscore)");
+    }
+    args.spearfish_settings = Some(settings);
     if args.model_truncation && !m.ends_extended {
         warn!(
             "--model-truncation: the mapper did not extend alignment spans to the read ends \
@@ -76,6 +94,35 @@ pub fn read_header(path: &Path, args: &mut Args) -> anyhow::Result<RadHeader> {
         anyhow::bail!("RAD input is bulk; single-cell mode needs a collated BAM");
     }
     Ok(h)
+}
+
+/// The index's gene labels as the RAD file records them: the file tags `index_genes_from`,
+/// `index_num_genes`, `index_num_transcripts` and `index_gene_groups`, which spearfish 0.3.1
+/// and later write (read as `long_read_rad::IndexInfo`).
+///
+/// `source` is `index_genes_from`, except that `given` (genes passed in through spearfish's
+/// Python API) is recorded as `provided`, and an empty value (an index without a manifest) as
+/// `unknown`; the counts and `has_gene_groups` are recorded in either case. A file without the
+/// tags (spearfish 0.3.0) gives `source: unknown`, no gene count and no `has_gene_groups`, with
+/// the transcript count of the header, and so no warning.
+pub fn index_genes(
+    h: &RadHeader,
+    info: Option<&long_read_rad::IndexInfo>,
+) -> crate::prog_opts::IndexGenes {
+    let Some(info) = info else {
+        return crate::prog_opts::IndexGenes::unknown(Some(h.ref_names.len()));
+    };
+    let source = match info.genes_from.as_str() {
+        "" => "unknown",
+        "given" => "provided",
+        s => s,
+    };
+    crate::prog_opts::IndexGenes {
+        source: source.to_string(),
+        genes: Some(info.num_genes as usize),
+        transcripts: Some(info.num_transcripts as usize),
+        has_gene_groups: Some(info.gene_groups),
+    }
 }
 
 /// A SAM header over the RAD file's targets, with the mapper as the program.
@@ -121,8 +168,9 @@ impl AlnRecordLike for RadAln {
     fn aln_span(&self) -> Option<usize> {
         Some(self.a.ref_end.saturating_sub(self.a.ref_start) as usize)
     }
+    /// The quantification score (`qscore`), which is the score in files without it.
     fn aln_score(&self) -> Option<i64> {
-        Some((self.a.score * RAD_SCORE_SCALE).round() as i64)
+        Some((self.a.quant_score * RAD_SCORE_SCALE).round() as i64)
     }
     fn aln_start(&self) -> u32 {
         self.a.ref_start
@@ -233,4 +281,79 @@ pub fn quantify(
         elapsed,
         args,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use long_read_rad::{ChunkCodec, Counts, IndexInfo, Meta, RadWriter};
+
+    /// A RAD file over three targets, with the index description `info` when given (as
+    /// spearfish 0.3.1 writes it) and without (as spearfish 0.3.0 did).
+    fn write_rad(path: &Path, info: Option<&IndexInfo>) {
+        let refs = [("tA", 2000u32), ("tB", 1500), ("tC", 3000)];
+        let meta = Meta {
+            mapper: "spearfish".into(),
+            mapper_version: "0.3.1".into(),
+            ..Default::default()
+        };
+        let w = match info {
+            Some(i) => RadWriter::create_with_index(path, &refs, &meta, i, ChunkCodec::None),
+            None => RadWriter::create(path, &refs, &meta, ChunkCodec::None),
+        }
+        .unwrap();
+        w.finish(Counts::default()).unwrap();
+    }
+
+    fn settings_of(path: &Path) -> crate::prog_opts::SpearfishSettings {
+        let p = path.to_str().unwrap();
+        let mut args = Args::try_parse_from(["oarfish", "-a", p, "-o", "o"]).unwrap();
+        read_header(path, &mut args).unwrap();
+        args.spearfish_settings.unwrap()
+    }
+
+    /// The index's gene labels are read from the RAD file tags: a gene-less index is recorded
+    /// and warned about, a grouped one is recorded and not; `given` reads as `provided` and an
+    /// empty source as `unknown`; a file without the tags is `unknown`, without a warning.
+    #[test]
+    fn rad_index_genes_from_file_tags() {
+        use crate::util::run_warnings::check_index_genes;
+        let dir = tempfile::tempdir().unwrap();
+        let genes_of = |name: &str, info: Option<IndexInfo>| {
+            let path = dir.path().join(name);
+            write_rad(&path, info.as_ref());
+            settings_of(&path).index_genes.unwrap()
+        };
+
+        let none = genes_of("none.rad", Some(IndexInfo::new("none", 3, 3, false)));
+        assert_eq!(none.source, "none");
+        assert_eq!((none.genes, none.transcripts), (Some(3), Some(3)));
+        assert_eq!(none.has_gene_groups, Some(false));
+        let w = check_index_genes(&none).unwrap();
+        assert_eq!(w.code, "index_without_gene_groups");
+        assert!(w.message.contains("carry no gene IDs") && w.message.contains("--t2g"));
+
+        let fasta = genes_of("fasta.rad", Some(IndexInfo::new("fasta", 2, 3, true)));
+        assert_eq!(fasta.source, "fasta");
+        assert_eq!((fasta.genes, fasta.transcripts), (Some(2), Some(3)));
+        assert_eq!(fasta.has_gene_groups, Some(true));
+        assert!(check_index_genes(&fasta).is_none());
+
+        let given = genes_of("given.rad", Some(IndexInfo::new("given", 3, 3, false)));
+        assert_eq!(given.source, "provided");
+        let w = check_index_genes(&given).unwrap();
+        assert!(
+            w.message
+                .contains("gene labels given when the index was built")
+        );
+
+        let empty = genes_of("empty.rad", Some(IndexInfo::new("", 2, 3, true)));
+        assert_eq!(empty.source, "unknown");
+        assert_eq!((empty.genes, empty.has_gene_groups), (Some(2), Some(true)));
+
+        let old = genes_of("old.rad", None);
+        assert_eq!(old, crate::prog_opts::IndexGenes::unknown(Some(3)));
+        assert!(check_index_genes(&old).is_none());
+    }
 }
