@@ -1,0 +1,138 @@
+[package]
+name = "oarfish"
+version = "0.13.0"
+edition = "2024"
+rust-version = "1.91"
+authors = [
+  "Zahra Zare Jousheghani <zzare@umd.edu>",
+  "Noor Pratap Singh <npsingh@umd.edu>",
+  "Rob Patro <rob@cs.umd.edu>",
+]
+description = "A fast, accurate and versatile tool for long-read transcript quantification."
+license-file = "LICENSE"
+readme = "README.md"
+repository = "https://github.com/COMBINE-lab/oarfish"
+homepage = "https://COMBINE-lab.github.io/oarfish"
+include = [
+  "/src/*.rs",
+  "/src/util/*.rs",
+  "/Cargo.toml",
+  "/Cargo.lock",
+  "/README.md",
+  "/CHANGELOG.md",
+  "/LICENSE",
+]
+keywords = ["RNA-seq", "quantification", "long-read", "transcriptomics"]
+categories = ["command-line-utilities", "science"]
+
+# See more keys and their definitions 
+# at https://doc.rust-lang.org/cargo/reference/manifest.html
+[dependencies]
+seqcol_rs = "0.4.2"
+anyhow = "1.0.100"
+bstr = "1.12.1"
+bio-types = { version = "1.0.4", features = ["serde"] }
+clap = { version = "4.5.57", features = ["derive"] }
+noodles-bam = "0.98"
+noodles-sam = "0.93"
+num-format = "0.4.4"
+lz4 = "1.28.1"
+either = "1.15.0"
+tabled = "0.22"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
+typed-builder = "0.23.2"
+rayon = "1.11"
+statrs = "0.19"
+csv = "1.4"
+serde = { version = "1", features = ["derive"] }
+itertools = "0.15"
+serde_json = "1.0.149"
+# Streaming seqcol digest of a BAM header (`util::digest_utils`); the versions seqcol_rs uses.
+sha2 = "0.11"
+base64 = "0.23"
+hex = "0.4.3"
+path-tools = "0.1.0"
+atomic_float = "1.1.0"
+# Spill file for the read names kept for `--write-assignment-probs` (util/name_store.rs).
+tempfile = "3.27"
+rand = "0.10.0" #0.8.5"
+# Parquet output (`.infreps.pq` bootstrap replicates).
+arrow-array = "60.1"
+arrow-schema = "60.1"
+parquet = { version = "60.1", default-features = false, features = ["arrow", "zstd"] }
+kders = "0.1.1"
+noodles-bgzf = { version = "0.52", features = ["libdeflate"] }
+# raw-deflate inflate + CRC32 of BGZF blocks in the BAM record pipeline (util/bgzf_records.rs);
+# libdeflate's C source is vendored and compiled with the cc crate (no cmake/pkg-config).
+libdeflater = "1.25.2"
+crossbeam = { version = "0.8.4", features = [
+  "crossbeam-queue",
+  "crossbeam-channel",
+] }
+sprs = "0.11.4"
+
+# bramble-rs: project spliced genome alignments into transcriptome space.
+# 0.1.2 FASTA-header-keying fix; 0.1.3 rescue SW clip-length cap (per-thread
+# memory bound); 0.1.4 adds FastaDb::from_seqs (rescue from index sequences);
+# 0.1.6 exports SeqMap + FastaDb::from_seq_map for the zero-copy rescue path
+# and makes from_seqs hasher-agnostic (0.1.5's deterministic-hasher signature
+# broke default-RandomState callers — COMBINE-lab/oarfish#68; 0.1.5 yanked).
+# 0.2.0 moves to noodles 0.119 (the noodles-sam/-bam/-bgzf versions used here).
+bramble-rs = "0.2.0"
+
+# rammap: pure-Rust long-read mapper; oarfish's sole read-mapping backend.
+# Published as the `rammap-core` library crate; renamed to `rammap` here so the
+# `rammap::` paths in the source are unchanged. Includes the upstreamed
+# splice-junction loaders (jwanglab/rammap#7).
+#
+# 1.2.0 carries the per-thread DP scratch-cache cap (jwanglab/rammap#9) that bounds
+# genome-mode peak RSS (30.1 -> 24.0 GB @ j48). The cap is default-on (128 MB; tune
+# via `rammap::set_dp_cache_cap_mb` or `RAMMAP_DP_CACHE_CAP_MB`).
+rammap = { package = "rammap-core", version = "1.2.0", default-features = false, features = [
+  "parallel",
+] }
+
+# spearfish: LCP-based long-read transcriptome mapper, an alternative read-mode backend
+# (`--mapper spearfish`).
+spearfish = { version = "0.3.1", default-features = false }
+# The per-thread arenas that `--bump-alloc` sets (the allocator spearfish's own CLI uses).
+nudgy = "0.2"
+# RAD input (`bulk_long_read` records, e.g. from `spearfish map --rad`).
+long-read-rad = "0.3.1"
+
+needletail = "0.7.4"
+indicatif = "0.18.3"
+rustc-hash = "2.1.1"
+# HashTable: class maps that hold class ids into flat key arrays, not owned keys.
+hashbrown = { version = "0.17", default-features = false, features = ["inline-more"] }
+niffler = "3.0.2"
+humantime = "2.3.0"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+
+# mimalloc global allocator. Long-read genome-projection mapping does a lot of
+# small alloc/free across many worker threads; glibc malloc retains/fragments
+# that into large peak RSS. mimalloc handles the churn and returns memory to the
+# OS far better. On by default; disable with `--no-default-features`.
+mimalloc = { version = "0.1.43", default-features = false, optional = true }
+# Direct access to mimalloc's `mi_collect`, to return large freed blocks to the OS promptly.
+libmimalloc-sys = { version = "0.1.49", default-features = false, features = ["extended"], optional = true }
+
+[features]
+default = ["mimalloc"]
+# Use mimalloc as the global allocator (large peak-RSS reduction in genome mode).
+mimalloc = ["dep:mimalloc", "dep:libmimalloc-sys"]
+
+[[bin]]
+name = "oarfish"
+path = "src/main.rs"
+
+[profile.release]
+debug-assertions = false
+lto = "thin"
+panic = "abort"
+
+# The profile that 'cargo dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
