@@ -46,6 +46,30 @@ fn parse_pos_f32(arg: &str) -> anyhow::Result<f32> {
     }
 }
 
+/// Parse a non-negative, finite `f32` (`--end-fit`, where 0 turns the end fit off).
+fn parse_nonneg_f32(arg: &str) -> anyhow::Result<f32> {
+    let v: f32 = arg
+        .parse()
+        .map_err(|_| anyhow::anyhow!("`{}` is not a valid number", arg))?;
+    if v >= 0.0 && v.is_finite() {
+        Ok(v)
+    } else {
+        anyhow::bail!("value must be >= 0, but got {}", v)
+    }
+}
+
+/// How spearfish's end fit measures where a read ends on each candidate transcript
+/// (`--end-fit-from`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EndFitFrom {
+    /// The read taken to continue along the transcript from its last seed, without gaps (no
+    /// alignment is run).
+    Chain,
+    /// The alignment of the read's right end.
+    Alignment,
+}
+
 /// Default denominator `D` of the score→probability conversion `exp((score - best) / D)`
 /// (`--score-prob-denom`). 3 rather than the earlier 5: sharper weighting toward the
 /// best-scoring alignment improved accuracy on simulations with exact truth and on LongBench
@@ -573,6 +597,42 @@ pub struct Args {
     )]
     pub bump_alloc: Option<usize>,
 
+    /// with `--mapper spearfish`, the end fit's weight: points added to the score of the hits
+    /// whose annotated 3' end a read without a poly(A) tail reaches, when the read's candidate
+    /// transcripts end at distinguishable places. It only changes the scores alignments are
+    /// weighed by, not which hits a read has. 0 turns it off; spearfish's orientation evidence
+    /// still acts through the quantification score. The default is the preset's (5).
+    #[arg(
+        long,
+        value_name = "SCORE",
+        value_parser = parse_nonneg_f32,
+        requires = "reads",
+        help_heading = "raw read mode"
+    )]
+    pub end_fit: Option<f32>,
+
+    /// with `--mapper spearfish`, the end fit's tolerance: how far (in homopolymer-compressed
+    /// bases) where a read ends may lie from a transcript's annotated 3' end and still fit
+    /// it. Transcripts whose 3' ends are closer to each other than this are not told apart.
+    /// The default is the preset's (4).
+    #[arg(
+        long,
+        value_name = "BASES",
+        requires = "reads",
+        help_heading = "raw read mode"
+    )]
+    pub end_fit_tol: Option<u32>,
+
+    /// with `--mapper spearfish`, how the end fit measures where a read ends on each
+    /// candidate transcript: `chain` (the read taken to continue along the transcript from
+    /// its last seed, without gaps; no alignment is run) or `alignment` (the alignment of the
+    /// read's right end; more exact, and more mapping time where spans are not extended).
+    /// The default is the preset's: `chain` for `ont-drna` and `alignment` otherwise, but
+    /// `alignment` for every preset with `--model-truncation`, which aligns the read ends
+    /// anyway. Hits whose spans were extended are measured from their alignment either way.
+    #[arg(long, value_enum, requires = "reads", help_heading = "raw read mode")]
+    pub end_fit_from: Option<EndFitFrom>,
+
     /// maximum number of secondary mappings to consider when mapping reads to the transcriptome
     #[arg(
         long,
@@ -658,7 +718,7 @@ pub struct Args {
     /// also extends alignment spans to the read ends where the preset leaves them at the
     /// outermost seeds (`--seq-tech ont-drna` and `pac-bio-hifi`). Longer spans change which reads
     /// `--min-aligned-fraction` drops, so the reads kept differ from a run without
-    /// `--model-truncation`; the log and `meta_info.json` (`spearfish_span_extension`) record
+    /// `--model-truncation`; the log and `meta_info.json` (`spearfish_settings`) record
     /// whether spans were extended and why
     #[arg(
         long,
@@ -766,17 +826,88 @@ pub struct Args {
     #[arg(short, long, hide = true)]
     pub use_kde: bool,
 
-    /// Whether the mapper extended alignment spans to the read ends, and why (set by the
-    /// spearfish backend and by RAD input; recorded in `meta_info.json`).
+    /// The spearfish settings the alignments were made with: span extension and why, the
+    /// orientations mapped and the quantification score's settings (set by the spearfish
+    /// backend and by RAD input; recorded in `meta_info.json` as `spearfish_settings`).
     #[arg(skip)]
     #[serde(skip)]
-    pub span_extension: Option<SpanExtension>,
+    pub spearfish_settings: Option<SpearfishSettings>,
+}
+
+/// The spearfish settings a run's alignments were made with, as `meta_info.json` records them
+/// (`spearfish_settings`). In process they are resolved from the preset and oarfish's options;
+/// for a RAD file they are read from its header, and a setting the header does not carry is
+/// `null`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SpearfishSettings {
+    /// `in_process` (oarfish mapped the reads) or `rad_header` (read from a RAD file).
+    pub source: &'static str,
+    /// The mapper and its version, as the RAD file records them (RAD input only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mapper: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mapper_version: Option<String>,
+    /// The mapping preset.
+    pub preset: String,
+    /// Whether alignment spans were extended to the read ends.
+    pub extend_ends: bool,
+    /// Why (see [`SpanExtension::reason`]).
+    pub extend_ends_reason: &'static str,
+    /// The orientations mapped: `both`, `fwd` or `rev`.
+    pub strands: String,
+    /// Whether the alignments carry quantification scores that may differ from their mapping
+    /// scores (otherwise the two are equal).
+    pub quant_scores: bool,
+    /// The end fit's points (0: off), tolerance and measurement.
+    pub end_fit: Option<f32>,
+    pub end_fit_tol: Option<u32>,
+    pub end_fit_from: Option<EndFitFrom>,
+    /// Whether spearfish's orientation evidence acts through the quantification score.
+    pub orient_quant: Option<bool>,
+}
+
+impl SpearfishSettings {
+    /// The settings from a RAD file's header. The end fit is read from the mapper's parameters
+    /// (spearfish records its options there as JSON); it is `null` where they do not have it.
+    pub fn from_rad(m: &long_read_rad::Meta) -> Self {
+        let params: serde_json::Value = serde_json::from_str(&m.params).unwrap_or_default();
+        let tb = &params["parameters"]["params"]["tiebreak"];
+        SpearfishSettings {
+            source: "rad_header",
+            mapper: Some(m.mapper.clone()),
+            mapper_version: Some(m.mapper_version.clone()),
+            preset: m.preset.clone(),
+            extend_ends: m.ends_extended,
+            extend_ends_reason: "rad_header",
+            strands: m.strands.clone(),
+            quant_scores: m.quant_scores,
+            end_fit: tb["end_fit"].as_f64().map(|v| v as f32),
+            end_fit_tol: tb["end_fit_tol"].as_u64().map(|v| v as u32),
+            end_fit_from: tb["end_fit_chain"].as_bool().map(|chain| {
+                if chain {
+                    EndFitFrom::Chain
+                } else {
+                    EndFitFrom::Alignment
+                }
+            }),
+            orient_quant: tb["orient_quant"].as_bool(),
+        }
+    }
+
+    /// Whether alignment spans were extended, and why, for the log line.
+    pub fn span_extension(&self) -> SpanExtension {
+        SpanExtension {
+            extended: self.extend_ends,
+            reason: self.extend_ends_reason,
+            preset: self.preset.clone(),
+        }
+    }
 }
 
 /// Whether alignment spans reach the read ends, or stop at the outermost seeds, and why. Span
 /// length decides the aligned fraction of a read, and so which reads `--min-aligned-fraction`
-/// drops.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// drops. Recorded in `meta_info.json` as part of [`SpearfishSettings`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpanExtension {
     /// Whether alignment spans were extended to the read ends.
     pub extended: bool,
@@ -904,10 +1035,40 @@ mod tests {
         assert!(s.describe().contains("--min-aligned-fraction"));
         let s = SpanExtension::in_process("hifi".into(), false, false);
         assert_eq!((s.extended, s.reason), (false, "preset_off"));
-        let v = serde_json::to_value(&s).unwrap();
-        assert_eq!(v["extended"], false);
-        assert_eq!(v["reason"], "preset_off");
-        assert_eq!(v["preset"], "hifi");
+    }
+
+    /// A RAD file's settings come from its header, with the end fit from the mapper's
+    /// parameters where they have it.
+    #[test]
+    fn spearfish_settings_from_a_rad_header() {
+        let mut m = long_read_rad::Meta {
+            mapper: "spearfish".into(),
+            mapper_version: "0.3.0".into(),
+            preset: "drna".into(),
+            strands: "fwd".into(),
+            quant_scores: true,
+            params: r#"{"parameters":{"params":{"tiebreak":{"end_fit":5.0,"end_fit_tol":4,
+                "end_fit_chain":true,"orient_quant":true}}}}"#
+                .into(),
+            ..Default::default()
+        };
+        let v = serde_json::to_value(super::SpearfishSettings::from_rad(&m)).unwrap();
+        assert_eq!(v["source"], "rad_header");
+        assert_eq!(v["mapper_version"], "0.3.0");
+        assert_eq!(v["extend_ends"], false);
+        assert_eq!(v["extend_ends_reason"], "rad_header");
+        assert_eq!(v["quant_scores"], true);
+        assert_eq!(v["end_fit"], 5.0);
+        assert_eq!(v["end_fit_tol"], 4);
+        assert_eq!(v["end_fit_from"], "chain");
+        assert_eq!(v["orient_quant"], true);
+        // A file from another mapper, or an older one, has no end fit in its parameters.
+        m.params = "not json".into();
+        m.quant_scores = false;
+        m.ends_extended = true;
+        let s = super::SpearfishSettings::from_rad(&m);
+        assert!(s.end_fit.is_none() && s.end_fit_from.is_none() && !s.quant_scores);
+        assert!(s.span_extension().describe().contains("extended"));
     }
 
     #[test]

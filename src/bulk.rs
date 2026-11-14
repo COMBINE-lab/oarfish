@@ -85,9 +85,9 @@ fn get_json_info(
         "num_bootstraps": &args.num_bootstraps,
         "digest": seqcol_digest.to_json()
     });
-    // Only runs whose mapper reports it (the spearfish backend and RAD input) carry this.
-    if let Some(span) = &args.span_extension {
-        info["spearfish_span_extension"] = json!(span);
+    // Only runs whose alignments spearfish made (in process, or a RAD file) carry this.
+    if let Some(settings) = &args.spearfish_settings {
+        info["spearfish_settings"] = json!(settings);
     }
     info
 }

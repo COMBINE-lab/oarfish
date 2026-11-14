@@ -252,7 +252,11 @@ impl AlnRecordLike for TxMapping {
     fn aln_score(&self) -> Option<i64> {
         match self {
             TxMapping::Rammap(m) => m.aln_score(),
-            TxMapping::Spearfish(m) => Some((m.hit.score * SPEARFISH_SCORE_SCALE).round() as i64),
+            // The quantification score: the mapping score plus evidence spearfish keeps out of
+            // its own ranking (the end fit of reads without a poly(A) tail); equal to it otherwise.
+            TxMapping::Spearfish(m) => {
+                Some((m.hit.quant_score * SPEARFISH_SCORE_SCALE).round() as i64)
+            }
         }
     }
     fn aln_start(&self) -> u32 {

@@ -59,19 +59,33 @@ Besides the options of the run, `P.meta_info.json` records what happened to the 
 
 `kind` is `truncation` (`--model-truncation`) or `standard` (the equivalence-class EM or a per-read EM). `last_rel_change` is the convergence statistic of the last iteration, as that EM measures it. The truncation EM counts each accelerated (SQUAREM) step as three iterations, so its `iterations` can exceed `max_iter` by up to two. Bootstrap replicates are not recorded here.
 
-### Span extension (spearfish backend)
+### spearfish settings (`spearfish_settings`)
 
-Runs with `--mapper spearfish`, and runs on a RAD file, also record whether alignment spans were extended to the read ends:
+Runs with `--mapper spearfish`, and runs on a RAD file, record the spearfish settings their alignments were made with:
 
 ```json
-"spearfish_span_extension": {
-  "extended": true,
-  "reason": "model_truncation",
-  "preset": "drna"
+"spearfish_settings": {
+  "source": "in_process",
+  "preset": "drna",
+  "extend_ends": true,
+  "extend_ends_reason": "model_truncation",
+  "strands": "fwd",
+  "quant_scores": true,
+  "end_fit": 5.0,
+  "end_fit_tol": 4,
+  "end_fit_from": "alignment",
+  "orient_quant": true
 }
 ```
 
-`reason` is `preset` (the mapping preset extends spans), `model_truncation` (the preset leaves spans at the outermost seeds, and `--model-truncation` turned extension on), `preset_off` (the preset leaves them at the outermost seeds), or `rad_header` (a RAD file: as its mapper recorded). The span decides how much of a read counts as aligned, and so which reads `--min-aligned-fraction` drops.
+- `source`: `in_process` (oarfish mapped the reads; the settings are resolved from the preset, `--seq-tech`, and the options) or `rad_header` (read from the RAD file, which then also gives `mapper` and `mapper_version`).
+- `preset`: the mapping preset.
+- `extend_ends`: whether alignment spans were extended to the read ends, and `extend_ends_reason` why: `preset` (the preset extends spans), `model_truncation` (the preset leaves them at the outermost seeds, and `--model-truncation` turned extension on), `preset_off` (the preset leaves them at the outermost seeds), or `rad_header` (a RAD file: as its mapper recorded). The span decides how much of a read counts as aligned, and so which reads `--min-aligned-fraction` drops.
+- `strands`: the read orientations mapped (`both`, `fwd` or `rev`).
+- `quant_scores`: whether the alignments carry quantification scores that can differ from their mapping scores. oarfish weighs alignments by the quantification score; without one it is the mapping score. A RAD file from spearfish before 0.3.0 has none.
+- `end_fit` (points; 0 when off), `end_fit_tol` and `end_fit_from` (`chain` or `alignment`): the end fit, and `orient_quant`: whether spearfish's orientation evidence acts through the quantification score. See [Mapping and quantification scores](/oarfish/guides/mapping-backends/#mapping-and-quantification-scores). For a RAD file they are read from the mapper's parameters in its header, and are `null` where the header does not have them.
+
+Runs on a BAM file have no `spearfish_settings`.
 
 ## Read-level assignment probabilities
 

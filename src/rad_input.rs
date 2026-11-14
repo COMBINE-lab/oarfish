@@ -56,13 +56,12 @@ pub fn read_header(path: &Path, args: &mut Args) -> anyhow::Result<RadHeader> {
         );
         args.score_prob_denom = Some(d);
     }
-    let span_ext = crate::prog_opts::SpanExtension {
-        extended: m.ends_extended,
-        reason: "rad_header",
-        preset: m.preset.clone(),
-    };
-    info!("{}", span_ext.describe());
-    args.span_extension = Some(span_ext);
+    let settings = crate::prog_opts::SpearfishSettings::from_rad(m);
+    info!("{}", settings.span_extension().describe());
+    if m.quant_scores {
+        info!("alignments are weighed by the mapper's quantification scores (qscore)");
+    }
+    args.spearfish_settings = Some(settings);
     if args.model_truncation && !m.ends_extended {
         warn!(
             "--model-truncation: the mapper did not extend alignment spans to the read ends \
@@ -121,8 +120,9 @@ impl AlnRecordLike for RadAln {
     fn aln_span(&self) -> Option<usize> {
         Some(self.a.ref_end.saturating_sub(self.a.ref_start) as usize)
     }
+    /// The quantification score (`qscore`), which is the score in files without it.
     fn aln_score(&self) -> Option<i64> {
-        Some((self.a.score * RAD_SCORE_SCALE).round() as i64)
+        Some((self.a.quant_score * RAD_SCORE_SCALE).round() as i64)
     }
     fn aln_start(&self) -> u32 {
         self.a.ref_start

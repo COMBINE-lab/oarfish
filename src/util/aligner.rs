@@ -303,23 +303,46 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
         }
     };
     let header = spearfish_header(&index)?;
+    let opts = spearfish_map_options(args)?;
+    let settings = spearfish_settings(args, &opts)?;
+    info!("spearfish: {}", settings.span_extension().describe());
+    args.spearfish_settings = Some(settings);
+    let mapper = spearfish::Mapper::new(std::sync::Arc::new(index), &opts)?;
+    Ok((
+        header,
+        None,
+        Some(crate::util::mapper::Mapper::Spearfish(std::sync::Arc::new(
+            mapper,
+        ))),
+        digests,
+    ))
+}
+
+/// The spearfish mapping options: the preset `--seq-tech` names, with oarfish's changes and
+/// the spearfish options given.
+fn spearfish_map_options(args: &Args) -> anyhow::Result<spearfish::MapOptions> {
     let preset = spearfish_preset(&args.seq_tech)?;
     let mut opts = spearfish::MapOptions::preset(preset);
     // The truncation model needs where reads start and end on each transcript, so spans are
     // extended to the read ends even where the preset leaves them at the outermost seeds.
-    let span_ext = crate::prog_opts::SpanExtension::in_process(
-        serde_json::to_value(preset)
-            .ok()
-            .and_then(|v| v.as_str().map(str::to_owned))
-            .unwrap_or_else(|| format!("{preset:?}")),
-        opts.params.ends.is_some(),
-        args.model_truncation,
-    );
+    // This also has the end fit measure every candidate by alignment (drna's chain measurement
+    // only saves alignments that spans left unextended would otherwise run for it alone),
+    // unless `--end-fit-from chain` asks for the chain.
     if args.model_truncation {
         opts.extend_ends(preset);
     }
-    info!("spearfish: {}", span_ext.describe());
-    args.span_extension = Some(span_ext);
+    // The end fit (the quantification score): the preset's settings unless given.
+    if let Some(tb) = &mut opts.params.tiebreak {
+        if let Some(w) = args.end_fit {
+            tb.end_fit = w;
+        }
+        if let Some(t) = args.end_fit_tol {
+            tb.end_fit_tol = t;
+        }
+        if let Some(from) = args.end_fit_from {
+            tb.end_fit_chain = from == crate::prog_opts::EndFitFrom::Chain;
+        }
+    }
     // Only hits within the score filter of the best usually reach the EM, so only those are
     // extended. (Reporting only those lost reads whose best hit fails the span filters: oarfish
     // then rescales the threshold to the best hit that passes.)
@@ -335,15 +358,45 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
             Strand::Unknown => spearfish::Strands::Both,
         };
     }
-    let mapper = spearfish::Mapper::new(std::sync::Arc::new(index), &opts)?;
-    Ok((
-        header,
-        None,
-        Some(crate::util::mapper::Mapper::Spearfish(std::sync::Arc::new(
-            mapper,
-        ))),
-        digests,
-    ))
+    Ok(opts)
+}
+
+/// The spearfish settings recorded in `meta_info.json`: the preset, span extension and why,
+/// the orientations mapped and the quantification score's settings, as resolved from the
+/// preset and oarfish's options.
+fn spearfish_settings(
+    args: &Args,
+    opts: &spearfish::MapOptions,
+) -> anyhow::Result<crate::prog_opts::SpearfishSettings> {
+    use crate::prog_opts::{EndFitFrom, SpanExtension, SpearfishSettings};
+    let preset = spearfish_preset(&args.seq_tech)?;
+    let span = SpanExtension::in_process(
+        opts.preset.name().to_string(),
+        spearfish::MapOptions::preset(preset).params.ends.is_some(),
+        args.model_truncation,
+    );
+    debug_assert_eq!(span.extended, opts.params.ends.is_some());
+    let tb = opts.params.tiebreak.as_ref();
+    Ok(SpearfishSettings {
+        source: "in_process",
+        mapper: None,
+        mapper_version: None,
+        preset: span.preset,
+        extend_ends: opts.params.ends.is_some(),
+        extend_ends_reason: span.reason,
+        strands: opts.params.strands.name().to_string(),
+        quant_scores: opts.quant_scores(),
+        end_fit: Some(tb.map_or(0.0, |tb| tb.end_fit)),
+        end_fit_tol: tb.map(|tb| tb.end_fit_tol),
+        end_fit_from: tb.map(|tb| {
+            if tb.end_fit_chain {
+                EndFitFrom::Chain
+            } else {
+                EndFitFrom::Alignment
+            }
+        }),
+        orient_quant: tb.map(|tb| tb.orient_quant),
+    })
 }
 
 fn spearfish_header(index: &spearfish::Index) -> anyhow::Result<noodles_sam::header::Header> {
@@ -681,4 +734,158 @@ pub(crate) fn rescue_db_from_genome_index(
         seqs.insert(name, ascii);
     }
     Some(bramble_rs::fasta::FastaDb::from_seq_map(seqs))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    fn opts(extra: &[&str]) -> spearfish::MapOptions {
+        let mut v = vec!["oarfish", "--mapper", "spearfish", "--reads", "r.fq"];
+        v.extend_from_slice(&["--index", "t.sfi", "-o", "out"]);
+        v.extend_from_slice(extra);
+        spearfish_map_options(&Args::try_parse_from(v).unwrap()).unwrap()
+    }
+
+    fn end_fit(o: &spearfish::MapOptions) -> (f32, u32, bool) {
+        let tb = o.params.tiebreak.as_ref().unwrap();
+        (tb.end_fit, tb.end_fit_tol, tb.end_fit_chain)
+    }
+
+    /// Without the end-fit options the options are the preset's, and each option sets its
+    /// setting alone.
+    #[test]
+    fn end_fit_options_default_to_the_preset() {
+        for (tech, p) in [
+            ("ont-cdna", spearfish::Preset::Ont),
+            ("ont-drna", spearfish::Preset::Drna),
+            ("pac-bio-hifi", spearfish::Preset::Hifi),
+        ] {
+            let o = opts(&["--seq-tech", tech]);
+            assert_eq!(
+                end_fit(&o),
+                end_fit(&spearfish::MapOptions::preset(p)),
+                "{tech}"
+            );
+        }
+        let drna = |extra: &[&str]| {
+            let mut v = vec!["--seq-tech", "ont-drna"];
+            v.extend_from_slice(extra);
+            end_fit(&opts(&v))
+        };
+        let (w, t, chain) = drna(&[]);
+        assert!(w > 0.0 && chain);
+        assert_eq!(drna(&["--end-fit-from", "alignment"]), (w, t, false));
+        assert_eq!(drna(&["--end-fit", "0"]), (0.0, t, true));
+        assert_eq!(
+            drna(&["--end-fit", "2.5", "--end-fit-tol", "6"]),
+            (2.5, 6, true)
+        );
+        let ont = end_fit(&opts(&[
+            "--seq-tech",
+            "ont-cdna",
+            "--end-fit-from",
+            "chain",
+        ]));
+        assert!(ont.2);
+    }
+
+    /// `--model-truncation` extends spans, and the end fit then measures by alignment in
+    /// every preset, unless `--end-fit-from chain` is given.
+    #[test]
+    fn truncation_model_measures_the_end_fit_by_alignment() {
+        for tech in ["ont-cdna", "ont-drna", "pac-bio-hifi"] {
+            let o = opts(&["--seq-tech", tech, "--model-truncation"]);
+            assert!(o.params.ends.is_some(), "{tech}");
+            assert!(!end_fit(&o).2, "{tech}");
+        }
+        let o = opts(&[
+            "--seq-tech",
+            "ont-drna",
+            "--model-truncation",
+            "--end-fit-from",
+            "chain",
+        ]);
+        assert!(o.params.ends.is_some() && end_fit(&o).2);
+    }
+
+    fn settings(extra: &[&str]) -> serde_json::Value {
+        let mut v = vec!["oarfish", "--mapper", "spearfish", "--reads", "r.fq"];
+        v.extend_from_slice(&["--index", "t.sfi", "-o", "out"]);
+        v.extend_from_slice(extra);
+        let args = Args::try_parse_from(v).unwrap();
+        let o = spearfish_map_options(&args).unwrap();
+        serde_json::to_value(spearfish_settings(&args, &o).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn end_fit_options_are_recorded() {
+        let s = settings(&["--seq-tech", "ont-drna", "--end-fit-tol", "3"]);
+        assert_eq!(s["source"], "in_process");
+        assert_eq!(s["preset"], "drna");
+        assert_eq!(s["end_fit_tol"], 3);
+        assert_eq!(s["end_fit_from"], "chain");
+        assert_eq!(s["extend_ends"], false);
+        assert_eq!(s["extend_ends_reason"], "preset_off");
+        assert_eq!(s["strands"], "fwd");
+        assert_eq!(s["quant_scores"], true);
+        assert!(s.get("mapper").is_none());
+        let s = settings(&["--seq-tech", "ont-cdna", "--end-fit", "0"]);
+        assert_eq!(s["end_fit"], 0.0);
+        assert_eq!(s["end_fit_from"], "alignment");
+        assert_eq!(s["extend_ends_reason"], "preset");
+        assert_eq!(s["strands"], "both");
+        // The orientation evidence still acts through the quantification score.
+        assert_eq!(s["orient_quant"], true);
+        assert_eq!(s["quant_scores"], true);
+    }
+
+    /// Span extension and why are recorded with the other settings (and agree with the
+    /// options the mapper is made with).
+    #[test]
+    fn span_extension_is_recorded_with_the_settings() {
+        for (tech, extra, ext, reason) in [
+            ("ont-cdna", None, true, "preset"),
+            ("ont-cdna", Some("--model-truncation"), true, "preset"),
+            ("ont-drna", None, false, "preset_off"),
+            (
+                "ont-drna",
+                Some("--model-truncation"),
+                true,
+                "model_truncation",
+            ),
+            ("pac-bio-hifi", None, false, "preset_off"),
+            (
+                "pac-bio-hifi",
+                Some("--model-truncation"),
+                true,
+                "model_truncation",
+            ),
+        ] {
+            let mut v = vec!["--seq-tech", tech];
+            v.extend(extra);
+            let s = settings(&v);
+            assert_eq!(s["extend_ends"], ext, "{tech} {extra:?}");
+            assert_eq!(s["extend_ends_reason"], reason, "{tech} {extra:?}");
+        }
+    }
+
+    #[test]
+    fn end_fit_options_are_checked() {
+        let parse = |extra: &[&str]| {
+            let mut v = vec!["oarfish", "--mapper", "spearfish", "--reads", "r.fq"];
+            v.extend_from_slice(&["--index", "t.sfi", "-o", "out", "--seq-tech", "ont-drna"]);
+            v.extend_from_slice(extra);
+            Args::try_parse_from(v)
+        };
+        assert!(parse(&["--end-fit", "-1"]).is_err());
+        assert!(parse(&["--end-fit", "inf"]).is_err());
+        assert!(parse(&["--end-fit-tol", "-1"]).is_err());
+        assert!(parse(&["--end-fit-from", "both"]).is_err());
+        // They need reads to map.
+        assert!(
+            Args::try_parse_from(["oarfish", "-a", "x.rad", "-o", "o", "--end-fit", "1"]).is_err()
+        );
+    }
 }
