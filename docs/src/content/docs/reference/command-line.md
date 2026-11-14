@@ -73,7 +73,8 @@ indexing:
 coverage model:
       --coverage-model <MODEL>     none | logistic | truncation (where reads land on transcripts) [default: none]
       --model-coverage             same as --coverage-model logistic
-      --model-truncation           same as --coverage-model truncation
+      --model-truncation           same as --coverage-model truncation (with --mapper spearfish,
+                                   also extends spans to the read ends; see the models guide)
   -k, --growth-rate <GROWTH_RATE>  logistic `k` [default: 2]
   -b, --bin-width <BIN_WIDTH>      coverage bin width [default: 100]
 
@@ -82,7 +83,7 @@ output read-txps probabilities:
       --display-thresh <DISPLAY_THRESH>  min posterior prob to write to .prob, or 'none' [default: 0.000001]
 
 EM:
-      --max-em-iter <MAX_EM_ITER>            max EM iterations [default: 1000]
+      --max-em-iter <MAX_EM_ITER>            max EM iterations (default 1000; 5000 with --model-truncation)
       --convergence-thresh <CONVERGENCE_THRESH>  EM convergence threshold [default: 0.001]
       --per-read-em                          per-read EM even without a per-read model term
       --presence-model <PRESENCE_MODEL>      none | spike-slab | bayes (experimental) [default: none]

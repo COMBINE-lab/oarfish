@@ -11,6 +11,46 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Added
+
+- **A warning when the EM stops at its iteration limit before converging**, in the log and
+  in the `warnings` array of `meta_info.json`, for every bulk EM: `em_not_converged` for the
+  default equivalence-class EM and the per-read EMs, `truncation_em_not_converged` for the
+  truncation EM, each with its own advice. Its `fraction` is the EM's last convergence
+  statistic and its `threshold` is `--convergence-thresh`. Estimates do not change. The
+  default EM can stop just short of the threshold at 1,000 iterations on inputs with many
+  transcripts, so some runs that gave no warning in 0.12.1 now give this one.
+- **`em` in `meta_info.json`**: which EM ran (`standard` or `truncation`), its iterations and
+  limit, whether it converged, and its last convergence statistic, for every bulk run. The log
+  also reports the iteration count (`EM finished in ... (N iterations)`).
+- **`spearfish_span_extension` in `meta_info.json`**, and a line in the log at the start of
+  the run: with `--mapper spearfish` (and for RAD input), whether alignment spans were extended
+  to the read ends, and why (`preset`, `model_truncation`, `preset_off`, `rad_header`). Spans
+  decide how much of a read counts as aligned, and so which reads `--min-aligned-fraction`
+  drops.
+- **Trimming guidance for the aligned-fraction filter** (docs site and README): on untrimmed
+  or older direct cDNA reads, `--min-aligned-fraction` can drop a large share of the reads, and
+  trimming adapters and primers (keeping the poly(A) tails) reduces that. For gene-level work
+  `--filter-group no-filters` or a lower `-m` may suit; for transcript-level estimates the
+  default agreed better with short-read estimates in our tests. The `aligned_fraction_filter`
+  warning now says the same and links to it. The filter's default is unchanged.
+
+### Changed
+
+- **The truncation EM's convergence test leaves out transcripts with 0.01 reads or fewer**
+  (salmon's cutoff; it was 1e-5 reads), and still counts relative changes in either
+  direction. Abundances decaying toward zero kept the test from passing for 2,300-2,700
+  iterations, so every `--model-truncation` run stopped at the 1,000-iteration limit. It now
+  converges after about 1,050-1,250 iterations. Estimates move by less than 0.02% of the reads,
+  and spike-in and simulation accuracy is the same to four digits.
+- **With `--model-truncation`, `--max-em-iter` defaults to 5,000** (1,000 otherwise, as
+  before), since the truncation EM needs a little more than 1,000 iterations to converge. An
+  explicit `--max-em-iter` is used as given. The extra iterations cost little: the truncation
+  EM took 0.03-0.13 s longer on our test sets.
+- **The `--model-truncation` help text says that, with `--mapper spearfish`, it extends
+  alignment spans to the read ends** for the `ont-drna` and `pac-bio-hifi` presets (as it did
+  in 0.12.1; the behaviour is unchanged), and so changes which reads `-m` drops.
+
 ## 0.12.1 - 2026-11-13
 
 ### Added

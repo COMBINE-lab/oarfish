@@ -52,6 +52,14 @@ fn parse_pos_f32(arg: &str) -> anyhow::Result<f32> {
 /// (see the CHANGELOG); `--score-prob-denom 5` restores the old behaviour.
 pub const DEFAULT_SCORE_PROB_DENOM: f32 = 3.0;
 
+/// Default `--max-em-iter`.
+pub const DEFAULT_MAX_EM_ITER: u32 = 1000;
+/// Default `--max-em-iter` with `--model-truncation`. With its convergence test (see
+/// `crate::util::constants::TRUNC_CONV_MIN_READS`) the truncation EM typically converges after
+/// 1,000-1,300 iterations, just past [`DEFAULT_MAX_EM_ITER`]; iterations on its component
+/// layout are cheap.
+pub const DEFAULT_MAX_EM_ITER_TRUNCATION: u32 = 5000;
+
 /// Model of where reads land on transcripts (`--coverage-model`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum, Serialize)]
 pub enum CoverageModel {
@@ -99,6 +107,17 @@ impl Args {
         self.model_coverage = model == CoverageModel::Logistic;
         self.model_truncation = model == CoverageModel::Truncation;
         Ok(model)
+    }
+
+    /// The EM's iteration limit: `--max-em-iter` if given, else [`DEFAULT_MAX_EM_ITER`], or
+    /// [`DEFAULT_MAX_EM_ITER_TRUNCATION`] with the truncation model (after
+    /// [`Args::resolve_coverage_model`]).
+    pub fn em_iter_limit(&self) -> u32 {
+        self.max_em_iter.unwrap_or(if self.model_truncation {
+            DEFAULT_MAX_EM_ITER_TRUNCATION
+        } else {
+            DEFAULT_MAX_EM_ITER
+        })
     }
 }
 
@@ -635,7 +654,12 @@ pub struct Args {
     /// model where reads land on transcripts: a mixture of 3'-anchored, 5'-anchored, full-length
     /// and uniformly placed reads, whose weights, read-length laws and end-gap laws are learned
     /// from the data in the EM; the fitted mixture is written to the log (same as
-    /// `--coverage-model truncation`)
+    /// `--coverage-model truncation`). With the spearfish backend (`--mapper spearfish`), this
+    /// also extends alignment spans to the read ends where the preset leaves them at the
+    /// outermost seeds (`--seq-tech ont-drna` and `pac-bio-hifi`). Longer spans change which reads
+    /// `--min-aligned-fraction` drops, so the reads kept differ from a run without
+    /// `--model-truncation`; the log and `meta_info.json` (`spearfish_span_extension`) record
+    /// whether spans were extended and why
     #[arg(
         long,
         help_heading = "coverage model",
@@ -678,9 +702,11 @@ pub struct Args {
     )]
     pub display_thresh: f64,
 
-    /// maximum number of iterations for which to run the EM algorithm
-    #[arg(long, help_heading = "EM", default_value_t = 1000)]
-    pub max_em_iter: u32,
+    /// maximum number of iterations for which to run the EM algorithm (default 1000; 5000 with
+    /// `--model-truncation`). A run that reaches the limit before converging gets a warning in
+    /// the log and in `meta_info.json`
+    #[arg(long, help_heading = "EM")]
+    pub max_em_iter: Option<u32>,
 
     /// the EM stops once the largest relative change in a transcript's abundance between two
     /// rounds is below this value
@@ -739,11 +765,81 @@ pub struct Args {
     /// use a KDE model of the observed fragment length distribution
     #[arg(short, long, hide = true)]
     pub use_kde: bool,
+
+    /// Whether the mapper extended alignment spans to the read ends, and why (set by the
+    /// spearfish backend and by RAD input; recorded in `meta_info.json`).
+    #[arg(skip)]
+    #[serde(skip)]
+    pub span_extension: Option<SpanExtension>,
+}
+
+/// Whether alignment spans reach the read ends, or stop at the outermost seeds, and why. Span
+/// length decides the aligned fraction of a read, and so which reads `--min-aligned-fraction`
+/// drops.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SpanExtension {
+    /// Whether alignment spans were extended to the read ends.
+    pub extended: bool,
+    /// Why: `preset` (the mapping preset extends them), `model_truncation` (the preset leaves
+    /// them at the outermost seeds and `--model-truncation` turned extension on), `preset_off`
+    /// (the preset leaves them at the outermost seeds), or `rad_header` (RAD input: as the
+    /// mapper recorded in the file).
+    pub reason: &'static str,
+    /// The mapper's preset.
+    pub preset: String,
+}
+
+impl SpanExtension {
+    /// The spearfish backend's setting: extended if the preset extends spans (`preset_extends`)
+    /// or if the truncation model is on.
+    pub fn in_process(preset: String, preset_extends: bool, model_truncation: bool) -> Self {
+        let (extended, reason) = match (preset_extends, model_truncation) {
+            (true, _) => (true, "preset"),
+            (false, true) => (true, "model_truncation"),
+            (false, false) => (false, "preset_off"),
+        };
+        SpanExtension {
+            extended,
+            reason,
+            preset,
+        }
+    }
+
+    /// One line for the log.
+    pub fn describe(&self) -> String {
+        match self.reason {
+            "preset" => format!(
+                "alignment spans extended to the read ends (as preset {} does)",
+                self.preset
+            ),
+            "model_truncation" => format!(
+                "alignment spans extended to the read ends because of --model-truncation \
+                 (preset {} leaves them at the outermost seeds). Longer spans change which \
+                 reads --min-aligned-fraction drops, so the reads kept differ from a run \
+                 without --model-truncation",
+                self.preset
+            ),
+            "rad_header" if self.extended => format!(
+                "alignment spans extended to the read ends by the mapper (preset {}, from the \
+                 RAD header)",
+                self.preset
+            ),
+            "rad_header" => format!(
+                "alignment spans end at the outermost seeds (preset {}, from the RAD header)",
+                self.preset
+            ),
+            _ => format!(
+                "alignment spans end at the outermost seeds (preset {}; --model-truncation \
+                 would extend them)",
+                self.preset
+            ),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Args;
+    use super::{Args, DEFAULT_MAX_EM_ITER, DEFAULT_MAX_EM_ITER_TRUNCATION};
     use clap::Parser;
 
     /// `--coverage-model` and its shorthands resolve to one model; contradictions and the
@@ -794,6 +890,55 @@ mod tests {
             resolve(&["--single-cell", "--model-coverage"]).unwrap(),
             (M::Logistic, true, false)
         );
+    }
+
+    #[test]
+    fn span_extension_records_why() {
+        use super::SpanExtension;
+        let s = SpanExtension::in_process("ont".into(), true, false);
+        assert_eq!((s.extended, s.reason), (true, "preset"));
+        let s = SpanExtension::in_process("ont".into(), true, true);
+        assert_eq!((s.extended, s.reason), (true, "preset"));
+        let s = SpanExtension::in_process("drna".into(), false, true);
+        assert_eq!((s.extended, s.reason), (true, "model_truncation"));
+        assert!(s.describe().contains("--min-aligned-fraction"));
+        let s = SpanExtension::in_process("hifi".into(), false, false);
+        assert_eq!((s.extended, s.reason), (false, "preset_off"));
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["extended"], false);
+        assert_eq!(v["reason"], "preset_off");
+        assert_eq!(v["preset"], "hifi");
+    }
+
+    #[test]
+    fn em_iter_limit_depends_on_the_model_unless_given() {
+        let limit = |extra: &[&str]| {
+            let mut v = vec![
+                "oarfish",
+                "-a",
+                "x.bam",
+                "--seq-tech",
+                "ont-cdna",
+                "-o",
+                "out",
+            ];
+            v.extend_from_slice(extra);
+            let mut a = Args::try_parse_from(v).expect("valid arguments");
+            a.resolve_coverage_model().expect("a valid model");
+            a.em_iter_limit()
+        };
+        assert_eq!(limit(&[]), DEFAULT_MAX_EM_ITER);
+        assert_eq!(limit(&["--model-coverage"]), DEFAULT_MAX_EM_ITER);
+        assert_eq!(
+            limit(&["--model-truncation"]),
+            DEFAULT_MAX_EM_ITER_TRUNCATION
+        );
+        assert_eq!(
+            limit(&["--coverage-model", "truncation"]),
+            DEFAULT_MAX_EM_ITER_TRUNCATION
+        );
+        assert_eq!(limit(&["--max-em-iter", "700"]), 700);
+        assert_eq!(limit(&["--model-truncation", "--max-em-iter", "700"]), 700);
     }
 
     #[test]

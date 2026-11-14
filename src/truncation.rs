@@ -45,6 +45,7 @@ use tracing::{info, span, trace};
 use crate::presence::{Presence, PresenceOpts};
 use crate::util::constants;
 use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
+use crate::util::run_warnings::EmConvergence;
 use std::borrow::Cow;
 
 /// The alignment store as the parameter-estimating EM sees it: reads in store order, read `r`
@@ -1127,8 +1128,13 @@ fn step(
         .reduce(Stats::default, Stats::merge)
 }
 
-/// Abundance estimates (expected reads per target) under the truncation-aware model.
-pub fn em(em_info: &EMInfo, presence: Option<PresenceOpts>, nthreads: usize) -> Vec<f64> {
+/// Abundance estimates (expected reads per target) under the truncation-aware model, and how
+/// the EM over all reads stopped.
+pub fn em(
+    em_info: &EMInfo,
+    presence: Option<PresenceOpts>,
+    nthreads: usize,
+) -> (Vec<f64>, EmConvergence) {
     let span = span!(tracing::Level::INFO, "em_truncation");
     let _guard = span.enter();
     let pool = rayon::ThreadPoolBuilder::new()
@@ -1145,7 +1151,7 @@ pub fn em(em_info: &EMInfo, presence: Option<PresenceOpts>, nthreads: usize) -> 
                 (s.f.off.len() - 1).to_formatted_string(&Locale::en)
             );
         }
-        let (counts, par) = fit(em_info, &f, sample.as_ref(), None, presence);
+        let (counts, par, conv) = fit(em_info, &f, sample.as_ref(), None, presence);
         info!(
             "truncation model: 3'-anchored {:.3} (mean length {:.0} nt), 5'-anchored {:.3} \
              (mean length {:.0} nt), full length {:.3}, uniformly placed {:.3} (mean length {:.0} nt); \
@@ -1160,7 +1166,7 @@ pub fn em(em_info: &EMInfo, presence: Option<PresenceOpts>, nthreads: usize) -> 
             par.k3,
             par.k5
         );
-        counts
+        (counts, conv)
     })
 }
 
@@ -1184,14 +1190,14 @@ impl Sample {
 /// Abundances and positional parameters for the reads of `f`, each counted `mult` times (once
 /// if `None`): with a `sample`, the parameters are estimated on it and the EM over all reads
 /// starts with them fixed, from the sample's abundances ([`Start::Frozen`]); else they are
-/// estimated on all reads.
+/// estimated on all reads. Also returns how the EM over all reads stopped.
 fn fit(
     em_info: &EMInfo,
     f: &Flat,
     sample: Option<&Sample>,
     mult: Option<&[u32]>,
     presence: Option<PresenceOpts>,
-) -> (Vec<f64>, Params) {
+) -> (Vec<f64>, Params, EmConvergence) {
     let nreads = f.off.len() - 1;
     let start = match sample {
         Some(s) => {
@@ -1204,7 +1210,7 @@ fn fit(
                 ),
                 _ => (nreads as f64, (s.f.off.len() - 1) as f64),
             };
-            let (a, par) = run_from(
+            let (a, par, _) = run_from(
                 em_info,
                 &s.f,
                 sub_mult.as_deref(),
@@ -1250,7 +1256,7 @@ pub fn bootstrap(
                 for r in crate::bootstrap::get_sample_inds(nreads, &mut rng) {
                     mult[r] += 1;
                 }
-                let (counts, par) = fit(em_info, &f, sample.as_ref(), Some(&mult), presence);
+                let (counts, par, _) = fit(em_info, &f, sample.as_ref(), Some(&mult), presence);
                 info!("bootstrap replicate {i}: {par:?}");
                 counts
             })
@@ -1840,7 +1846,8 @@ fn sample_reads() -> usize {
 /// The frozen-weight EM on the component layout of `crate::em_components`, with SQUAREM per
 /// component: from iteration `niter` and abundances `init` up to `max_iter`, with `plain_first`
 /// plain EM steps first (see [`PLAIN_FIRST`]). Each alignment's weight is its score probability times its
-/// positional likelihood under `par`, as in [`Fixed`], computed as the layout is built.
+/// positional likelihood under `par`, as in [`Fixed`], computed as the layout is built. Also
+/// returns how the loop stopped.
 #[allow(clippy::too_many_arguments)]
 fn frozen_on_components(
     em_info: &EMInfo,
@@ -1851,7 +1858,7 @@ fn frozen_on_components(
     niter: u32,
     max_iter: u32,
     plain_first: u32,
-) -> Vec<f64> {
+) -> (Vec<f64>, EmConvergence) {
     let t0 = std::time::Instant::now();
     let e = Exps::new(par, f.max_len());
     let plan = crate::em_components::Plan::new_by_size(
@@ -1886,7 +1893,14 @@ fn frozen_on_components(
         "truncation EM: {} iterations; SQUAREM cycles over components {} extrapolated, {} rejected, {} plain",
         rep.niter, rep.acc, rep.rej, rep.plain
     );
-    out
+    let conv = EmConvergence {
+        niter: rep.niter,
+        max_iter,
+        converged: rep.converged,
+        rel_diff: rep.rel_diff,
+        thresh: em_info.convergence_thresh,
+    };
+    (out, conv)
 }
 
 fn run_from(
@@ -1895,7 +1909,7 @@ fn run_from(
     mult: Option<&[u32]>,
     presence: Option<PresenceOpts>,
     start: Start,
-) -> (Vec<f64>, Params) {
+) -> (Vec<f64>, Params, EmConvergence) {
     let tinfo: &[TranscriptInfo] = em_info.txp_info;
     let total_weight = em_info.eq_map.num_aligned_reads() as f64;
     let init = match (&start, &em_info.init_abundances) {
@@ -1920,7 +1934,7 @@ fn run_from(
     if let (true, Start::Frozen(par, _)) = (on_components, &start) {
         let init: Vec<f64> = prev.iter().map(|x| x.load(Ordering::Relaxed)).collect();
         drop((prev, curr));
-        let counts = frozen_on_components(
+        let (counts, conv) = frozen_on_components(
             em_info,
             f,
             par,
@@ -1930,7 +1944,7 @@ fn run_from(
             em_info.max_iter,
             plain_first,
         );
-        return (counts, (**par).clone());
+        return (counts, (**par).clone(), conv);
     }
     let (mut par, mut lay, mut frozen, estimate_only) = match start {
         Start::Frozen(par, _) => {
@@ -1966,6 +1980,7 @@ fn run_from(
     // The fit's per-nt tables, refilled in place each iteration (allocated here, on the
     // calling thread, once).
     let mut exps: Option<Exps> = None;
+    let (mut converged, mut last_rel_diff) = (false, f64::INFINITY);
     while niter < em_info.max_iter {
         if let Some(p) = &mut pres {
             refresh_presence(
@@ -2018,26 +2033,27 @@ fn run_from(
                     );
                     if estimate_only {
                         let a = curr.iter().map(|x| x.load(Ordering::Relaxed)).collect();
-                        return (a, par);
+                        // Only the parameters are wanted: the EM did not run to convergence.
+                        let conv = EmConvergence {
+                            niter: niter + 1,
+                            max_iter: em_info.max_iter,
+                            converged: false,
+                            rel_diff: f64::INFINITY,
+                            thresh: em_info.convergence_thresh,
+                        };
+                        return (a, par, conv);
                     }
                     if on_components {
                         // Continue from this iteration's result as the loop would: stop if
                         // its convergence test passes, else go on from the next iteration.
                         drop(lay);
-                        let mut rel_diff = 0.0_f64;
-                        for (p, c) in prev.iter().zip(&curr) {
-                            let pc = p.load(Ordering::Relaxed);
-                            if pc > constants::MIN_READ_THRESH {
-                                rel_diff =
-                                    rel_diff.max((c.load(Ordering::Relaxed) - pc).abs() / pc);
-                            }
-                        }
+                        let rel_diff = max_rel_change(&prev, &curr);
                         let done = rel_diff < em_info.convergence_thresh && niter > 1;
                         let init: Vec<f64> =
                             curr.iter().map(|x| x.load(Ordering::Relaxed)).collect();
                         drop((prev, curr));
                         let max_iter = if done { niter + 1 } else { em_info.max_iter };
-                        let counts = frozen_on_components(
+                        let (counts, mut conv) = frozen_on_components(
                             em_info,
                             f,
                             &par,
@@ -2047,7 +2063,16 @@ fn run_from(
                             max_iter,
                             0,
                         );
-                        return (counts, par);
+                        if done {
+                            conv = EmConvergence {
+                                niter,
+                                max_iter: em_info.max_iter,
+                                converged: true,
+                                rel_diff,
+                                thresh: em_info.convergence_thresh,
+                            };
+                        }
+                        return (counts, par, conv);
                     }
                     let fx = Fixed::new(f, &par);
                     lay = std::mem::replace(&mut lay, Layout::Atomic).frozen(&fx);
@@ -2055,20 +2080,13 @@ fn run_from(
                 }
             }
         }
-        // Largest relative change in either direction. (The per-read EM counts increases only;
-        // after a SQUAREM extrapolation most of the motion is in decreases, which that test
-        // ignores, so it would stop at an arbitrary point.)
-        let mut rel_diff = 0.0_f64;
-        for (p, c) in prev.iter().zip(&curr) {
-            let pc = p.load(Ordering::Relaxed);
-            if pc > constants::MIN_READ_THRESH {
-                rel_diff = rel_diff.max((c.load(Ordering::Relaxed) - pc).abs() / pc);
-            }
-        }
+        let rel_diff = max_rel_change(&prev, &curr);
+        last_rel_diff = rel_diff;
         std::mem::swap(&mut prev, &mut curr);
         curr.par_iter()
             .for_each(|x| x.store(0.0, Ordering::Relaxed));
         if rel_diff < em_info.convergence_thresh && niter > 1 {
+            converged = true;
             break;
         }
         niter += 1;
@@ -2137,10 +2155,34 @@ fn run_from(
             );
         }
     }
+    let conv = EmConvergence {
+        niter,
+        max_iter: em_info.max_iter,
+        converged,
+        rel_diff: last_rel_diff,
+        thresh: em_info.convergence_thresh,
+    };
     (
         curr.iter().map(|x| x.load(Ordering::Relaxed)).collect(),
         par,
+        conv,
     )
+}
+
+/// The truncation EM's convergence statistic between two rounds: the largest relative change in
+/// either direction, over transcripts above [`constants::TRUNC_CONV_MIN_READS`] (see
+/// `crate::em_components::rel_change`). Unlike the plain EMs, which count increases only, it
+/// counts decreases: after a SQUAREM extrapolation most of the motion is in decreases, which an
+/// increases-only test ignores, so it would stop at an arbitrary point. Transcripts at or below
+/// the floor are left out: their abundances decay geometrically toward zero, so their relative
+/// change stays large for thousands of iterations while they hold a negligible number of reads.
+fn max_rel_change(prev: &[AtomicF64], curr: &[AtomicF64]) -> f64 {
+    prev.iter().zip(curr).fold(0.0_f64, |rd, (p, c)| {
+        rd.max(crate::em_components::rel_change(
+            p.load(Ordering::Relaxed),
+            c.load(Ordering::Relaxed),
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -2546,7 +2588,7 @@ mod tests {
                     abs: true,
                 };
                 let (want, _) = ref_em(&cl, &init, o);
-                let got =
+                let (got, _) =
                     frozen_on_components(&emi, &f, &par, &init, m, niter0, max_iter, u32::MAX);
                 assert_close(&got, &want, rtol, &format!("{niter0} {max_iter} {thresh}"));
             }
@@ -2555,7 +2597,12 @@ mod tests {
             let (fixed, _) = ref_em(&cl, &init, o);
             let emi = em_info(&store, &txps, 20_000, 1e-10);
             for plain_first in [0, PLAIN_FIRST] {
-                let got = frozen_on_components(&emi, &f, &par, &init, m, 0, 20_000, plain_first);
+                let (got, conv) =
+                    frozen_on_components(&emi, &f, &par, &init, m, 0, 20_000, plain_first);
+                assert!(
+                    conv.converged && conv.niter < 20_000,
+                    "SQUAREM {plain_first}"
+                );
                 assert_close(&got, &fixed, 1e-5, &format!("SQUAREM {plain_first}"));
                 check_invariants(&got, &unpositioned(&reads), m, ntx, "frozen SQUAREM");
             }
@@ -2574,9 +2621,10 @@ mod tests {
         let mut txps = crate::em_tests::tinfo(&LENS);
         let store = pstore(&h, &reads, &mut txps);
         let emi = em_info(&store, &txps, 1000, 1e-8);
-        let one = em(&emi, None, 1);
+        let (one, conv) = em(&emi, None, 1);
         check_invariants(&one, &plain, None, ntx, "em 1");
-        let four = em(&emi, None, 4);
+        assert!(conv.converged && conv.niter < 1000, "{conv:?}");
+        let (four, _) = em(&emi, None, 4);
         assert_close(&four, &one, 1e-6, "em 4 threads");
         let pres = crate::presence::PresenceOpts {
             kind: crate::presence::PresenceKind::SpikeSlab,
@@ -2584,7 +2632,7 @@ mod tests {
             warmup: 5,
             period: 5,
         };
-        check_invariants(&em(&emi, Some(pres), 2), &plain, None, ntx, "presence");
+        check_invariants(&em(&emi, Some(pres), 2).0, &plain, None, ntx, "presence");
         for p in [None, Some(pres)] {
             for b in bootstrap(&emi, p, 2, 2) {
                 assert!(b.iter().all(|&x| x.is_finite() && x >= 0.0));
@@ -2617,13 +2665,13 @@ mod tests {
             k: 3,
         };
         assert_eq!(s.f.off.len() - 1, reads.len().div_ceil(3));
-        let (a, pa) = super::fit(&emi, &f, Some(&s), None, None);
+        let (a, pa, _) = super::fit(&emi, &f, Some(&s), None, None);
         let ones = vec![1_u32; reads.len()];
-        let (b, pb) = super::fit(&emi, &f, Some(&s), Some(&ones), None);
+        let (b, pb, _) = super::fit(&emi, &f, Some(&s), Some(&ones), None);
         check_invariants(&a, &plain, None, ntx, "sampled fit");
         assert_close(&b, &a, 1e-9, "all-ones multiplicities");
         assert!(moved(&pa, &pb) < 1e-9, "{pa:?} {pb:?}");
-        let (c, _) = super::fit(&emi, &f, None, None, None);
+        let (c, _, _) = super::fit(&emi, &f, None, None, None);
         check_invariants(&c, &plain, None, ntx, "full fit");
     }
 

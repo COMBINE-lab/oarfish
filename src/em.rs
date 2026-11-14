@@ -2,6 +2,7 @@ use std::sync::atomic::Ordering;
 
 use crate::util::constants;
 use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
+use crate::util::run_warnings::EmConvergence;
 use atomic_float::AtomicF64;
 use itertools::izip;
 use num_format::{Locale, ToFormattedString};
@@ -140,12 +141,13 @@ fn m_step<'a, DFn, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])>>(
 /// `do_log`: `true` if logging information is written about this EM run and false otherwise
 ///
 /// returns:
-/// A [`Vec<f64>`] represented the expected read assignments to each transcript.
+/// A [`Vec<f64>`] represented the expected read assignments to each transcript, and how the
+/// EM loop stopped.
 pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a, F: Fn() -> I>(
     em_info: &'a EMInfo,
     make_iter: F,
     do_log: bool,
-) -> Vec<f64> {
+) -> (Vec<f64>, EmConvergence) {
     let eq_map = em_info.eq_map;
     let fops = &eq_map.filter_opts;
     let tinfo: &[TranscriptInfo] = em_info.txp_info;
@@ -168,6 +170,7 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
 
     let mut rel_diff = 0.0_f64;
     let mut niter = 0_u32;
+    let (mut converged, mut last_rel_diff) = (false, f64::INFINITY);
     let mut _fl_prob = 0.5f64;
 
     let density_fn = |x, y| -> f64 {
@@ -209,7 +212,9 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
         // if the maximum relative difference is small enough
         // and we've done at least 10 rounds of the EM, then
         // exit (early stop).
+        last_rel_diff = rel_diff;
         if (rel_diff < convergence_thresh) && (niter > 50) {
+            converged = true;
             break;
         }
         // increment the iteration and, if this iteration
@@ -251,15 +256,22 @@ pub fn do_em<'a, I: Iterator<Item = (&'a [AlnInfo], &'a [f32], &'a [f64])> + 'a,
         &mut curr_counts,
     );
     //  return the final estimated abundances
-    curr_counts
+    let conv = EmConvergence {
+        niter,
+        max_iter,
+        converged,
+        rel_diff: last_rel_diff,
+        thresh: convergence_thresh,
+    };
+    (curr_counts, conv)
 }
 
 /// Perform the EM algorithm to estimate the abundances of the
 /// target sequences.  The return value is a `Vec` of f64 values,
 /// each of which is the estimated number of fragments arising from
-/// each target.
+/// each target, with how the EM loop stopped.
 #[allow(dead_code)]
-pub fn em(em_info: &EMInfo, _nthreads: usize) -> Vec<f64> {
+pub fn em(em_info: &EMInfo, _nthreads: usize) -> (Vec<f64>, EmConvergence) {
     let span = span!(tracing::Level::INFO, "em");
     let _guard = span.enter();
 
@@ -286,7 +298,7 @@ pub fn do_bootstrap(em_info: &EMInfo) -> Vec<f64> {
     // scored alignments on demand
     let make_iter = || em_info.eq_map.random_sampling_iter(&inds);
 
-    do_em(em_info, make_iter, false)
+    do_em(em_info, make_iter, false).0
 }
 
 pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f64>> {
@@ -316,8 +328,8 @@ pub fn bootstrap(em_info: &EMInfo, num_boot: u32, nthreads: usize) -> Vec<Vec<f6
 /// Perform the EM algorithm to estimate the abundances of the
 /// target sequences.  The return value is a `Vec` of f64 values,
 /// each of which is the estimated number of fragments arising from
-/// each target.
-pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
+/// each target, with how the EM loop stopped.
+pub fn em_par(em_info: &EMInfo, nthreads: usize) -> (Vec<f64>, EmConvergence) {
     let span = span!(tracing::Level::INFO, "em");
     let _guard = span.enter();
 
@@ -352,6 +364,7 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
 
     let mut rel_diff = 0.0_f64;
     let mut niter = 0_u32;
+    let (mut converged, mut last_rel_diff) = (false, f64::INFINITY);
     let mut _fl_prob = 0.5f64;
 
     let density_fn = |x, y| -> f64 {
@@ -396,7 +409,9 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
             // if the maximum relative difference is small enough
             // and we've done at least 10 rounds of the EM, then
             // exit (early stop).
+            last_rel_diff = rel_diff;
             if (rel_diff < convergence_thresh) && (niter > 1) {
+                converged = true;
                 break;
             }
             // increment the iteration and, if this iteration
@@ -440,8 +455,18 @@ pub fn em_par(em_info: &EMInfo, nthreads: usize) -> Vec<f64> {
         );
     });
     //  return the final estimated abundances
-    curr_counts
-        .iter()
-        .map(|x| x.load(Ordering::Relaxed))
-        .collect::<Vec<f64>>()
+    let conv = EmConvergence {
+        niter,
+        max_iter,
+        converged,
+        rel_diff: last_rel_diff,
+        thresh: convergence_thresh,
+    };
+    (
+        curr_counts
+            .iter()
+            .map(|x| x.load(Ordering::Relaxed))
+            .collect::<Vec<f64>>(),
+        conv,
+    )
 }

@@ -127,7 +127,8 @@ indexing:
 coverage model:
       --coverage-model <MODEL>     none | logistic | truncation (where reads land on transcripts) [default: none]
       --model-coverage             same as --coverage-model logistic
-      --model-truncation           same as --coverage-model truncation
+      --model-truncation           same as --coverage-model truncation (with --mapper spearfish,
+                                   also extends spans to the read ends; see the models guide)
   -k, --growth-rate <GROWTH_RATE>  logistic `k` [default: 2]
   -b, --bin-width <BIN_WIDTH>      coverage bin width [default: 100]
 
@@ -136,7 +137,7 @@ output read-txps probabilities:
       --display-thresh <DISPLAY_THRESH>  min posterior prob to write to .prob, or 'none' [default: 0.000001]
 
 EM:
-      --max-em-iter <MAX_EM_ITER>            max EM iterations [default: 1000]
+      --max-em-iter <MAX_EM_ITER>            max EM iterations (default 1000; 5000 with --model-truncation)
       --convergence-thresh <CONVERGENCE_THRESH>  EM convergence threshold [default: 0.001]
       --per-read-em                          per-read EM even without a per-read model term
       --presence-model <PRESENCE_MODEL>      none | spike-slab | bayes (experimental) [default: none]
@@ -172,6 +173,13 @@ reads, which gives the same estimates as fitting them on all reads in about half
 the placements it can produce, a read that fits a short isoform end to end but would be
 truncated on a longer one favors the short isoform, by as much as the fitted mixture says
 truncation is unlikely.
+
+The truncation EM's convergence test leaves out transcripts below 0.01 reads (as salmon's does),
+and with this model `--max-em-iter` defaults to 5,000: it typically converges after 1,000-1,300
+iterations. With `--mapper spearfish`, the model also extends alignment spans to the read ends
+for the `ont-drna` and `pac-bio-hifi` presets, which otherwise leave them at the outermost seeds;
+that changes which reads `-m` drops. The log and `meta_info.json` (`spearfish_span_extension`)
+record whether spans were extended and why.
 
 Alignment scores are also made *tail-neutral* (for all models): when a read's poly(A) tail aligns
 to an A-run at the end of a transcript, the score credit those bases earn is removed, so that
@@ -314,10 +322,10 @@ The `--seq-tech` value selects the mapping preset:
 
 How the reads should be prepared differs between technologies; the [guide](https://combine-lab.github.io/oarfish/guides/sequencing-technologies/) has the details. In short:
 
-* **ONT cDNA.** Trim adapters and primers before quantification (a current `dorado` does so when basecalling; older and archived reads often still carry them), but keep the poly(A) tails. Untrimmed reads are dropped by the aligned-fraction filter (`-m`).
+* **ONT cDNA.** Trim adapters and primers before quantification (a current `dorado` does so when basecalling; older and archived reads often still carry them), but keep the poly(A) tails: the spearfish backend uses them as evidence of the read's 3′ end and strand. Untrimmed reads are dropped by the aligned-fraction filter (`-m`), and on untrimmed or older direct cDNA that can be a large share of the reads; trimming reduces it. For gene-level work, `--filter-group no-filters` or a lower `-m` may suit; for transcript-level estimates, the default agreed better with short-read estimates in our tests ([details](https://combine-lab.github.io/oarfish/guides/sequencing-technologies/#when-the-aligned-fraction-filter-drops-many-reads)).
 * **PacBio.** For reads oriented to the transcript strand (Iso-Seq / Kinnex FLNC reads from `isoseq refine`), `--map-strand fw` with `--mapper spearfish` maps only that orientation and saves time. Do not use it (or `-d fw`) for reads that were not oriented: about half of them would be lost.
 
-When a run looks as if one of these was missed (many reads dropped by the aligned-fraction filter or the strand filter, many reads unmapped), `oarfish` says so in the log and in the `warnings` array of `meta_info.json`.
+When a run looks as if one of these was missed (many reads dropped by the aligned-fraction filter or the strand filter, many reads unmapped), or the EM stopped at its iteration limit before converging, `oarfish` says so in the log and in the `warnings` array of `meta_info.json`.
 
 ## Other notes on `oarfish` parameters
 

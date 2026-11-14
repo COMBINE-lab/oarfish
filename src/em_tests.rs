@@ -4,7 +4,8 @@
 //! The reference EM is a plain loop over classes and their targets with the stopping rule the
 //! EMs document: after each round, the largest relative increase over transcripts above
 //! [`constants::MIN_READ_THRESH`] (or, for the truncation EM's frozen loop, the largest
-//! relative change in either direction); stop after the first round whose statistic is below the
+//! relative change in either direction over transcripts above
+//! [`constants::TRUNC_CONV_MIN_READS`]); stop after the first round whose statistic is below the
 //! threshold once the round's 0-based index exceeds `min_iter`, or after `max_iter` rounds; then
 //! zero abundances below [`constants::MIN_READ_THRESH`] and run one more round.
 //!
@@ -205,7 +206,9 @@ pub(crate) struct RefEm {
     pub(crate) min_iter: u32,
     /// Iteration count the loop starts from.
     pub(crate) niter0: u32,
-    /// Relative change in either direction (else relative increase only).
+    /// The truncation EM's statistic: relative change in either direction, over transcripts
+    /// above [`constants::TRUNC_CONV_MIN_READS`] (else relative increase only, over transcripts
+    /// above [`constants::MIN_READ_THRESH`]).
     pub(crate) abs: bool,
 }
 
@@ -228,8 +231,13 @@ pub(crate) fn ref_em(c: &Classes, init: &[f64], o: RefEm) -> (Vec<f64>, u32) {
     while niter < o.max_iter {
         let curr = c.step(&prev);
         let mut rd = 0.0_f64;
+        let floor = if o.abs {
+            constants::TRUNC_CONV_MIN_READS
+        } else {
+            constants::MIN_READ_THRESH
+        };
         for (&p, &x) in prev.iter().zip(&curr) {
-            if p > constants::MIN_READ_THRESH {
+            if p > floor {
                 let d = if o.abs { (x - p).abs() } else { x - p };
                 rd = rd.max(d / p);
             }
@@ -429,26 +437,26 @@ fn every_path(emi: &EMInfo, ntx: usize) -> Vec<(String, u32, Vec<f64>)> {
     let (max_iter, thresh) = (emi.max_iter, emi.convergence_thresh);
     let eqc = EqClasses::from_store(store, ntx);
     let mut out = vec![
-        ("em::em".to_string(), 50, crate::em::em(emi, 1)),
-        ("em::em_par(4)".to_string(), 1, crate::em::em_par(emi, 4)),
+        ("em::em".to_string(), 50, crate::em::em(emi, 1).0),
+        ("em::em_par(4)".to_string(), 1, crate::em::em_par(emi, 4).0),
     ];
     for threads in [1, 4] {
         out.push((
             format!("em_read Local({threads})"),
             1,
-            em_read::em(emi, threads, Impl::Local),
+            em_read::em(emi, threads, Impl::Local).0,
         ));
     }
     for threads in [1, 4, 16] {
         out.push((
             format!("em_read Csr({threads})"),
             1,
-            em_read::em(emi, threads, Impl::Csr),
+            em_read::em(emi, threads, Impl::Csr).0,
         ));
         out.push((
             format!("eq_classes::em({threads})"),
             1,
-            eq_classes::em(&eqc, emi.txp_info, max_iter, thresh, None, None, threads),
+            eq_classes::em(&eqc, emi.txp_info, max_iter, thresh, None, None, threads).0,
         ));
     }
     for by_heaviest in [false, true] {
@@ -481,6 +489,67 @@ fn every_em_path_reaches_the_reference_estimates() {
         let want = if min_iter == 50 { &want50 } else { &want1 };
         assert_close(&got, want, 1e-7, &name);
         check_invariants(&got, &reads, None, ntx, &name);
+    }
+}
+
+/// Every plain EM path returns how it stopped: with room to converge, the reference loop's
+/// iteration count (give or take a round, for summation order) and convergence; at a limit
+/// below that, the limit, no convergence, a statistic above the threshold, and so a run
+/// warning.
+#[test]
+fn every_em_path_reports_how_it_stopped() {
+    use crate::util::run_warnings::{EmConvergence, EmKind, check_em};
+    let reads = mixed_reads(1);
+    let ntx = MIXED_NTX;
+    let h = Header::default();
+    let mut txps = tinfo(&vec![1000; ntx]);
+    let store = store_of(&h, &reads, &mut txps);
+    let c = Classes::of_reads(&reads, ntx);
+    let thresh = 1e-10;
+    let (_, n1) = ref_em(&c, &c.uniform(), RefEm::new(3000, thresh, 1));
+    let (_, n50) = ref_em(&c, &c.uniform(), RefEm::new(3000, thresh, 50));
+    assert!(
+        n1 >= 8 && n50 < 3000,
+        "fixture converges in {n1} / {n50} rounds"
+    );
+    let eqc = EqClasses::from_store(&store, ntx);
+    let plan = read_plan(&store, ntx, true);
+    let init = vec![store.len() as f64 / ntx as f64; ntx];
+    for max_iter in [3000, n1 / 2] {
+        let emi = em_info(&store, &txps, max_iter, thresh);
+        let paths: Vec<(&str, u32, EmConvergence)> = vec![
+            ("em::em", n50, crate::em::em(&emi, 1).1),
+            ("em::em_par", n1, crate::em::em_par(&emi, 4).1),
+            ("em_read Local", n1, em_read::em(&emi, 2, Impl::Local).1),
+            ("em_read Csr", n1, em_read::em(&emi, 2, Impl::Csr).1),
+            (
+                "eq_classes",
+                n1,
+                eq_classes::em(&eqc, &txps, max_iter, thresh, None, None, 2).1,
+            ),
+            (
+                "em_components",
+                n1,
+                em_components::run_counted(&plan, Counts::Unit, &init, max_iter, thresh, 1).1,
+            ),
+        ];
+        for (name, want, conv) in paths {
+            assert_eq!((conv.max_iter, conv.thresh), (max_iter, thresh), "{name}");
+            if max_iter == 3000 {
+                assert!(conv.converged, "{name}: {conv:?}");
+                assert!(conv.niter.abs_diff(want) <= 1, "{name}: {conv:?} vs {want}");
+                assert!(conv.rel_diff < thresh, "{name}: {conv:?}");
+                assert!(check_em(&conv, EmKind::Standard).is_none(), "{name}");
+            } else {
+                assert!(!conv.converged, "{name}: {conv:?}");
+                assert_eq!(conv.niter, max_iter, "{name}");
+                assert!(conv.rel_diff >= thresh, "{name}: {conv:?}");
+                assert_eq!(
+                    check_em(&conv, EmKind::Standard).map(|w| w.code),
+                    Some("em_not_converged")
+                );
+            }
+        }
     }
 }
 
@@ -526,16 +595,16 @@ fn csr_and_class_em_are_bitwise_independent_of_threads() {
     let store = store_of(&h, &reads, &mut txps);
     let emi = em_info(&store, &txps, 500, 1e-8);
     let eqc = EqClasses::from_store(&store, ntx);
-    let read1 = em_read::em(&emi, 1, Impl::Csr);
-    let cls1 = eq_classes::em(&eqc, &txps, 500, 1e-8, None, None, 1);
+    let read1 = em_read::em(&emi, 1, Impl::Csr).0;
+    let cls1 = eq_classes::em(&eqc, &txps, 500, 1e-8, None, None, 1).0;
     for threads in [4, 16] {
         assert_bits_eq(
-            &em_read::em(&emi, threads, Impl::Csr),
+            &em_read::em(&emi, threads, Impl::Csr).0,
             &read1,
             &format!("em_read Csr {threads}"),
         );
         assert_bits_eq(
-            &eq_classes::em(&eqc, &txps, 500, 1e-8, None, None, threads),
+            &eq_classes::em(&eqc, &txps, 500, 1e-8, None, None, threads).0,
             &cls1,
             &format!("eq_classes {threads}"),
         );
@@ -672,9 +741,9 @@ fn multiplicities_equal_duplicated_reads() {
         }
         let demi = em_info(&dstore, &txps, 3000, 1e-10);
         let got = if min_iter == 50 {
-            crate::em::em(&demi, 1)
+            crate::em::em(&demi, 1).0
         } else {
-            em_read::em(&demi, 2, Impl::Csr)
+            em_read::em(&demi, 2, Impl::Csr).0
         };
         assert_close(&got, &want, 1e-7, &format!("duplicated store {min_iter}"));
     }
@@ -683,7 +752,7 @@ fn multiplicities_equal_duplicated_reads() {
     let inds: Vec<usize> = (0..reads.len())
         .flat_map(|r| std::iter::repeat_n(r, mult[r] as usize))
         .collect();
-    let got = crate::em::do_em(&emi, || store.random_sampling_iter(&inds), false);
+    let (got, _) = crate::em::do_em(&emi, || store.random_sampling_iter(&inds), false);
     let (want, _) = ref_em(&c, &init, RefEm::new(3000, 1e-10, 50));
     assert_close(&got, &want, 1e-7, "do_em over drawn indices");
 }
@@ -709,9 +778,9 @@ fn all_ones_multiplicities_give_the_point_estimate() {
             assert_close(&got, &unit, 1e-12, "all-ones multiplicities");
         }
         let point = if min_iter == 50 {
-            crate::em::em(&emi, 1)
+            crate::em::em(&emi, 1).0
         } else {
-            em_read::em(&emi, 4, Impl::Csr)
+            em_read::em(&emi, 4, Impl::Csr).0
         };
         assert_close(&unit, &point, 1e-7, &format!("point estimate {min_iter}"));
     }

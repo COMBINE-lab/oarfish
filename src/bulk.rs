@@ -42,6 +42,7 @@ fn get_json_info(
     seqcol_digest: &NamedDigestVec,
     aln_time: std::time::Duration,
     run_warnings: &[crate::util::run_warnings::RunWarning],
+    em: serde_json::Value,
 ) -> serde_json::Value {
     let prob = if args.model_coverage {
         "logistic_coverage"
@@ -57,7 +58,7 @@ fn get_json_info(
         "from_raw_reads"
     };
 
-    json!({
+    let mut info = json!({
         "prob_model" : prob,
         "alignment_source" : source,
         "alignment_time" : {
@@ -69,12 +70,13 @@ fn get_json_info(
         "filter_options" : &emi.eq_map.filter_opts,
         "discard_table" : &emi.eq_map.discard_table,
         "warnings" : run_warnings,
+        "em" : em,
         "alignments": &args.alignments,
         "output": args.output.as_ref().expect("present"),
         "verbose": &args.verbose,
         "single_cell": &args.single_cell,
         "quiet": &args.quiet,
-        "em_max_iter": &args.max_em_iter,
+        "em_max_iter": args.em_iter_limit(),
         "em_convergence_thresh": &args.convergence_thresh,
         "threads": &args.threads,
         "filter_group": &args.filter_group,
@@ -82,7 +84,12 @@ fn get_json_info(
         "short_quant": &args.short_quant,
         "num_bootstraps": &args.num_bootstraps,
         "digest": seqcol_digest.to_json()
-    })
+    });
+    // Only runs whose mapper reports it (the spearfish backend and RAD input) carry this.
+    if let Some(span) = &args.span_extension {
+        info["spearfish_span_extension"] = json!(span);
+    }
+    info
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -101,7 +108,7 @@ pub(crate) fn perform_inference_and_write_output(
 
     // Conditions the user should look at before trusting the result: to the log here, and
     // to meta_info.json below.
-    let run_warnings = crate::util::run_warnings::check(
+    let mut run_warnings = crate::util::run_warnings::check(
         &store.discard_table,
         &crate::util::run_warnings::RunContext {
             strand_filter: store.filter_opts.which_strand(),
@@ -196,7 +203,7 @@ pub(crate) fn perform_inference_and_write_output(
     let emi = EMInfo {
         eq_map: store,
         txp_info: txps,
-        max_iter: args.max_em_iter,
+        max_iter: args.em_iter_limit(),
         convergence_thresh: args.convergence_thresh,
         init_abundances,
         kde_model: kde_opt,
@@ -258,7 +265,7 @@ pub(crate) fn perform_inference_and_write_output(
     };
 
     let em_start = std::time::Instant::now();
-    let counts = match &eqc {
+    let (counts, em_conv) = match &eqc {
         Some(eqc) => eq_classes::em(
             eqc,
             emi.txp_info,
@@ -275,14 +282,39 @@ pub(crate) fn perform_inference_and_write_output(
         },
         None => em::em(&emi, args.threads),
     };
-    info!("EM finished in {:.2}s", em_start.elapsed().as_secs_f64());
+    info!(
+        "EM finished in {:.2}s ({} iterations{})",
+        em_start.elapsed().as_secs_f64(),
+        em_conv.niter.to_formatted_string(&Locale::en),
+        if em_conv.converged {
+            ""
+        } else {
+            "; did not converge"
+        }
+    );
+    let em_kind = if args.model_truncation && eqc.is_none() {
+        crate::util::run_warnings::EmKind::Truncation
+    } else {
+        crate::util::run_warnings::EmKind::Standard
+    };
+    if let Some(w) = crate::util::run_warnings::check_em(&em_conv, em_kind) {
+        warn!("{}", w.message);
+        run_warnings.push(w);
+    }
 
     let aux_txp_counts = crate::util::aux_counts::get_aux_counts(store, txps)?;
 
     // prepare the JSON object we'll write
     // to meta_info.json
     let seqcol_digest = seqcol_digest.resolve()?;
-    let json_info = get_json_info(args, &emi, &seqcol_digest, aln_time, &run_warnings);
+    let json_info = get_json_info(
+        args,
+        &emi,
+        &seqcol_digest,
+        aln_time,
+        &run_warnings,
+        crate::util::run_warnings::em_info(&em_conv, em_kind),
+    );
 
     // write the output
     write_output(

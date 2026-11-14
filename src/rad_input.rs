@@ -56,6 +56,13 @@ pub fn read_header(path: &Path, args: &mut Args) -> anyhow::Result<RadHeader> {
         );
         args.score_prob_denom = Some(d);
     }
+    let span_ext = crate::prog_opts::SpanExtension {
+        extended: m.ends_extended,
+        reason: "rad_header",
+        preset: m.preset.clone(),
+    };
+    info!("{}", span_ext.describe());
+    args.span_extension = Some(span_ext);
     if args.model_truncation && !m.ends_extended {
         warn!(
             "--model-truncation: the mapper did not extend alignment spans to the read ends \
