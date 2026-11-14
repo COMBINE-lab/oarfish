@@ -343,6 +343,25 @@ fn spearfish_map_options(args: &Args) -> anyhow::Result<spearfish::MapOptions> {
             tb.end_fit_chain = from == crate::prog_opts::EndFitFrom::Chain;
         }
     }
+    // The orientation evidence for antisense pairs: the preset's unless given (or unless
+    // `ORIENT_EVIDENCE_DEFAULT` names a default of oarfish's own).
+    if let (Some(ev), Some(tb)) = (
+        args.orient_evidence
+            .or(crate::prog_opts::ORIENT_EVIDENCE_DEFAULT),
+        &mut opts.params.tiebreak,
+    ) {
+        use crate::prog_opts::{ORIENT_TAIL_AFTER_OFF, OrientEvidence};
+        match ev {
+            OrientEvidence::Quant | OrientEvidence::Mapping => {
+                tb.orient_quant = ev == OrientEvidence::Quant;
+            }
+            // As spearfish's `--no-orient-same-exact --orient-tail-after=80`.
+            OrientEvidence::Off => {
+                tb.orient_same_exact = false;
+                tb.orient_tail_after = ORIENT_TAIL_AFTER_OFF;
+            }
+        }
+    }
     // Only hits within the score filter of the best usually reach the EM, so only those are
     // extended. (Reporting only those lost reads whose best hit fails the span filters: oarfish
     // then rescales the threshold to the best hit that passes.)
@@ -396,6 +415,13 @@ fn spearfish_settings(
             }
         }),
         orient_quant: tb.map(|tb| tb.orient_quant),
+        orient_evidence: tb.map(|tb| {
+            crate::prog_opts::OrientEvidence::of(
+                tb.orient_same_exact,
+                tb.orient_tail_after,
+                tb.orient_quant,
+            )
+        }),
     })
 }
 
@@ -869,6 +895,82 @@ mod tests {
             assert_eq!(s["extend_ends"], ext, "{tech} {extra:?}");
             assert_eq!(s["extend_ends_reason"], reason, "{tech} {extra:?}");
         }
+    }
+
+    fn orient(o: &spearfish::MapOptions) -> (bool, u32, bool) {
+        let tb = o.params.tiebreak.as_ref().unwrap();
+        (tb.orient_same_exact, tb.orient_tail_after, tb.orient_quant)
+    }
+
+    /// Without `--orient-evidence` the orientation evidence is the preset's (through the
+    /// quantification score); `off` is spearfish's `--no-orient-same-exact
+    /// --orient-tail-after=80`, which with `--end-fit 0` leaves no quantification score of its
+    /// own; `mapping` is spearfish's `--no-orient-quant`.
+    #[test]
+    fn orient_evidence_option() {
+        for (tech, p) in [
+            ("ont-cdna", spearfish::Preset::Ont),
+            ("ont-drna", spearfish::Preset::Drna),
+            ("pac-bio-hifi", spearfish::Preset::Hifi),
+        ] {
+            let preset = spearfish::MapOptions::preset(p);
+            assert_eq!(
+                orient(&opts(&["--seq-tech", tech])),
+                orient(&preset),
+                "{tech}"
+            );
+            assert_eq!(
+                settings(&["--seq-tech", tech])["orient_evidence"],
+                "quant",
+                "{tech}"
+            );
+            let off = opts(&["--seq-tech", tech, "--orient-evidence", "off"]);
+            assert_eq!(orient(&off), (false, 80, orient(&preset).2), "{tech}");
+            let off0 = opts(&[
+                "--seq-tech",
+                tech,
+                "--orient-evidence",
+                "off",
+                "--end-fit",
+                "0",
+            ]);
+            assert!(!off0.quant_scores(), "{tech}");
+            let s = settings(&[
+                "--seq-tech",
+                tech,
+                "--orient-evidence",
+                "off",
+                "--end-fit",
+                "0",
+            ]);
+            assert_eq!(s["orient_evidence"], "off");
+            assert_eq!(s["quant_scores"], false);
+            let m = opts(&["--seq-tech", tech, "--orient-evidence", "mapping"]);
+            let (exact, after, quant) = orient(&m);
+            assert!(exact && after == orient(&preset).1 && !quant, "{tech}");
+            assert_eq!(
+                settings(&["--seq-tech", tech, "--orient-evidence", "mapping"])["orient_evidence"],
+                "mapping"
+            );
+        }
+        // `off` is what spearfish's own presets without the evidence (the `-fast` ones) use.
+        let fast = spearfish::MapOptions::preset(spearfish::Preset::OntFast);
+        let (exact, after, _) = orient(&fast);
+        assert!(!exact);
+        assert_eq!(after, crate::prog_opts::ORIENT_TAIL_AFTER_OFF);
+        assert_eq!(crate::prog_opts::ORIENT_EVIDENCE_DEFAULT, None);
+        assert!(
+            Args::try_parse_from([
+                "oarfish",
+                "-a",
+                "x.rad",
+                "-o",
+                "o",
+                "--orient-evidence",
+                "off"
+            ])
+            .is_err()
+        );
     }
 
     #[test]

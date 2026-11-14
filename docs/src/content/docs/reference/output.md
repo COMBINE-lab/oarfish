@@ -74,7 +74,8 @@ Runs with `--mapper spearfish`, and runs on a RAD file, record the spearfish set
   "end_fit": 5.0,
   "end_fit_tol": 4,
   "end_fit_from": "alignment",
-  "orient_quant": true
+  "orient_quant": true,
+  "orient_evidence": "quant"
 }
 ```
 
@@ -83,7 +84,7 @@ Runs with `--mapper spearfish`, and runs on a RAD file, record the spearfish set
 - `extend_ends`: whether alignment spans were extended to the read ends, and `extend_ends_reason` why: `preset` (the preset extends spans), `model_truncation` (the preset leaves them at the outermost seeds, and `--model-truncation` turned extension on), `preset_off` (the preset leaves them at the outermost seeds), or `rad_header` (a RAD file: as its mapper recorded). The span decides how much of a read counts as aligned, and so which reads `--min-aligned-fraction` drops.
 - `strands`: the read orientations mapped (`both`, `fwd` or `rev`).
 - `quant_scores`: whether the alignments carry quantification scores that can differ from their mapping scores. oarfish weighs alignments by the quantification score; without one it is the mapping score. A RAD file from spearfish before 0.3.0 has none.
-- `end_fit` (points; 0 when off), `end_fit_tol` and `end_fit_from` (`chain` or `alignment`): the end fit, and `orient_quant`: whether spearfish's orientation evidence acts through the quantification score. See [Mapping and quantification scores](/oarfish/guides/mapping-backends/#mapping-and-quantification-scores). For a RAD file they are read from the mapper's parameters in its header, and are `null` where the header does not have them.
+- `end_fit` (points; 0 when off), `end_fit_tol` and `end_fit_from` (`chain` or `alignment`): the end fit, `orient_quant`: whether spearfish's orientation evidence acts through the quantification score, and `orient_evidence`: what the evidence does, `quant` (moves only the quantification score), `mapping` (moves the mapping score and the orientation) or `off` (none, as spearfish 0.2.1 mapped; see `--orient-evidence`). See [Mapping and quantification scores](/oarfish/guides/mapping-backends/#mapping-and-quantification-scores). For a RAD file they are read from the mapper's parameters in its header, and are `null` where the header does not have them.
 
 Runs on a BAM file have no `spearfish_settings`.
 

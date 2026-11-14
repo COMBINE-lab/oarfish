@@ -35,11 +35,20 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a read ends is measured. Each defaults to the preset's value. With `--model-truncation`, the
   end fit measures every candidate by alignment (spans are extended anyway) unless
   `--end-fit-from chain` is given.
+- **`--orient-evidence quant|mapping|off`** (with `--mapper spearfish`): what spearfish's
+  orientation evidence for antisense pairs does. `quant` (the preset's, so the default) moves
+  only the quantification score; `mapping` moves the mapping score and decides the orientation
+  (spearfish's `--no-orient-quant`); `off` turns it off, as spearfish 0.2.1 mapped (spearfish's
+  `--no-orient-same-exact --orient-tail-after=80`). With `--end-fit 0 --orient-evidence off`,
+  alignments are weighed by their mapping scores alone, and quantification is as with
+  spearfish 0.2.1. `--end-fit 0` alone leaves the orientation evidence on. Recorded as
+  `spearfish_settings.orient_evidence`.
 - **`spearfish_settings` in `meta_info.json`**, and a line in the log at the start of the run:
   with `--mapper spearfish`, and for RAD input, the settings the alignments were made with:
   `source` (`in_process` or `rad_header`), `preset`, `extend_ends` and `extend_ends_reason`
   (`preset`, `model_truncation`, `preset_off`, `rad_header`), `strands`, `quant_scores`, and
-  the end fit (`end_fit`, `end_fit_tol`, `end_fit_from`) and `orient_quant`; for a RAD file
+  the end fit (`end_fit`, `end_fit_tol`, `end_fit_from`), `orient_quant` and
+  `orient_evidence`; for a RAD file
   also `mapper` and `mapper_version`, with the end fit read from the mapper's parameters. Spans
   decide how much of a read counts as aligned, and so which reads `--min-aligned-fraction`
   drops.

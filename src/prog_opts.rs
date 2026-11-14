@@ -70,6 +70,50 @@ pub enum EndFitFrom {
     Alignment,
 }
 
+/// What spearfish does with its orientation evidence for antisense pairs (`--orient-evidence`):
+/// the exact comparison of read orientations whose best hits are one sequence on opposite
+/// strands, and the longer allowance after a poly(A) tail for cDNA reads that kept their
+/// adapters (spearfish's `orient_same_exact` and `orient_tail_after`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OrientEvidence {
+    /// The evidence moves only the quantification scores, which alignments are weighed by;
+    /// the mapping scores, the orientation and the hits reported are as without it
+    /// (spearfish's `orient_quant`, on in its 0.3.0 presets).
+    Quant,
+    /// The evidence moves the mapping scores and decides the orientation, and so which hits
+    /// are reported (spearfish's `--no-orient-quant`).
+    Mapping,
+    /// No orientation evidence: reads map and are weighed as with spearfish 0.2.1 (spearfish's
+    /// `--no-orient-same-exact --orient-tail-after=80`).
+    Off,
+}
+
+/// The default of `--orient-evidence`. `None` keeps the spearfish preset's setting, which is
+/// `quant` in spearfish 0.3.0. To map as spearfish 0.2.1 did by default, set this to
+/// `Some(OrientEvidence::Off)` (and update the default named in the help of
+/// `--orient-evidence` and in the docs).
+pub const ORIENT_EVIDENCE_DEFAULT: Option<OrientEvidence> = None;
+
+/// spearfish's `orient_tail_after` with the orientation evidence off: the allowance any A-run
+/// has after it (spearfish's `TAIL_AFTER`, the value of its 0.2.1 presets and of its `-fast`
+/// presets).
+pub const ORIENT_TAIL_AFTER_OFF: u32 = 80;
+
+impl OrientEvidence {
+    /// The setting spearfish's tie-break settings amount to: `off` when neither part of the
+    /// evidence is on, otherwise where `orient_quant` sends it.
+    pub fn of(orient_same_exact: bool, orient_tail_after: u32, orient_quant: bool) -> Self {
+        if !orient_same_exact && orient_tail_after <= ORIENT_TAIL_AFTER_OFF {
+            OrientEvidence::Off
+        } else if orient_quant {
+            OrientEvidence::Quant
+        } else {
+            OrientEvidence::Mapping
+        }
+    }
+}
+
 /// Default denominator `D` of the score→probability conversion `exp((score - best) / D)`
 /// (`--score-prob-denom`). 3 rather than the earlier 5: sharper weighting toward the
 /// best-scoring alignment improved accuracy on simulations with exact truth and on LongBench
@@ -600,8 +644,10 @@ pub struct Args {
     /// with `--mapper spearfish`, the end fit's weight: points added to the score of the hits
     /// whose annotated 3' end a read without a poly(A) tail reaches, when the read's candidate
     /// transcripts end at distinguishable places. It only changes the scores alignments are
-    /// weighed by, not which hits a read has. 0 turns it off; spearfish's orientation evidence
-    /// still acts through the quantification score. The default is the preset's (5).
+    /// weighed by, not which hits a read has. 0 turns it off; alignments are then weighed by
+    /// their mapping scores, but for the reads spearfish's orientation evidence moves (see
+    /// `--orient-evidence`; `--orient-evidence off` too gives mapping-score weights). The
+    /// default is the preset's (5).
     #[arg(
         long,
         value_name = "SCORE",
@@ -632,6 +678,19 @@ pub struct Args {
     /// anyway. Hits whose spans were extended are measured from their alignment either way.
     #[arg(long, value_enum, requires = "reads", help_heading = "raw read mode")]
     pub end_fit_from: Option<EndFitFrom>,
+
+    /// with `--mapper spearfish`, what spearfish's orientation evidence for antisense pairs
+    /// does. Where a read's best hits in its two orientations are one sequence on opposite
+    /// strands (antisense isoforms, a transcript inside another's intron on the other strand),
+    /// spearfish compares the two by exact alignment of the whole read, and gives cDNA reads
+    /// that kept their adapters a longer allowance after a poly(A) tail. `quant`: the evidence
+    /// moves only the quantification scores alignments are weighed by; which hits a read has
+    /// does not change. `mapping`: it moves the mapping scores and decides the orientation.
+    /// `off`: no orientation evidence, as spearfish 0.2.1 mapped; with `--end-fit 0` as well,
+    /// alignments are weighed by their mapping scores alone. The default is the preset's
+    /// (`quant`).
+    #[arg(long, value_enum, requires = "reads", help_heading = "raw read mode")]
+    pub orient_evidence: Option<OrientEvidence>,
 
     /// maximum number of secondary mappings to consider when mapping reads to the transcriptome
     #[arg(
@@ -864,6 +923,9 @@ pub struct SpearfishSettings {
     pub end_fit_from: Option<EndFitFrom>,
     /// Whether spearfish's orientation evidence acts through the quantification score.
     pub orient_quant: Option<bool>,
+    /// What the orientation evidence does: `quant`, `mapping` or `off` (see
+    /// [`OrientEvidence`]).
+    pub orient_evidence: Option<OrientEvidence>,
 }
 
 impl SpearfishSettings {
@@ -891,6 +953,16 @@ impl SpearfishSettings {
                 }
             }),
             orient_quant: tb["orient_quant"].as_bool(),
+            orient_evidence: match (
+                tb["orient_same_exact"].as_bool(),
+                tb["orient_tail_after"].as_u64(),
+                tb["orient_quant"].as_bool(),
+            ) {
+                (Some(exact), Some(after), Some(quant)) => {
+                    Some(OrientEvidence::of(exact, after as u32, quant))
+                }
+                _ => None,
+            },
         }
     }
 
@@ -1048,7 +1120,8 @@ mod tests {
             strands: "fwd".into(),
             quant_scores: true,
             params: r#"{"parameters":{"params":{"tiebreak":{"end_fit":5.0,"end_fit_tol":4,
-                "end_fit_chain":true,"orient_quant":true}}}}"#
+                "end_fit_chain":true,"orient_quant":true,"orient_same_exact":false,
+                "orient_tail_after":80}}}}"#
                 .into(),
             ..Default::default()
         };
@@ -1062,6 +1135,7 @@ mod tests {
         assert_eq!(v["end_fit_tol"], 4);
         assert_eq!(v["end_fit_from"], "chain");
         assert_eq!(v["orient_quant"], true);
+        assert_eq!(v["orient_evidence"], "off");
         // A file from another mapper, or an older one, has no end fit in its parameters.
         m.params = "not json".into();
         m.quant_scores = false;

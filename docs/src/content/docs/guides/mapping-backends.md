@@ -88,26 +88,36 @@ reads fit the 3' ends on both strands (for example, a short antisense transcript
 inside the 3' end of the other); those still tie.
 
 **Orientation evidence (spearfish 0.3.0).** The quantification score also carries evidence about
-a read's orientation that spearfish keeps out of its mapping score by default (`--orient-quant`):
-a poly(A) tail followed by a primer and adapter, and, for best hits that are one sequence on
-opposite strands, exact alignments of the whole read. It moves reads toward a short isoform that
-lies antisense inside a longer one. This acts whether or not the end fit is on.
+a read's orientation that spearfish 0.3.0 keeps out of its mapping score by default (its
+`orient_quant` setting): a poly(A) tail followed by a primer and adapter, and, for best hits that
+are one sequence on opposite strands, exact alignments of the whole read. It moves reads toward a
+short isoform that lies antisense inside a longer one. This acts whether or not the end fit is on.
+`--orient-evidence` chooses what the evidence does (see below); `--orient-evidence off` maps as
+spearfish 0.2.1 did.
 
 #### Options (in process)
 
-With `--mapper spearfish`, oarfish maps with the preset `--seq-tech` names, end fit included. Three
-options change the end fit; each defaults to the preset's value, so results do not change unless
-one is given:
+With `--mapper spearfish`, oarfish maps with the preset `--seq-tech` names, end fit and orientation
+evidence included. Three options change the end fit, and one the orientation evidence; each
+defaults to the preset's value, so results do not change unless one is given:
 
 | option | what it sets | default |
 |---|---|---|
 | `--end-fit SCORE` | points for the hits whose annotated 3' end the read reaches; `0` turns the end fit off (the orientation evidence still acts) | the preset's (5) |
 | `--end-fit-tol BASES` | how far, in homopolymer-compressed bases, where a read ends may lie from a 3' end and still fit it | the preset's (4) |
 | `--end-fit-from chain\|alignment` | how where a read ends is measured: from the chain (no alignment is run) or by aligning the read's right end | `chain` for `ont-drna`, `alignment` otherwise; `alignment` with `--model-truncation` |
+| `--orient-evidence quant\|mapping\|off` | what the orientation evidence does: moves only the quantification score (`quant`), moves the mapping score and decides the orientation (`mapping`), or nothing (`off`, as spearfish 0.2.1 mapped) | the preset's (`quant`) |
 
-They are spearfish's `--end-fit`, `--end-fit-tol` and `--end-fit-chain` / `--no-end-fit-chain`,
-and need `--mapper spearfish` and `--reads`. For alignments read from a RAD file, the end fit was
+The end-fit options are spearfish's `--end-fit`, `--end-fit-tol` and `--end-fit-chain` /
+`--no-end-fit-chain`. `--orient-evidence mapping` is spearfish's `--no-orient-quant`, and
+`--orient-evidence off` is spearfish's `--no-orient-same-exact --orient-tail-after=80`. All of
+them need `--mapper spearfish` and `--reads`. For alignments read from a RAD file, the scores were
 computed when the file was written, so set these on `spearfish map` instead.
+
+oarfish has one switch for the orientation evidence rather than spearfish's separate settings:
+`off` is the one combination that reproduces spearfish 0.2.1, and a separate `--no-orient-quant`
+would be easy to mistake for it, since in spearfish it sends the evidence to the mapping score
+instead of turning it off.
 
 **With `--model-truncation`.** The truncation model needs where reads start and end, so oarfish
 extends spans to the read ends in every preset, `ont-drna` included. The end fit then measures
@@ -117,13 +127,15 @@ candidates whose spans were not extended.
 
 **Recorded settings.** `meta_info.json` records the spearfish settings under
 `spearfish_settings`: `preset`, `extend_ends` (and why), `strands`, `quant_scores`, `end_fit`,
-`end_fit_tol`, `end_fit_from` and `orient_quant`, as resolved from the preset and the options, or,
+`end_fit_tol`, `end_fit_from`, `orient_quant` and `orient_evidence`, as resolved from the preset and the options, or,
 for a RAD file, as its header records them (see [the output reference](/oarfish/reference/output/#spearfish-settings-spearfish_settings)).
 
-`--end-fit 0` (in process) or `spearfish map --end-fit 0` (RAD files) turns the end fit off.
-Alignments are then weighed by the mapping score, except for the reads whose orientation evidence
-moved their quantification score (`quant_scores` stays `true`). The `-fast` presets turn both
-off, and their alignments are weighed by the mapping score alone.
+**Mapping-score weights.** `--end-fit 0` alone turns only the end fit off: alignments are then
+weighed by the mapping score, except for the reads whose orientation evidence moved their
+quantification score (`quant_scores` stays `true`). With `--end-fit 0 --orient-evidence off`,
+alignments are weighed by the mapping score alone (`quant_scores` is `false`), as oarfish weighed
+spearfish 0.2.1's alignments. For RAD files, `spearfish map --end-fit 0 --no-orient-same-exact
+--orient-tail-after=80` does the same. The `-fast` presets turn both off.
 
 ### Keeping the mappings
 

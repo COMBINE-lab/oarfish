@@ -44,6 +44,10 @@ raw read mode:
                                with --mapper spearfish, measure where a read ends from its chain or by
                                alignment [default: chain for ont-drna, else alignment; alignment with
                                --model-truncation] [possible values: chain, alignment]
+      --orient-evidence <ORIENT_EVIDENCE>
+                               with --mapper spearfish, what the orientation evidence for antisense pairs
+                               moves: the weights only (quant), the mapping (mapping), or nothing (off, as
+                               spearfish 0.2.1) [default: preset's, quant] [possible values: quant, mapping, off]
       --seq-tech <SEQ_TECH>    [possible values: ont-cdna, ont-drna, pac-bio, pac-bio-hifi]
       --best-n <BEST_N>        max secondary mappings to consider [default: 100]
       --dp-cache-cap-mb <DP_CACHE_CAP_MB>
