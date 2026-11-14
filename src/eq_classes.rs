@@ -27,6 +27,7 @@ use crate::util::constants;
 use crate::util::oarfish_types::{
     InMemoryAlignmentStore, InMemoryAlignmentStoreIter, TranscriptInfo, release_freed_memory,
 };
+use crate::util::run_warnings::EmConvergence;
 
 /// Reads collapsed by their (target, probability) multisets.
 pub struct EqClasses {
@@ -442,6 +443,7 @@ fn initial(counts: &[f64], ntx: usize, init_abundances: Option<&Vec<f64>>) -> Ve
 
 /// The EM of [`crate::em::em_par`] over classes with read `counts` (the class counts, or a
 /// bootstrap resample of them): same initialization, convergence rule and final pruning round.
+/// Also returns how the loop stopped.
 #[allow(clippy::too_many_arguments)]
 fn run(
     eqc: &EqClasses,
@@ -452,7 +454,7 @@ fn run(
     init_abundances: Option<&Vec<f64>>,
     presence: Option<PresenceOpts>,
     do_log: bool,
-) -> Vec<f64> {
+) -> (Vec<f64>, EmConvergence) {
     let mut prev = initial(counts, tinfo.len(), init_abundances);
     let mut curr = vec![0.0_f64; tinfo.len()];
     let mut scale = vec![0.0_f64; eqc.len()];
@@ -465,6 +467,7 @@ fn run(
     };
 
     let mut niter = 0_u32;
+    let (mut converged, mut last_rel_diff) = (false, f64::INFINITY);
     while niter < max_iter {
         match &mut pres {
             Some(p) => {
@@ -487,7 +490,9 @@ fn run(
             }
         }
         std::mem::swap(&mut prev, &mut curr);
+        last_rel_diff = rel_diff;
         if rel_diff < convergence_thresh && niter > 1 {
+            converged = true;
             break;
         }
         niter += 1;
@@ -529,10 +534,17 @@ fn run(
         }
         None => m_step(eqc, counts, &prev, &mut scale, &mut curr),
     }
-    curr
+    let conv = EmConvergence {
+        niter,
+        max_iter,
+        converged,
+        rel_diff: last_rel_diff,
+        thresh: convergence_thresh,
+    };
+    (curr, conv)
 }
 
-/// Abundance estimates (expected reads per target).
+/// Abundance estimates (expected reads per target), and how the EM loop stopped.
 pub fn em(
     eqc: &EqClasses,
     tinfo: &[TranscriptInfo],
@@ -541,7 +553,7 @@ pub fn em(
     init_abundances: Option<&Vec<f64>>,
     presence: Option<PresenceOpts>,
     nthreads: usize,
-) -> Vec<f64> {
+) -> (Vec<f64>, EmConvergence) {
     let span = span!(tracing::Level::INFO, "em");
     let _guard = span.enter();
     let pool = rayon::ThreadPoolBuilder::new()
@@ -558,7 +570,7 @@ pub fn em(
                 t0.elapsed().as_secs_f64()
             );
             let init = initial(&eqc.counts, tinfo.len(), init_abundances);
-            return em_components::run(
+            return em_components::run_counted(
                 &plan,
                 Counts::Of(&eqc.counts),
                 &init,
@@ -633,6 +645,7 @@ pub fn bootstrap(
                     presence,
                     false,
                 )
+                .0
             })
             .collect()
     })
@@ -686,7 +699,7 @@ mod tests {
         let plan = eqc.plan(ntx);
         assert!(plan.n_components() > 10);
         for (max_iter, thresh) in [(1000, 1e-3), (1000, 1e-9), (150, 1e-12)] {
-            let want = run(&eqc, &eqc.counts, &ti, max_iter, thresh, None, None, false);
+            let want = run(&eqc, &eqc.counts, &ti, max_iter, thresh, None, None, false).0;
             let init = initial(&eqc.counts, ntx, None);
             let got =
                 em_components::run(&plan, Counts::Of(&eqc.counts), &init, max_iter, thresh, 1);
@@ -745,7 +758,7 @@ mod tests {
         let tinfo: Vec<TranscriptInfo> = (0..3)
             .map(|_| TranscriptInfo::with_len(std::num::NonZeroUsize::new(1000).unwrap()))
             .collect();
-        let got = run(&eqc, &eqc.counts, &tinfo, 200, 1e-12, None, None, false);
+        let got = run(&eqc, &eqc.counts, &tinfo, 200, 1e-12, None, None, false).0;
 
         // Per-read EM with the same initialization, rounds and final pruning round.
         let mut prev = vec![reads.len() as f64 / 3.0; 3];
@@ -920,9 +933,9 @@ mod tests {
             let start = init.cloned().unwrap_or_else(|| cl.uniform());
             let (want, _) = ref_em(&cl, &start, RefEm::new(max_iter, thresh, 1));
             let what = format!("{max_iter} {thresh} {}", init.is_some());
-            let got = run(&eqc, &eqc.counts, &ti, max_iter, thresh, init, None, false);
+            let got = run(&eqc, &eqc.counts, &ti, max_iter, thresh, init, None, false).0;
             assert_close(&got, &want, rtol, &format!("class loop {what}"));
-            let got = em(&eqc, &ti, max_iter, thresh, init, None, 2);
+            let got = em(&eqc, &ti, max_iter, thresh, init, None, 2).0;
             assert_close(&got, &want, rtol, &format!("em {what}"));
         }
         // Per read: the classes' reference is the reads' reference.
@@ -953,16 +966,18 @@ mod tests {
         let ti = tinfo(ntx);
         for kind in [PresenceKind::SpikeSlab, PresenceKind::Bayes] {
             let p = Some(presence(kind));
-            let one = em(&eqc, &ti, 500, 1e-8, None, p, 1);
+            let one = em(&eqc, &ti, 500, 1e-8, None, p, 1).0;
             check_invariants(&one, &reads, None, ntx, &format!("{kind:?}"));
-            let four = em(&eqc, &ti, 500, 1e-8, None, p, 4);
+            let four = em(&eqc, &ti, 500, 1e-8, None, p, 4).0;
             assert_close(&four, &one, 1e-7, &format!("{kind:?} threads"));
-            let direct = on(4, || run(&eqc, &eqc.counts, &ti, 500, 1e-8, None, p, false));
+            let direct = on(4, || {
+                run(&eqc, &eqc.counts, &ti, 500, 1e-8, None, p, false).0
+            });
             assert_close(&direct, &one, 1e-7, &format!("{kind:?} class loop"));
             // Every read single-target: each transcript gets its reads, whatever q.
             let singles: Vec<Read> = (0..40).map(|i| vec![((i % 7) as u32, 0.5)]).collect();
             let es = classes_of(&singles, 9);
-            let got = em(&es, &tinfo(9), 500, 1e-8, None, p, 2);
+            let got = em(&es, &tinfo(9), 500, 1e-8, None, p, 2).0;
             let want: Vec<f64> = (0..9)
                 .map(|t| {
                     if t < 7 {
@@ -997,7 +1012,7 @@ mod tests {
             .collect();
         let dc = Classes::of_reads(&dup, ntx);
         let (want, _) = ref_em(&dc, &dc.uniform(), RefEm::new(3000, 1e-10, 1));
-        let got = run(&eqc, &counts, &ti, 3000, 1e-10, None, None, false);
+        let got = run(&eqc, &counts, &ti, 3000, 1e-10, None, None, false).0;
         assert_close(&got, &want, 1e-7, "class loop");
         let init = initial(&counts, ntx, None);
         let got = em_components::run(&eqc.plan(ntx), Counts::Of(&counts), &init, 3000, 1e-10, 1);
@@ -1034,7 +1049,8 @@ mod tests {
             Some(&init),
             None,
             false,
-        );
+        )
+        .0;
         let got = em_components::run(&eqc.plan(3), Counts::Of(&eqc.counts), &init, 1000, 1e-9, 1);
         for est in [&want, &got] {
             assert!(

@@ -42,7 +42,7 @@ fn get_single_cell_json_info(args: &Args, seqcol_digest: &NamedDigestVec) -> ser
         "verbose": &args.verbose,
         "single_cell": &args.single_cell,
         "quiet": &args.quiet,
-        "em_max_iter": &args.max_em_iter,
+        "em_max_iter": args.em_iter_limit(),
         "em_convergence_thresh": &args.convergence_thresh,
         "threads": &args.threads,
         "filter_group": &args.filter_group,
@@ -141,13 +141,13 @@ pub fn quantify_single_cell_from_collated_bam<R: BufRead>(
                         let emi = EMInfo {
                             eq_map: &store,
                             txp_info: &txps,
-                            max_iter: args.max_em_iter,
+                            max_iter: args.em_iter_limit(),
                             convergence_thresh: args.convergence_thresh,
                             init_abundances: None,
                             kde_model: None,
                         };
                         // run the EM for this cell
-                        let counts = em::em(&emi, 1);
+                        let (counts, _) = em::em(&emi, 1);
                         // clear out the vectors where we will store
                         // the count information for this cell
                         col_ids.clear();

@@ -307,9 +307,19 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
     let mut opts = spearfish::MapOptions::preset(preset);
     // The truncation model needs where reads start and end on each transcript, so spans are
     // extended to the read ends even where the preset leaves them at the outermost seeds.
+    let span_ext = crate::prog_opts::SpanExtension::in_process(
+        serde_json::to_value(preset)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_else(|| format!("{preset:?}")),
+        opts.params.ends.is_some(),
+        args.model_truncation,
+    );
     if args.model_truncation {
         opts.extend_ends(preset);
     }
+    info!("spearfish: {}", span_ext.describe());
+    args.span_extension = Some(span_ext);
     // Only hits within the score filter of the best usually reach the EM, so only those are
     // extended. (Reporting only those lost reads whose best hit fails the span filters: oarfish
     // then rescales the threshold to the best hit that passes.)

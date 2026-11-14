@@ -40,7 +40,38 @@ Besides the options of the run, `P.meta_info.json` records what happened to the 
 ]
 ```
 
-`code` is a stable name for the condition, `fraction` the share of reads that triggered it, `threshold` the share above which it is issued, and `message` the text that was also written to the log. The codes, and what to do about each, are listed in [Recommended practices by sequencing technology](/oarfish/guides/sequencing-technologies/#run-warnings). The single-cell mode does not record warnings.
+`code` is a stable name for the condition, `fraction` the share of reads that triggered it, `threshold` the share above which it is issued, and `message` the text that was also written to the log. For `em_not_converged` (the default or a per-read EM) and `truncation_em_not_converged` (the truncation EM), `fraction` is instead the EM's last convergence statistic (the largest relative change of a transcript's abundance) and `threshold` is `--convergence-thresh`. The codes, and what to do about each, are listed in [Recommended practices by sequencing technology](/oarfish/guides/sequencing-technologies/#run-warnings). The single-cell mode does not record warnings.
+
+### EM (`em`)
+
+`em` records which EM ran and how it stopped, whether or not it converged:
+
+```json
+"em": {
+  "kind": "truncation",
+  "iterations": 1209,
+  "max_iter": 5000,
+  "converged": true,
+  "last_rel_change": 0.00077,
+  "convergence_thresh": 0.001
+}
+```
+
+`kind` is `truncation` (`--model-truncation`) or `standard` (the equivalence-class EM or a per-read EM). `last_rel_change` is the convergence statistic of the last iteration, as that EM measures it. The truncation EM counts each accelerated (SQUAREM) step as three iterations, so its `iterations` can exceed `max_iter` by up to two. Bootstrap replicates are not recorded here.
+
+### Span extension (spearfish backend)
+
+Runs with `--mapper spearfish`, and runs on a RAD file, also record whether alignment spans were extended to the read ends:
+
+```json
+"spearfish_span_extension": {
+  "extended": true,
+  "reason": "model_truncation",
+  "preset": "drna"
+}
+```
+
+`reason` is `preset` (the mapping preset extends spans), `model_truncation` (the preset leaves spans at the outermost seeds, and `--model-truncation` turned extension on), `preset_off` (the preset leaves them at the outermost seeds), or `rad_header` (a RAD file: as its mapper recorded). The span decides how much of a read counts as aligned, and so which reads `--min-aligned-fraction` drops.
 
 ## Read-level assignment probabilities
 

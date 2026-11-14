@@ -21,6 +21,7 @@ use rayon::prelude::*;
 
 use crate::truncation::LogLik;
 use crate::util::constants;
+use crate::util::run_warnings::EmConvergence;
 
 /// Rounds a component runs before the global criterion is checked.
 const TILE: u32 = 64;
@@ -723,10 +724,10 @@ impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
 }
 
 /// The relative change in either direction, over abundances above
-/// [`constants::MIN_READ_THRESH`] (the truncation EM's statistic).
+/// [`constants::TRUNC_CONV_MIN_READS`] (the truncation EM's statistic).
 #[inline]
-fn rel_change(prev: f64, curr: f64) -> f64 {
-    if prev > constants::MIN_READ_THRESH {
+pub(crate) fn rel_change(prev: f64, curr: f64) -> f64 {
+    if prev > constants::TRUNC_CONV_MIN_READS {
         (curr - prev).abs() / prev
     } else {
         0.0
@@ -766,6 +767,18 @@ pub fn run<W: Copy + Into<f64> + Send + Sync>(
     thresh: f64,
     min_iter: u32,
 ) -> Vec<f64> {
+    run_counted(plan, n, init, max_iter, thresh, min_iter).0
+}
+
+/// [`run`], and how its loop stopped.
+pub fn run_counted<W: Copy + Into<f64> + Send + Sync>(
+    plan: &Plan<W>,
+    n: Counts,
+    init: &[f64],
+    max_iter: u32,
+    thresh: f64,
+    min_iter: u32,
+) -> (Vec<f64>, EmConvergence) {
     let mut single = vec![0.0_f64; plan.ntx];
     for &(t, c) in &plan.singles {
         single[t as usize] += n.get(c);
@@ -825,6 +838,7 @@ pub fn run<W: Copy + Into<f64> + Send + Sync>(
     };
 
     let mut niter = 0_u32;
+    let (mut converged, mut last_rd) = (false, f64::INFINITY);
     while niter < max_iter {
         let steps = TILE.min(max_iter - niter);
         let snap: Vec<Vec<f64>> = st.iter().map(|s| s.prev.clone()).collect();
@@ -834,6 +848,7 @@ pub fn run<W: Copy + Into<f64> + Send + Sync>(
             if niter == 0 && i == 0 {
                 rd = rd.max(lone_rd0);
             }
+            last_rd = rd;
             rd < thresh && niter + i as u32 > min_iter
         });
         match stop {
@@ -843,11 +858,20 @@ pub fn run<W: Copy + Into<f64> + Send + Sync>(
                     s.prev = p;
                 }
                 advance(&mut st, i as u32 + 1);
+                niter += i as u32;
+                converged = true;
                 break;
             }
             None => niter += steps,
         }
     }
+    let conv = EmConvergence {
+        niter,
+        max_iter,
+        converged,
+        rel_diff: last_rd,
+        thresh,
+    };
 
     // Zero very small abundances, then one more round.
     for s in st.iter_mut() {
@@ -867,7 +891,7 @@ pub fn run<W: Copy + Into<f64> + Send + Sync>(
     for &t in &lone {
         out[t as usize] = single[t as usize];
     }
-    out
+    (out, conv)
 }
 
 impl<W: Copy + Into<f64> + Send + Sync> Comp<W> {
@@ -952,12 +976,17 @@ struct Sq {
 
 const STEP_GROW: f64 = 4.0;
 
-/// SQUAREM totals of [`run_squarem`] over the components, and the iteration count.
+/// SQUAREM totals of [`run_squarem`] over the components, the iteration count, and how the
+/// loop stopped.
 pub struct SquaremReport {
     pub niter: u32,
     pub acc: u64,
     pub rej: u64,
     pub plain: u64,
+    /// Whether the convergence test held before `max_iter`.
+    pub converged: bool,
+    /// The statistic of the last loop iteration tested (infinite if none ran).
+    pub rel_diff: f64,
 }
 
 struct SqState {
@@ -1127,6 +1156,7 @@ pub fn run_squarem<W: Copy + Into<f64> + Send + Sync>(
 
     let mut niter = niter0;
     let mut first = true;
+    let (mut converged, mut last_rd) = (false, f64::INFINITY);
     'outer: while niter < max_iter {
         // Up to TILE loop iterations, all starting below max_iter.
         let mut starts = Vec::with_capacity(TILE as usize);
@@ -1144,6 +1174,7 @@ pub fn run_squarem<W: Copy + Into<f64> + Send + Sync>(
             }
             // The loop's count at its test: after a cycle's two extra iterations.
             let at = if kind(x0) { x0 + 2 } else { x0 };
+            last_rd = rd;
             if rd < thresh && at > 1 {
                 for (s, (p, q)) in st.iter_mut().zip(snap) {
                     s.prev = p;
@@ -1151,6 +1182,7 @@ pub fn run_squarem<W: Copy + Into<f64> + Send + Sync>(
                 }
                 advance(&mut st, niter, i as u32 + 1);
                 niter = at;
+                converged = true;
                 break 'outer;
             }
         }
@@ -1163,6 +1195,8 @@ pub fn run_squarem<W: Copy + Into<f64> + Send + Sync>(
         acc: st.iter().map(|s| s.sq.acc as u64).sum(),
         rej: st.iter().map(|s| s.sq.rej as u64).sum(),
         plain: st.iter().map(|s| s.sq.plain as u64).sum(),
+        converged,
+        rel_diff: last_rd,
     };
     // Zero very small abundances, then one more EM step.
     let mut out = vec![0.0_f64; plan.ntx];
@@ -1633,6 +1667,12 @@ mod tests {
         let tiny = constants::MIN_READ_THRESH / 2.0;
         assert_eq!(rel_change(tiny, 5.0), 0.0);
         assert_eq!(rel_increase(tiny, 5.0), 0.0);
+        // The truncation EM's statistic ignores transcripts at or below 0.01 reads, however
+        // fast they move; the plain EMs' statistic counts them from 1e-5 reads.
+        let small = constants::TRUNC_CONV_MIN_READS;
+        assert_eq!(rel_change(small, small / 2.0), 0.0);
+        assert_eq!(rel_change(2.0 * small, small), 0.5);
+        assert_eq!(rel_increase(small, 2.0 * small), 1.0);
         assert_eq!(rel_change(2.0, 1.0), 0.5);
         assert_eq!(rel_increase(2.0, 1.0), -0.5);
         assert_eq!(rel_change(1.0, 3.0), 2.0);

@@ -2,8 +2,8 @@
 //! user should look at before trusting the result. Each is written to the log and recorded
 //! in the `warnings` array of `meta_info.json`.
 //!
-//! All of them are computed from counts the run keeps anyway (the discard table), so they
-//! cost nothing per read.
+//! All of them are computed from what the run keeps anyway (the discard table, and how the EM
+//! stopped), so they cost nothing per read.
 
 use bio_types::strand::Strand;
 use serde::Serialize;
@@ -27,12 +27,88 @@ pub const MAX_UNMAPPED: f64 = 0.50;
 pub struct RunWarning {
     /// A stable name for the condition, for programs that read `meta_info.json`.
     pub code: &'static str,
-    /// The share of reads that triggered the warning.
+    /// The share of reads that triggered the warning (for `em_not_converged` and
+    /// `truncation_em_not_converged`, the EM's last convergence statistic).
     pub fraction: f64,
-    /// The share above which the warning is issued.
+    /// The share above which the warning is issued (for the two EM codes, the convergence
+    /// threshold).
     pub threshold: f64,
     /// What happened and what to check, for a person.
     pub message: String,
+}
+
+/// How an EM run stopped: after `niter` iterations, either because its convergence test held
+/// or because it reached the iteration limit `max_iter`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EmConvergence {
+    /// Iterations run (a SQUAREM cycle counts as three).
+    pub niter: u32,
+    /// The iteration limit (`--max-em-iter`).
+    pub max_iter: u32,
+    /// Whether the convergence test held before the limit.
+    pub converged: bool,
+    /// The convergence statistic of the last iteration (the largest relative change of a
+    /// transcript's abundance, as that EM measures it).
+    pub rel_diff: f64,
+    /// The threshold the statistic had to fall below (`--convergence-thresh`).
+    pub thresh: f64,
+}
+
+/// Which EM ran: the truncation model's, or one of the others (the equivalence-class EM, the
+/// per-read EMs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EmKind {
+    Standard,
+    Truncation,
+}
+
+/// What `meta_info.json` records about the EM (`em`): which one ran, its iterations and limit,
+/// and whether it converged.
+pub fn em_info(em: &EmConvergence, kind: EmKind) -> serde_json::Value {
+    serde_json::json!({
+        "kind": kind,
+        "iterations": em.niter,
+        "max_iter": em.max_iter,
+        "converged": em.converged,
+        "last_rel_change": em.rel_diff,
+        "convergence_thresh": em.thresh,
+    })
+}
+
+/// The warning for an EM that stopped at its iteration limit before converging, if it did:
+/// `em_not_converged` for the standard EMs, `truncation_em_not_converged` for the truncation
+/// EM, each with its own advice.
+pub fn check_em(em: &EmConvergence, kind: EmKind) -> Option<RunWarning> {
+    let stat = format!(
+        "the largest relative change in a transcript's abundance in the last iteration was \
+         {:.3e}, above the threshold {:.0e} (--convergence-thresh)",
+        em.rel_diff, em.thresh
+    );
+    (!em.converged).then(|| match kind {
+        EmKind::Standard => RunWarning {
+            code: "em_not_converged",
+            fraction: em.rel_diff,
+            threshold: em.thresh,
+            message: format!(
+                "The EM stopped at its iteration limit ({} iterations, --max-em-iter) before \
+                 converging: {stat}. Estimates are usually stable by then; to let the EM \
+                 converge, raise --max-em-iter (default 1,000).",
+                em.max_iter
+            ),
+        },
+        EmKind::Truncation => RunWarning {
+            code: "truncation_em_not_converged",
+            fraction: em.rel_diff,
+            threshold: em.thresh,
+            message: format!(
+                "The truncation EM (--model-truncation) stopped at its iteration limit ({} \
+                 iterations, --max-em-iter) before converging: {stat}. Raise --max-em-iter \
+                 (default 5,000 with --model-truncation) to let it converge.",
+                em.max_iter
+            ),
+        },
+    })
 }
 
 /// What the checks need to know about the run besides the discard table.
@@ -97,10 +173,12 @@ pub fn check(dt: &DiscardTable, ctx: &RunContext) -> Vec<RunWarning> {
             message: format!(
                 "{low_frac} of {mapped} mapped reads ({}) were dropped because less than {} of the \
                  read is in its best alignment (--min-aligned-fraction). Reads that still carry \
-                 adapters or primers are the usual cause: trim them (see \
-                 https://combine-lab.github.io/oarfish/guides/sequencing-technologies/), or \
-                 keep these reads with `--min-aligned-fraction 0` or \
-                 `--filter-group no-filters`.{one_strand_note}",
+                 adapters or primers are the usual cause: trim them, keeping the poly(A) tails \
+                 (see https://combine-lab.github.io/oarfish/guides/sequencing-technologies/\
+                 #when-the-aligned-fraction-filter-drops-many-reads). For gene-level analyses, \
+                 `--filter-group no-filters` or a lower `--min-aligned-fraction` keeps these \
+                 reads; for transcript-level estimates, the default agreed better with \
+                 short-read estimates in our tests.{one_strand_note}",
                 pct(f),
                 ctx.min_aligned_fraction
             ),
@@ -208,6 +286,12 @@ mod tests {
         assert_eq!(codes(&w), ["aligned_fraction_filter"]);
         assert!((w[0].fraction - 0.2).abs() < 1e-12);
         assert!(w[0].message.contains("200 of 1000 mapped reads (20.0%)"));
+        // the advice agrees with the guide it links to
+        assert!(w[0].message.contains(
+            "sequencing-technologies/#when-the-aligned-fraction-filter-drops-many-reads"
+        ));
+        assert!(w[0].message.contains("keeping the poly(A) tails"));
+        assert!(w[0].message.contains("For gene-level analyses"));
         // exactly at the threshold: no warning
         let dt = DiscardTable::from_read_counts(0, 0, 0, 100, 900);
         assert!(check(&dt, &CTX).is_empty());
@@ -251,6 +335,42 @@ mod tests {
         assert_eq!(codes(&check(&dt, &CTX)), ["low_mapping_rate"]);
         assert_eq!(codes(&check(&dt, &both)), ["low_mapping_rate"]);
         assert_eq!(codes(&check(&dt, &fw)), ["map_strand_unmapped"]);
+    }
+
+    #[test]
+    fn em_warns_only_when_it_stops_at_the_limit() {
+        let mut em = EmConvergence {
+            niter: 412,
+            max_iter: 1000,
+            converged: true,
+            rel_diff: 9e-4,
+            thresh: 1e-3,
+        };
+        assert_eq!(check_em(&em, EmKind::Standard), None);
+        assert_eq!(check_em(&em, EmKind::Truncation), None);
+        let v = em_info(&em, EmKind::Truncation);
+        assert_eq!(v["kind"], "truncation");
+        assert_eq!(
+            (v["iterations"].as_u64(), v["converged"].as_bool()),
+            (Some(412), Some(true))
+        );
+        em.niter = 1000;
+        em.converged = false;
+        em.rel_diff = 0.0123;
+        let w = check_em(&em, EmKind::Standard).expect("a warning");
+        assert_eq!(w.code, "em_not_converged");
+        assert!(w.message.contains("default 1,000"));
+        assert!(w.message.contains("usually stable"));
+        let t = check_em(&em, EmKind::Truncation).expect("a warning");
+        assert_eq!(t.code, "truncation_em_not_converged");
+        assert_eq!((t.fraction, t.threshold), (0.0123, 1e-3));
+        assert!(t.message.contains("default 5,000 with --model-truncation"));
+        assert_eq!(em_info(&em, EmKind::Standard)["kind"], "standard");
+        assert_eq!((w.fraction, w.threshold), (0.0123, 1e-3));
+        assert!(w.message.contains("iteration limit (1000 iterations"));
+        assert!(t.message.contains("truncation EM (--model-truncation)"));
+        assert!(w.message.contains("1.230e-2"));
+        assert!(w.message.contains("--max-em-iter"));
     }
 
     #[test]

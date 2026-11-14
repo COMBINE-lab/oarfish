@@ -26,6 +26,7 @@ use tracing::{info, span, trace};
 use crate::em_components;
 use crate::util::constants;
 use crate::util::oarfish_types::{AlnInfo, EMInfo, TranscriptInfo};
+use crate::util::run_warnings::EmConvergence;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Impl {
@@ -193,7 +194,8 @@ fn chunks(f: &Flat, nthreads: usize, per_thread: usize) -> Vec<(usize, usize)> {
     out
 }
 
-pub fn em(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
+/// Abundance estimates (expected reads per target), and how the EM loop stopped.
+pub fn em(em_info: &EMInfo, nthreads: usize, how: Impl) -> (Vec<f64>, EmConvergence) {
     let span = span!(tracing::Level::INFO, "em_read");
     let _guard = span.enter();
     let pool = rayon::ThreadPoolBuilder::new()
@@ -203,7 +205,7 @@ pub fn em(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
     pool.install(|| run(em_info, nthreads, how))
 }
 
-fn run(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
+fn run(em_info: &EMInfo, nthreads: usize, how: Impl) -> (Vec<f64>, EmConvergence) {
     let t0 = Instant::now();
     let tinfo = em_info.txp_info;
     let ntx = tinfo.len();
@@ -223,7 +225,7 @@ fn run(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
             t0.elapsed().as_secs_f64()
         );
         let t1 = Instant::now();
-        let out = em_components::run(
+        let out = em_components::run_counted(
             &plan,
             em_components::Counts::Unit,
             &prev,
@@ -259,6 +261,7 @@ fn run(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
         Impl::Csr => step_csr(&f, tr.as_ref().unwrap(), &mut inv, prev, curr),
     };
     let mut niter = 0u32;
+    let (mut converged, mut last_rel_diff) = (false, f64::INFINITY);
     while niter < em_info.max_iter {
         step(&prev, &mut curr);
         let rel_diff = prev
@@ -268,7 +271,9 @@ fn run(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
             .map(|(p, c)| (c - p) / p)
             .reduce(|| 0.0, f64::max);
         std::mem::swap(&mut prev, &mut curr);
+        last_rel_diff = rel_diff;
         if rel_diff < em_info.convergence_thresh && niter > 1 {
+            converged = true;
             break;
         }
         niter += 1;
@@ -296,7 +301,14 @@ fn run(em_info: &EMInfo, nthreads: usize, how: Impl) -> Vec<f64> {
         "per-read EM ({how:?}): {niter} iterations in {:.2}s",
         t1.elapsed().as_secs_f64()
     );
-    curr
+    let conv = EmConvergence {
+        niter,
+        max_iter: em_info.max_iter,
+        converged,
+        rel_diff: last_rel_diff,
+        thresh: em_info.convergence_thresh,
+    };
+    (curr, conv)
 }
 
 /// Bootstrap replicates of the per-read EM on the component layout: each resamples the reads
@@ -606,11 +618,11 @@ mod tests {
         let (w1, w50) = (want(1), want(50));
         check_invariants(&w1, &weighted, None, ntx, "reference");
         for (name, got, w) in [
-            ("Local", em(&emi, 3, Impl::Local), &w1),
-            ("Csr 1", em(&emi, 1, Impl::Csr), &w1),
-            ("Csr 16", em(&emi, 16, Impl::Csr), &w1),
-            ("em_par", crate::em::em_par(&emi, 4), &w1),
-            ("em", crate::em::em(&emi, 1), &w50),
+            ("Local", em(&emi, 3, Impl::Local).0, &w1),
+            ("Csr 1", em(&emi, 1, Impl::Csr).0, &w1),
+            ("Csr 16", em(&emi, 16, Impl::Csr).0, &w1),
+            ("em_par", crate::em::em_par(&emi, 4).0, &w1),
+            ("em", crate::em::em(&emi, 1).0, &w50),
         ] {
             assert_close(&got, w, 1e-7, name);
             check_invariants(&got, &weighted, None, ntx, name);
