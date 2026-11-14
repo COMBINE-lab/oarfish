@@ -81,6 +81,10 @@ filters:
 indexing:
       --only-index             only build the index, do not quantify
       --index-out <INDEX_OUT>  path where the index will be written (if provided)
+      --t2g <FILE>             with --mapper spearfish, a transcript-to-gene table for the index oarfish
+                               builds (gene labels let spearfish group isoforms by gene)
+      --infer-genes            with --mapper spearfish, infer genes from shared sequence for the index
+                               oarfish builds (for transcriptomes without gene labels)
 
 coverage model:
       --coverage-model <MODEL>     none | logistic | truncation (where reads land on transcripts) [default: none]

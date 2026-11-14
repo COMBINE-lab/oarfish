@@ -43,6 +43,19 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   alignments are weighed by their mapping scores alone, and quantification is as with
   spearfish 0.2.1. `--end-fit 0` alone leaves the orientation evidence on. Recorded as
   `spearfish_settings.orient_evidence`.
+- **A warning for spearfish indexes without gene groups** (`index_without_gene_groups`, in the
+  log at warn level, also with `--quiet`, and in `meta_info.json`): when every transcript of the
+  index is its own gene, isoforms compete one by one for spearfish's per-gene candidate places
+  and ties among them go by FASTA order. The warning says how to fix it: build the index with a
+  transcript-to-gene table or with gene inference.
+- **`spearfish_settings.index_genes` in `meta_info.json`**, for every spearfish run: where the
+  index's gene labels came from (`source`: `fasta` or `t2g`, both provided; `inferred`; `none`;
+  or `unknown`), and its `genes`, `transcripts` and `has_gene_groups`, from the index manifest.
+  For RAD input `source` is `unknown`: spearfish 0.3.0 RAD headers do not record it.
+- **`--t2g FILE` and `--infer-genes`** (with `--mapper spearfish`, when oarfish builds the index
+  from `--annotated`/`--novel`): gene labels from a transcript-to-gene table, or inferred from
+  shared sequence, as `spearfish index --t2g` / `--infer-genes` give them. The index manifest
+  records the source; an index oarfish builds in memory now has it too.
 - **`spearfish_settings` in `meta_info.json`**, and a line in the log at the start of the run:
   with `--mapper spearfish`, and for RAD input, the settings the alignments were made with:
   `source` (`in_process` or `rad_header`), `preset`, `extend_ends` and `extend_ends_reason`

@@ -28,6 +28,33 @@ With `--mapper spearfish`, read mode maps with [spearfish](https://github.com/CO
 
 spearfish builds its index from `--annotated`/`--novel` in a few seconds; `--index-out transcripts.sfi` also writes it to a file (with `--only-index`, without quantifying), and `--index transcripts.sfi` opens a saved one instead of building it, memory-mapped. Reusing a saved index skips reading the FASTA and building, and lowers peak memory (by about 2.6 GB for a human transcriptome).
 
+#### Gene labels
+
+spearfish keeps a few candidate places for each read per gene, and collapses isoforms by gene in
+its index. Build the index with gene labels: without them every transcript is its own gene, so
+isoforms compete for those places one by one, ties among them go by their order in the FASTA, and
+accuracy suffers. The labels can come from:
+
+- **the FASTA headers**: GENCODE-style IDs, `transcript|gene|...`, give each transcript its gene;
+- **a transcript-to-gene table**: `--t2g FILE` (whitespace-separated `transcript gene` per line;
+  further columns are ignored) replaces the genes in the headers, for other FASTAs;
+- **gene inference**: `--infer-genes` groups transcripts that share sequence, for a transcriptome
+  without a gene annotation (spearfish's gene inference, with its default settings).
+
+`--t2g` and `--infer-genes` apply when oarfish builds the index from `--annotated`/`--novel` with
+`--mapper spearfish`; for `spearfish index`, use its own `--t2g` and `--infer-genes`. An index
+without gene groups gets an `index_without_gene_groups` warning, in the log (also with `--quiet`)
+and in `meta_info.json`, and every spearfish run records where the index's genes came from under
+`spearfish_settings.index_genes` (`fasta`, `t2g`, `inferred` or `none`; see [the output
+reference](/oarfish/reference/output/#spearfish-settings-spearfish_settings)). For a RAD file,
+whose header does not record the index's genes in spearfish 0.3.0, it is `unknown` and there is no
+warning.
+
+```bash
+$ oarfish --only-index --mapper spearfish --annotated transcripts.fa --t2g t2g.tsv \
+    --index-out transcripts.sfi --seq-tech ont-cdna
+```
+
 oarfish records the reference's digests in the index it writes, so quantifying from it records the same reference signature as building in process. An index written by `spearfish index` (spearfish installed separately, e.g. `conda install -c bioconda spearfish` or `cargo install spearfish-cli`) also works, but has no such digests, so oarfish records a name/length digest instead.
 
 ### Presets

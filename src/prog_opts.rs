@@ -597,6 +597,30 @@ pub struct Args {
     #[arg(long, conflicts_with_all = ["alignments", "index"], requires_ifs([(ArgPredicate::IsPresent, "only_index")]), help_heading = "indexing")]
     pub index_out: Option<PathBuf>,
 
+    /// with `--mapper spearfish`, when oarfish builds the index from `--annotated`/`--novel`:
+    /// a transcript-to-gene table (whitespace-separated `transcript gene` per line; further
+    /// columns are ignored) whose genes replace those in the FASTA headers. spearfish groups
+    /// isoforms by gene; without gene labels every transcript is its own gene. Transcripts
+    /// the table lacks keep the gene from their header
+    #[arg(
+        long,
+        value_name = "FILE",
+        conflicts_with_all = ["alignments", "index", "infer_genes"],
+        help_heading = "indexing"
+    )]
+    pub t2g: Option<PathBuf>,
+
+    /// with `--mapper spearfish`, when oarfish builds the index from `--annotated`/`--novel`:
+    /// group transcripts into genes from shared sequence (spearfish's gene inference, with its
+    /// default settings), for transcriptomes whose FASTA headers carry no gene IDs and that
+    /// have no transcript-to-gene table
+    #[arg(
+        long,
+        conflicts_with_all = ["alignments", "index"],
+        help_heading = "indexing"
+    )]
+    pub infer_genes: bool,
+
     /// sequencing technology in which to expect reads if using mapping based mode
     #[arg(
         long,
@@ -926,6 +950,38 @@ pub struct SpearfishSettings {
     /// What the orientation evidence does: `quant`, `mapping` or `off` (see
     /// [`OrientEvidence`]).
     pub orient_evidence: Option<OrientEvidence>,
+    /// Where the index's gene labels came from, and whether it groups isoforms into genes.
+    pub index_genes: Option<IndexGenes>,
+}
+
+/// The gene labels of the spearfish index the alignments were made against, as
+/// `meta_info.json` records them (`spearfish_settings.index_genes`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct IndexGenes {
+    /// Where the genes came from, as the index manifest's `genes_from`: `fasta` (gene IDs in
+    /// the FASTA headers) or `t2g` (a transcript-to-gene table), both provided; `inferred`
+    /// (spearfish's gene inference); `none` (every transcript its own gene); or `unknown` (an
+    /// index without a manifest, or a RAD file, whose header does not record it).
+    pub source: String,
+    /// Genes in the index (`null` when unknown).
+    pub genes: Option<usize>,
+    /// Transcripts in the index.
+    pub transcripts: Option<usize>,
+    /// Whether the index groups isoforms into genes (spearfish's `Index::has_gene_groups`;
+    /// `null` when unknown).
+    pub has_gene_groups: Option<bool>,
+}
+
+impl IndexGenes {
+    /// The record for an index whose gene labels are not known (`source: unknown`).
+    pub fn unknown(transcripts: Option<usize>) -> Self {
+        IndexGenes {
+            source: "unknown".to_string(),
+            genes: None,
+            transcripts,
+            has_gene_groups: None,
+        }
+    }
 }
 
 impl SpearfishSettings {
@@ -953,6 +1009,7 @@ impl SpearfishSettings {
                 }
             }),
             orient_quant: tb["orient_quant"].as_bool(),
+            index_genes: None,
             orient_evidence: match (
                 tb["orient_same_exact"].as_bool(),
                 tb["orient_tail_after"].as_u64(),

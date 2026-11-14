@@ -56,7 +56,8 @@ pub fn read_header(path: &Path, args: &mut Args) -> anyhow::Result<RadHeader> {
         );
         args.score_prob_denom = Some(d);
     }
-    let settings = crate::prog_opts::SpearfishSettings::from_rad(m);
+    let mut settings = crate::prog_opts::SpearfishSettings::from_rad(m);
+    settings.index_genes = Some(index_genes(&h));
     info!("{}", settings.span_extension().describe());
     if m.quant_scores {
         info!("alignments are weighed by the mapper's quantification scores (qscore)");
@@ -75,6 +76,14 @@ pub fn read_header(path: &Path, args: &mut Args) -> anyhow::Result<RadHeader> {
         anyhow::bail!("RAD input is bulk; single-cell mode needs a collated BAM");
     }
     Ok(h)
+}
+
+/// The index's gene labels as the RAD header records them. spearfish 0.3.0 writes the index's
+/// identifier (`index_id`) but not where its genes came from or how many there are, so this is
+/// `source: unknown` with the transcript count of the header. The one place to read such tags
+/// once the mapper writes them.
+pub fn index_genes(h: &RadHeader) -> crate::prog_opts::IndexGenes {
+    crate::prog_opts::IndexGenes::unknown(Some(h.ref_names.len()))
 }
 
 /// A SAM header over the RAD file's targets, with the mapper as the program.

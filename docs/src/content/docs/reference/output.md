@@ -40,7 +40,7 @@ Besides the options of the run, `P.meta_info.json` records what happened to the 
 ]
 ```
 
-`code` is a stable name for the condition, `fraction` the share of reads that triggered it, `threshold` the share above which it is issued, and `message` the text that was also written to the log. For `em_not_converged` (the default or a per-read EM) and `truncation_em_not_converged` (the truncation EM), `fraction` is instead the EM's last convergence statistic (the largest relative change of a transcript's abundance) and `threshold` is `--convergence-thresh`. The codes, and what to do about each, are listed in [Recommended practices by sequencing technology](/oarfish/guides/sequencing-technologies/#run-warnings). The single-cell mode does not record warnings.
+`code` is a stable name for the condition, `fraction` the share of reads that triggered it, `threshold` the share above which it is issued, and `message` the text that was also written to the log. For `em_not_converged` (the default or a per-read EM) and `truncation_em_not_converged` (the truncation EM), `fraction` is instead the EM's last convergence statistic (the largest relative change of a transcript's abundance) and `threshold` is `--convergence-thresh`. For `index_without_gene_groups` (a spearfish index without gene groups), `fraction` is the index's genes per transcript (1) and `threshold` is 1. The codes, and what to do about each, are listed in [Recommended practices by sequencing technology](/oarfish/guides/sequencing-technologies/#run-warnings). The single-cell mode does not record warnings.
 
 ### EM (`em`)
 
@@ -75,7 +75,13 @@ Runs with `--mapper spearfish`, and runs on a RAD file, record the spearfish set
   "end_fit_tol": 4,
   "end_fit_from": "alignment",
   "orient_quant": true,
-  "orient_evidence": "quant"
+  "orient_evidence": "quant",
+  "index_genes": {
+    "source": "fasta",
+    "genes": 2,
+    "transcripts": 4,
+    "has_gene_groups": true
+  }
 }
 ```
 
@@ -85,6 +91,12 @@ Runs with `--mapper spearfish`, and runs on a RAD file, record the spearfish set
 - `strands`: the read orientations mapped (`both`, `fwd` or `rev`).
 - `quant_scores`: whether the alignments carry quantification scores that can differ from their mapping scores. oarfish weighs alignments by the quantification score; without one it is the mapping score. A RAD file from spearfish before 0.3.0 has none.
 - `end_fit` (points; 0 when off), `end_fit_tol` and `end_fit_from` (`chain` or `alignment`): the end fit, `orient_quant`: whether spearfish's orientation evidence acts through the quantification score, and `orient_evidence`: what the evidence does, `quant` (moves only the quantification score), `mapping` (moves the mapping score and the orientation) or `off` (none, as spearfish 0.2.1 mapped; see `--orient-evidence`). See [Mapping and quantification scores](/oarfish/guides/mapping-backends/#mapping-and-quantification-scores). For a RAD file they are read from the mapper's parameters in its header, and are `null` where the header does not have them.
+
+- `index_genes`: the gene labels of the spearfish index the reads were mapped against.
+  - `source`: where the genes came from, as the index manifest records it: `fasta` (gene IDs in the FASTA headers, GENCODE-style `transcript|gene|...`) and `t2g` (a transcript-to-gene table) are provided labels; `inferred` means spearfish grouped transcripts by shared sequence; `none` means every transcript is its own gene; `unknown` is an index without a manifest, or a RAD file.
+  - `genes` and `transcripts`: their numbers in the index.
+  - `has_gene_groups`: whether the index groups isoforms into genes. When it is `false`, the run also has an `index_without_gene_groups` [warning](#run-warnings).
+  - For a RAD file, `source` is `unknown`, `genes` and `has_gene_groups` are `null`, and `transcripts` is the number of targets in the file: spearfish 0.3.0 does not record the index's gene labels in RAD headers, so oarfish cannot tell, and does not warn.
 
 Runs on a BAM file have no `spearfish_settings`.
 

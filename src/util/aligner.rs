@@ -227,6 +227,16 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
                 .map(|f| (label, digest_utils::get_digest_from_fasta(f)))
         })
         .collect();
+        // The gene table is small: read it first, so a bad path fails before the FASTAs are read.
+        let t2g = match &args.t2g {
+            Some(path) => {
+                let table = std::fs::read_to_string(path)
+                    .map_err(|e| anyhow::anyhow!("reading --t2g {}: {e}", path.display()))?;
+                let hash = spearfish::provenance::file_xxh3(path)?;
+                Some((path, table, hash))
+            }
+            None => None,
+        };
         let t_read = std::time::Instant::now();
         let mut txs = Vec::new();
         for f in [&args.annotated, &args.novel].into_iter().flatten() {
@@ -242,24 +252,41 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
             txs.len(),
             t_read.elapsed().as_secs_f64()
         );
+        // Where the genes come from, as `spearfish index` records it in the manifest.
+        let mut input = spearfish::provenance::InputInfo {
+            path: [&args.annotated, &args.novel]
+                .into_iter()
+                .flatten()
+                .map(|f| spearfish::provenance::absolute(f))
+                .collect::<Vec<_>>()
+                .join(","),
+            genes_from: if txs.iter().any(|(name, gene, _)| name != gene) {
+                "fasta"
+            } else {
+                "none"
+            }
+            .to_string(),
+            ..Default::default()
+        };
+        if let Some((path, table, hash)) = t2g {
+            let missing = spearfish::apply_t2g(&mut txs, &table);
+            if missing > 0 {
+                warn!(
+                    "{} transcripts are not in --t2g {}; their gene IDs come from the FASTA",
+                    missing.to_formatted_string(&Locale::en),
+                    path.display()
+                );
+            }
+            input.genes_from = "t2g".to_string();
+            input.t2g = Some((spearfish::provenance::absolute(path), hash));
+        }
+        let mut idx_opts = spearfish::IndexOptions::default();
+        if args.infer_genes {
+            idx_opts.infer_genes = Some(spearfish::InferGenesOptions::default());
+            input.genes_from = "inferred".to_string();
+        }
         let t = std::time::Instant::now();
-        let idx_opts = spearfish::IndexOptions::default();
         let (index, rep) = if let Some(out) = &args.index_out {
-            let input = spearfish::provenance::InputInfo {
-                path: [&args.annotated, &args.novel]
-                    .into_iter()
-                    .flatten()
-                    .map(|f| spearfish::provenance::absolute(f))
-                    .collect::<Vec<_>>()
-                    .join(","),
-                genes_from: if txs.iter().any(|(name, gene, _)| name != gene) {
-                    "fasta"
-                } else {
-                    "none"
-                }
-                .to_string(),
-                ..Default::default()
-            };
             let (_, rep, _) = spearfish::Index::build_to_file_with(
                 txs,
                 &idx_opts,
@@ -269,7 +296,7 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
             )?;
             (None, rep)
         } else {
-            let (index, rep) = spearfish::Index::build(txs, &idx_opts)?;
+            let (index, rep) = spearfish::Index::build_with(txs, &idx_opts, input)?;
             (Some(index), rep)
         };
         info!(
@@ -304,7 +331,19 @@ fn get_spearfish_mapper(args: &mut Args) -> anyhow::Result<HeaderReaderAlignerDi
     };
     let header = spearfish_header(&index)?;
     let opts = spearfish_map_options(args)?;
-    let settings = spearfish_settings(args, &opts)?;
+    let mut settings = spearfish_settings(args, &opts)?;
+    let genes = index_genes(&index);
+    info!(
+        "spearfish index: {} transcripts, {} genes (gene labels: {})",
+        index.n_transcripts().to_formatted_string(&Locale::en),
+        index.n_genes().to_formatted_string(&Locale::en),
+        genes.source
+    );
+    // Also in the run's warnings at the end, and in meta_info.json.
+    if let Some(w) = crate::util::run_warnings::check_index_genes(&genes) {
+        warn!("{}", w.message);
+    }
+    settings.index_genes = Some(genes);
     info!("spearfish: {}", settings.span_extension().describe());
     args.spearfish_settings = Some(settings);
     let mapper = spearfish::Mapper::new(std::sync::Arc::new(index), &opts)?;
@@ -415,6 +454,7 @@ fn spearfish_settings(
             }
         }),
         orient_quant: tb.map(|tb| tb.orient_quant),
+        index_genes: None,
         orient_evidence: tb.map(|tb| {
             crate::prog_opts::OrientEvidence::of(
                 tb.orient_same_exact,
@@ -423,6 +463,24 @@ fn spearfish_settings(
             )
         }),
     })
+}
+
+/// Where the index's gene labels came from (its manifest's `genes_from`; `unknown` for an
+/// index without a manifest), its gene and transcript counts, and whether it groups isoforms
+/// into genes.
+pub(crate) fn index_genes(index: &spearfish::Index) -> crate::prog_opts::IndexGenes {
+    let manifest = index.manifest();
+    let input = manifest.as_ref().map(|m| &m.input);
+    let source = input
+        .map(|i| i.genes_from.as_str())
+        .filter(|g| !g.is_empty())
+        .unwrap_or("unknown");
+    crate::prog_opts::IndexGenes {
+        source: source.to_string(),
+        genes: Some(input.map_or(index.n_genes(), |i| i.genes)),
+        transcripts: Some(input.map_or(index.n_transcripts(), |i| i.transcripts)),
+        has_gene_groups: Some(index.has_gene_groups()),
+    }
 }
 
 fn spearfish_header(index: &spearfish::Index) -> anyhow::Result<noodles_sam::header::Header> {
@@ -971,6 +1029,124 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    /// A tiny transcriptome: two genes of two isoforms each (all exons, and all but the
+    /// middle one), written with `header(transcript, gene)` as the FASTA IDs.
+    fn tiny_fasta(
+        dir: &std::path::Path,
+        header: impl Fn(&str, &str) -> String,
+    ) -> std::path::PathBuf {
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let mut exon = || -> Vec<u8> {
+            (0..400)
+                .map(|_| {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    b"ACGT"[(x >> 33) as usize % 4]
+                })
+                .collect()
+        };
+        let mut fa = String::new();
+        for g in ["A", "B"] {
+            let (e1, e2, e3) = (exon(), exon(), exon());
+            for (t, seq) in [
+                ("1", [&e1[..], &e2[..], &e3[..]].concat()),
+                ("2", [&e1[..], &e3[..]].concat()),
+            ] {
+                let tx = format!("{g}{t}");
+                fa += &format!(">{}\n{}\n", header(&tx, g), String::from_utf8(seq).unwrap());
+            }
+        }
+        let path = dir.join("tx.fa");
+        std::fs::write(&path, fa).unwrap();
+        path
+    }
+
+    /// The index's gene labels as a spearfish run records them, for oarfish's arguments.
+    fn index_genes_of(extra: &[&str]) -> crate::prog_opts::IndexGenes {
+        let mut v = vec!["oarfish", "--mapper", "spearfish", "--seq-tech", "ont-cdna"];
+        v.extend_from_slice(extra);
+        let mut args = Args::try_parse_from(v).unwrap();
+        get_spearfish_mapper(&mut args).unwrap();
+        args.spearfish_settings.unwrap().index_genes.unwrap()
+    }
+
+    /// An index without gene labels is recorded as such and warned about; one with gene IDs in
+    /// its FASTA headers, from a table, or inferred is recorded with its source and not.
+    #[test]
+    fn index_gene_labels_are_recorded_and_warned_about() {
+        use crate::util::run_warnings::check_index_genes;
+        let dir = tempfile::tempdir().unwrap();
+        let bare = tiny_fasta(dir.path(), |t, _| t.to_string());
+        let bare = bare.to_str().unwrap();
+        let base = ["--reads", "r.fq", "-o", "out", "--annotated"];
+        let run = |fa: &str, extra: &[&str]| {
+            let mut v = base.to_vec();
+            v.push(fa);
+            v.extend_from_slice(extra);
+            index_genes_of(&v)
+        };
+
+        let none = run(bare, &[]);
+        assert_eq!(none.source, "none");
+        assert_eq!((none.genes, none.transcripts), (Some(4), Some(4)));
+        assert_eq!(none.has_gene_groups, Some(false));
+        let w = check_index_genes(&none).unwrap();
+        assert_eq!(w.code, "index_without_gene_groups");
+        assert!(w.message.contains("FASTA order") || w.message.contains("order in the FASTA"));
+        assert!(w.message.contains("--t2g") && w.message.contains("--infer-genes"));
+        let v = serde_json::to_value(&none).unwrap();
+        assert_eq!(v["source"], "none");
+        assert_eq!(v["has_gene_groups"], false);
+
+        // GENCODE-style headers: `transcript|gene|...`.
+        let sub = dir.path().join("gencode");
+        std::fs::create_dir(&sub).unwrap();
+        let gencode = tiny_fasta(&sub, |t, g| {
+            format!("{t}|G{g}|OTTHUMG|OTTHUMT|{t}-201|G{g}|")
+        });
+        let fasta = run(gencode.to_str().unwrap(), &[]);
+        assert_eq!(fasta.source, "fasta");
+        assert_eq!((fasta.genes, fasta.transcripts), (Some(2), Some(4)));
+        assert_eq!(fasta.has_gene_groups, Some(true));
+        assert!(check_index_genes(&fasta).is_none());
+
+        // A transcript-to-gene table.
+        let t2g = dir.path().join("t2g.tsv");
+        std::fs::write(&t2g, "A1\tGA\nA2\tGA\nB1\tGB\nB2\tGB\n").unwrap();
+        let table = run(bare, &["--t2g", t2g.to_str().unwrap()]);
+        assert_eq!(table.source, "t2g");
+        assert_eq!(table.genes, Some(2));
+        assert!(check_index_genes(&table).is_none());
+
+        // Gene inference groups the isoforms that share exons.
+        let inferred = run(bare, &["--infer-genes"]);
+        assert_eq!(inferred.source, "inferred");
+        assert_eq!(inferred.genes, Some(2));
+        assert_eq!(inferred.has_gene_groups, Some(true));
+        assert!(check_index_genes(&inferred).is_none());
+
+        // An index oarfish writes keeps the source in its manifest, digest footer and all.
+        let sfi = dir.path().join("tx.sfi");
+        let sfi = sfi.to_str().unwrap();
+        let mut v = vec!["oarfish", "--mapper", "spearfish", "--seq-tech", "ont-cdna"];
+        v.extend_from_slice(&["--only-index", "--annotated", bare, "--index-out", sfi]);
+        get_spearfish_mapper(&mut Args::try_parse_from(v).unwrap()).unwrap();
+        let reopened = index_genes_of(&["--reads", "r.fq", "-o", "out", "--index", sfi]);
+        assert_eq!(reopened, none);
+
+        // The build options need oarfish to build the index.
+        let parse = |extra: &[&str]| {
+            let mut v = vec!["oarfish", "--mapper", "spearfish", "--seq-tech", "ont-cdna"];
+            v.extend_from_slice(&["--reads", "r.fq", "-o", "out"]);
+            v.extend_from_slice(extra);
+            Args::try_parse_from(v)
+        };
+        assert!(parse(&["--index", sfi, "--infer-genes"]).is_err());
+        assert!(parse(&["--index", sfi, "--t2g", "t.tsv"]).is_err());
+        assert!(parse(&["--annotated", bare, "--t2g", "t.tsv", "--infer-genes"]).is_err());
     }
 
     #[test]
